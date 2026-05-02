@@ -18,6 +18,7 @@ Layout:
 - Python 3 with `pip` (on each device run `python3 -m venv .venv` inside `controller/backend` and use that environment).
 - **Node.js** and **npm** for the frontend.
 - **ffmpeg** on `PATH` — required for recording pipelines (muxing, continuous copy mode) in the backend.
+- **MediaMTX** — install the `mediamtx` binary on the **controller** host (see [bluenviron/mediamtx releases](https://github.com/bluenviron/mediamtx/releases)), or set **`CONTROLLER_MEDIAMTX_BIN`** to its path. The API starts MediaMTX automatically when the binary is available. **`CONTROLLER_MEDIAMTX_DISABLED=1`** skips startup (e.g. local dev without MediaMTX).
 
 **Backend**
 
@@ -60,6 +61,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
 
+**MediaMTX (central live tiles — Option B)**
+
+- On startup, the backend writes **`backend/data/mediamtx.generated.yml`** from **`backend/data/cameras.json`** (each camera’s **`url`** as an RTSP/HLS pull `source`, path name from **`mediamtx_path`**) and runs **`mediamtx <that file>`** as a child process (see [`backend/app/mediamtx_manager.py`](backend/app/mediamtx_manager.py)).
+- Listeners default to **`webrtcAddress: :8889`** (browser iframe player). Override with **`CONTROLLER_MEDIAMTX_WEBRTC_ADDRESS`** if needed.
+- When you **add, remove, or change saved cameras**, config is **regenerated** and MediaMTX is **restarted** (debounced ~1.2s). Selection-only changes do not alter the config file and do not restart.
+- Point the UI at this instance: **`VITE_MEDIAMTX_BASE=http://<controller-lan-ip>:8889`** (default in the frontend matches the default API host `192.168.2.104`).
+
 **Edge agents (mDNS) vs OpenCV on the controller**
 
 - **Discovery does not run at API startup.** The UI **Detect cameras** button calls **`GET /detect/edges`** and **`GET /detect`** (each ~3s mDNS listen in [`backend/app/discovery.py`](backend/app/discovery.py)). Results only include devices not already listed in **`backend/data/cameras.json`**.
@@ -95,7 +103,7 @@ Vite environment variables (optional; see [`frontend/src/App.jsx`](frontend/src/
 | Variable | Purpose |
 |----------|---------|
 | `VITE_API_URL` | Backend base URL (no trailing slash); default `http://192.168.2.104:8000`. |
-| `VITE_MEDIAMTX_BASE` | MediaMTX / live stream base URL; default `http://192.168.2.160:8889`. |
+| `VITE_MEDIAMTX_BASE` | Central MediaMTX **HTTP** URL on the controller (iframe); default **`http://192.168.2.104:8889`**. Must match where the backend-started MediaMTX listens (`webrtcAddress`). See [`frontend/.env.example`](frontend/.env.example). |
 | `VITE_WS_RECORDING_URL` | Optional explicit WebSocket URL for recording events; if unset, derived from `VITE_API_URL` as `ws(s)://…/ws/recording`. |
 
 Create a `.env` or `.env.local` in `controller/frontend` with `VITE_*` entries, or prefix them when invoking Vite (e.g. `VITE_API_URL=http://localhost:8000 npm run dev`).

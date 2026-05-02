@@ -5,7 +5,7 @@ const API = (import.meta.env.VITE_API_URL || "http://192.168.2.104:8000").replac
   ""
 );
 const MEDIAMTX_BASE = (
-  import.meta.env.VITE_MEDIAMTX_BASE || "http://192.168.2.160:8889"
+  import.meta.env.VITE_MEDIAMTX_BASE || "http://192.168.2.104:8889"
 ).replace(/\/$/, "");
 
 const WS_RECORDING =
@@ -23,7 +23,9 @@ function streamPathForCamera(cam) {
 }
 
 function streamUrlForCamera(cam) {
-  return `${MEDIAMTX_BASE}/${streamPathForCamera(cam)}`;
+  const path = streamPathForCamera(cam).replace(/\/+$/, "");
+  // MediaMTX embedded reader pages typically expect a trailing slash on the path.
+  return `${MEDIAMTX_BASE}/${path}/`;
 }
 
 function formatBytes(n) {
@@ -40,6 +42,7 @@ function formatTime(ts) {
 function LiveTile({ cam, recording }) {
   const wrapRef = useRef(null);
   const [scale, setScale] = useState(1);
+  const streamUrl = streamUrlForCamera(cam);
 
   const zoomIn = () => setScale((s) => Math.min(4, s * 1.15));
   const zoomOut = () => setScale((s) => Math.max(0.5, s / 1.15));
@@ -80,7 +83,7 @@ function LiveTile({ cam, recording }) {
         >
           <iframe
             title={cam.name}
-            src={streamUrlForCamera(cam)}
+            src={streamUrl}
             className="w-full h-full min-h-[140px] border-0 bg-black"
             allow="autoplay; fullscreen"
           />
@@ -116,8 +119,8 @@ function LiveTile({ cam, recording }) {
           </button>
         </div>
       </div>
-      <p className="text-[10px] text-gray-500 mt-1 truncate font-mono">
-        {streamPathForCamera(cam)}
+      <p className="text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug" title="MediaMTX reader URL">
+        {streamUrl}
       </p>
     </div>
   );
@@ -541,9 +544,16 @@ export default function App() {
           )}
         </div>
 
-        <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500">
-          Live views use MediaMTX ({MEDIAMTX_BASE}). Red dot = MQTT recording signal via{" "}
-          {WS_RECORDING}.
+        <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500 space-y-1">
+          <p>
+            Live views use MediaMTX ({MEDIAMTX_BASE}). Red dot = MQTT recording signal via {WS_RECORDING}.
+          </p>
+          <p className="text-amber-500/90">
+            “Refused to connect” in a tile means the browser cannot open the MediaMTX URL (service down, wrong
+            host/port, or firewall). Set <span className="font-mono text-gray-400">VITE_MEDIAMTX_BASE</span> in{" "}
+            <span className="font-mono text-gray-400">.env.local</span> and restart <span className="font-mono text-gray-400">npm run dev</span>
+            . See <span className="font-mono text-gray-400">.env.example</span>.
+          </p>
         </div>
       </div>
 

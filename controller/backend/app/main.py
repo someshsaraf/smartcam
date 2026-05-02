@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from . import camera_store, mqtt_bridge
 from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
+from .mediamtx_manager import start_embedded as mediamtx_start_embedded
+from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
 
@@ -29,7 +31,9 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
+    mediamtx_start_embedded()
     yield
+    mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()
 

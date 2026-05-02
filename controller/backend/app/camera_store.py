@@ -23,19 +23,26 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "flip_180": False,
 }
 
-_on_change: Optional[Callable[[], None]] = None
+_change_listeners: list[Callable[[], None]] = []
 
 
-def set_change_listener(cb: Optional[Callable[[], None]]) -> None:
-    """Recording manager registers this to resync when cameras/settings change."""
-    global _on_change
-    _on_change = cb
+def add_change_listener(cb: Callable[[], None]) -> None:
+    """Register for persist/save-driven camera list changes (add/remove/settings)."""
+    if cb not in _change_listeners:
+        _change_listeners.append(cb)
+
+
+def remove_change_listener(cb: Callable[[], None]) -> None:
+    try:
+        _change_listeners.remove(cb)
+    except ValueError:
+        pass
 
 
 def _notify() -> None:
-    if _on_change:
+    for cb in list(_change_listeners):
         try:
-            _on_change()
+            cb()
         except Exception:
             pass
 

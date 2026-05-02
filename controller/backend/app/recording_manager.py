@@ -21,7 +21,7 @@ apply_rtsp_env()
 
 import cv2
 
-from .camera_store import list_cameras, set_change_listener
+from .camera_store import add_change_listener, list_cameras, remove_change_listener
 from .detector import Detector
 
 RECORDINGS_ROOT = Path(__file__).resolve().parent.parent / "data" / "recordings"
@@ -364,11 +364,11 @@ class RecordingManager:
         return out
 
     def start(self) -> None:
-        set_change_listener(self.sync)
+        add_change_listener(self.sync)
         self.sync()
 
     def stop(self) -> None:
-        set_change_listener(None)
+        remove_change_listener(self.sync)
         with self._lock:
             for w in list(self._workers.values()):
                 w.stop()
