@@ -1,0 +1,8 @@
+# FastAPI API + MQTT/WebSocket bridge + OpenCV (diagnostics) + LAN discovery
+fastapi>=0.115
+uvicorn[standard]>=0.30
+opencv-python>=4.8
+numpy>=1.26
+zeroconf>=0.130
+httpx>=0.27
+paho-mqtt>=2.0
