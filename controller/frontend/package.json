@@ -3,7 +3,7 @@
   "name": "final-ui",
   "private": true,
   "version": "1.0.0",
-  "scripts": { "dev": "vite" },
+  "scripts": { "dev": "vite --host" },
   "dependencies": {
     "react": "^18",
     "react-dom": "^18"
