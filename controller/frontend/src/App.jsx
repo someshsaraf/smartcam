@@ -4,8 +4,19 @@ const API = (import.meta.env.VITE_API_URL || "http://192.168.2.104:8000").replac
   /\/$/,
   ""
 );
+
+/** Same host as the API, port 8889 — avoids hardcoding a stale LAN IP. Override with VITE_MEDIAMTX_BASE. */
+function defaultMediaMtxBaseFromApi() {
+  try {
+    const u = new URL(API.startsWith("http") ? API : `http://${API}`);
+    return `${u.protocol}//${u.hostname}:8889`;
+  } catch {
+    return "http://192.168.2.104:8889";
+  }
+}
+
 const MEDIAMTX_BASE = (
-  import.meta.env.VITE_MEDIAMTX_BASE || "http://192.168.2.104:8889"
+  import.meta.env.VITE_MEDIAMTX_BASE || defaultMediaMtxBaseFromApi()
 ).replace(/\/$/, "");
 
 const WS_RECORDING =
@@ -549,10 +560,13 @@ export default function App() {
             Live views use MediaMTX ({MEDIAMTX_BASE}). Red dot = MQTT recording signal via {WS_RECORDING}.
           </p>
           <p className="text-amber-500/90">
-            “Refused to connect” in a tile means the browser cannot open the MediaMTX URL (service down, wrong
-            host/port, or firewall). Set <span className="font-mono text-gray-400">VITE_MEDIAMTX_BASE</span> in{" "}
-            <span className="font-mono text-gray-400">.env.local</span> and restart <span className="font-mono text-gray-400">npm run dev</span>
-            . See <span className="font-mono text-gray-400">.env.example</span>.
+            “Refused to connect” → nothing listening on the MediaMTX URL (usually missing <span className="font-mono text-gray-400">mediamtx</span>{" "}
+            binary on the Pi, wrong IP, or firewall). Check{" "}
+            <span className="font-mono text-gray-400">{API}/system/mediamtx</span> for{" "}
+            <span className="font-mono text-gray-400">process_running</span>. Set{" "}
+            <span className="font-mono text-gray-400">VITE_API_URL</span> /{" "}
+            <span className="font-mono text-gray-400">VITE_MEDIAMTX_BASE</span> in{" "}
+            <span className="font-mono text-gray-400">.env.local</span> if defaults don’t match your network.
           </p>
         </div>
       </div>

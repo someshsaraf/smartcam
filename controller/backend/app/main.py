@@ -19,6 +19,7 @@ from . import camera_store, mqtt_bridge
 from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
 from .mediamtx_manager import start_embedded as mediamtx_start_embedded
+from .mediamtx_manager import status_dict as mediamtx_status_dict
 from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
@@ -319,6 +320,12 @@ def delete_recording_file(cam_id: int, filename: str):
 # =========================
 # Health / diagnostics
 # =========================
+
+
+@app.get("/system/mediamtx")
+def system_mediamtx():
+    """Whether embedded MediaMTX is running (live iframe targets port player_port)."""
+    return mediamtx_status_dict()
 
 
 @app.get("/system/recording")
