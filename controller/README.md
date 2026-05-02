@@ -88,6 +88,8 @@ From `controller/frontend`:
 npm run dev
 ```
 
+The dev server is started with **`vite --host`**, so it binds on all interfaces. Open the **Network** URL Vite prints (e.g. `http://192.168.x.x:5173/`) from phones or other PCs on the same LAN.
+
 Vite environment variables (optional; see [`frontend/src/App.jsx`](frontend/src/App.jsx)):
 
 | Variable | Purpose |
