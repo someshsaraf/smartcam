@@ -9,13 +9,13 @@ Layout:
 - **`backend/`** — FastAPI application (`uvicorn app.main:app`).
 - **`frontend/`** — React + Vite UI.
 - **`shared/`** — canonical **`surveillance_shared`** for the Pi 5 backend. Each Pi 4 edge device keeps a **real file copy** under `edge-agent/shared/surveillance_shared/` (not a symlink). After editing `controller/shared/surveillance_shared/`, refresh the edge copy with `edge-agent/scripts/sync-shared-from-controller.sh` and deploy or commit under `edge-agent/shared/`.
-- **`ENVCAM/`** — optional local Python venv (if present on your machine).
+- **`ENVCAM/`** — legacy checkout artifacts only; **do not activate** if copied from another machine (scripts embed absolute paths and `pip` will fail with “cannot execute: required file not found”). Create a fresh venv under `backend/` instead (see below).
 
 ## Installation
 
 **System prerequisites**
 
-- Python 3 with `pip` (use a venv on the Pi or workstation as you prefer).
+- Python 3 with `pip` (on each device run `python3 -m venv .venv` inside `controller/backend` and use that environment).
 - **Node.js** and **npm** for the frontend.
 - **ffmpeg** on `PATH` — required for recording pipelines (muxing, continuous copy mode) in the backend.
 
@@ -23,7 +23,10 @@ Layout:
 
 ```bash
 cd controller/backend
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 export PYTHONPATH="$(pwd)/../shared"
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -47,13 +50,23 @@ npm install
 
 **API**
 
-From `controller/backend`, with `PYTHONPATH` including `../shared`:
+From `controller/backend`, with the same venv activated (if you use `.venv`) and `PYTHONPATH` including `../shared`:
 
 ```bash
+source .venv/bin/activate   # if using .venv from Installation
+export PYTHONPATH="$(pwd)/../shared"
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
+
+**Edge agents (mDNS) vs OpenCV on the controller**
+
+- **Discovery does not run at API startup.** The UI **Detect cameras** button calls **`GET /detect/edges`** and **`GET /detect`** (each ~3s mDNS listen in [`backend/app/discovery.py`](backend/app/discovery.py)). Results only include devices not already listed in **`backend/data/cameras.json`**.
+- **`GET /detect/edges`** returns payloads with `edge_base_url`, `mqtt_camera_id`, and `url`. Use **`POST /cameras`** (or **Add** in the UI) so the entry is stored with **`edge_base_url` set** for Pi 4 edges.
+- Saved cameras persist in **`backend/data/cameras.json`** until removed (**DELETE `/cameras/{id}`** or **✕** in the UI). A fresh checkout uses an empty camera list until you add devices.
+- If a camera has a **non-empty `edge_base_url`**, the controller **does not** start the per-camera OpenCV/motion worker in [`backend/app/recording_manager.py`](backend/app/recording_manager.py) (recording and RTSP inference stay on the edge; the controller lists recordings over HTTP to the edge and shows live video via MediaMTX in the UI).
+- If `edge_base_url` is **missing** but `url` is an RTSP URL, the controller assumes a **local/direct** camera and will connect to that RTSP URL at startup for motion recording — which produces errors like `Connection refused` when nothing is listening on that host/port (for example edge RTSP on `:8554` while MediaMTX is down).
 
 **MQTT (recording indicators and bridge)**
 

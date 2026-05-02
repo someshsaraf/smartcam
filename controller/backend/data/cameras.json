@@ -1,16 +1,4 @@
 {
-  "cameras": [
-    {
-      "id": 0,
-      "name": "Front Door",
-      "location": "Entrance",
-      "url": "rtsp://192.168.2.160:8554/frontdoor",
-      "settings": {
-        "recording_mode": "motion",
-        "pre_record_seconds": 10,
-        "post_record_seconds": 50
-      }
-    }
-  ],
-  "selected_id": 0
+  "cameras": [],
+  "selected_id": null
 }

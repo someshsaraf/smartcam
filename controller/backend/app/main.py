@@ -103,6 +103,13 @@ def list_cameras_endpoint():
     return camera_store.list_cameras()
 
 
+@app.delete("/cameras/{cam_id}")
+def delete_camera_endpoint(cam_id: int):
+    if not camera_store.delete_camera(cam_id):
+        raise HTTPException(status_code=404, detail="camera not found")
+    return {"ok": True}
+
+
 @app.post("/cameras/select/{cam_id}")
 def select_camera_endpoint(cam_id: int):
     sel = camera_store.select_camera(cam_id)

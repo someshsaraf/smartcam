@@ -181,6 +181,21 @@ def list_cameras() -> list[dict[str, Any]]:
         return deepcopy(cameras)
 
 
+def delete_camera(cam_id: int) -> bool:
+    """Remove camera by id; persists to CAMERAS_FILE. Returns False if missing."""
+    global cameras, selected_camera
+    with _lock:
+        idx = next((i for i, c in enumerate(cameras) if c["id"] == cam_id), None)
+        if idx is None:
+            return False
+        cameras.pop(idx)
+        if selected_camera is not None and int(selected_camera["id"]) == int(cam_id):
+            selected_camera = deepcopy(cameras[0]) if cameras else None
+        save()
+    _notify()
+    return True
+
+
 def get_camera(cam_id: int) -> Optional[dict[str, Any]]:
     with _lock:
         c = next((x for x in cameras if x["id"] == cam_id), None)

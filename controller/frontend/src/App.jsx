@@ -138,6 +138,7 @@ export default function App() {
     flip_180: false,
   });
   const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [manual, setManual] = useState({
     name: "",
     location: "",
@@ -200,25 +201,36 @@ export default function App() {
     };
   }, []);
 
-  const detect = async () => {
-    const res = await fetch(`${API}/detect`);
-    setDiscovered(await res.json());
-  };
-
-  const detectEdges = async () => {
-    const res = await fetch(`${API}/detect/edges`);
-    if (!res.ok) {
-      setDiscoveredEdges([]);
-      return;
+  const detectCameras = async () => {
+    setDetecting(true);
+    setDiscoveredEdges([]);
+    setDiscovered([]);
+    try {
+      const [edgesRes, legacyRes] = await Promise.all([
+        fetch(`${API}/detect/edges`),
+        fetch(`${API}/detect`),
+      ]);
+      if (edgesRes.ok) {
+        setDiscoveredEdges(await edgesRes.json());
+      } else {
+        setDiscoveredEdges([]);
+      }
+      if (legacyRes.ok) {
+        setDiscovered(await legacyRes.json());
+      } else {
+        setDiscovered([]);
+      }
+    } finally {
+      setDetecting(false);
     }
-    setDiscoveredEdges(await res.json());
   };
 
   const addDiscovered = async (cam) => {
+    const { kind: _k, ...payload } = cam;
     const res = await fetch(`${API}/cameras`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cam),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       alert("Add failed");
@@ -288,6 +300,19 @@ export default function App() {
     setRecordings([]);
   };
 
+  const deleteCamera = async (cam) => {
+    if (!window.confirm(`Remove “${cam.name}” from the controller?`)) return;
+    const res = await fetch(`${API}/cameras/${cam.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      alert("Remove failed");
+      return;
+    }
+    if (settingsCam && settingsCam.id === cam.id) {
+      closeSettings();
+    }
+    await load();
+  };
+
   const saveSettings = async () => {
     if (!settingsCam) return;
     setSaving(true);
@@ -346,23 +371,22 @@ export default function App() {
 
         <button
           type="button"
-          onClick={detect}
-          className="bg-blue-600 hover:bg-blue-500 p-2 rounded text-sm"
+          disabled={detecting}
+          onClick={detectCameras}
+          className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed p-2 rounded text-sm"
         >
-          Detect Cameras (LAN)
+          {detecting ? "Detecting… (~3s)" : "Detect cameras"}
         </button>
-        <button
-          type="button"
-          onClick={detectEdges}
-          className="bg-indigo-600 hover:bg-indigo-500 p-2 rounded text-sm"
-        >
-          Discover Pi 4 edge agents (mDNS)
-        </button>
+        <p className="text-[10px] text-gray-600">
+          Scans mDNS for Pi 4 edge agents and legacy LAN RTSP cameras. Nothing runs until you tap this.
+        </p>
 
         <div>
-          <h3 className="text-xs text-gray-400 mb-2">Edge agents (Zeroconf)</h3>
+          <h3 className="text-xs text-gray-400 mb-2">Edge agents</h3>
           {discoveredEdges.length === 0 ? (
-            <p className="text-[10px] text-gray-600 mb-2">None yet — power on a Pi 4 edge, then tap above.</p>
+            <p className="text-[10px] text-gray-600 mb-2">
+              No matches — tap Detect cameras with edges online, or add manually below.
+            </p>
           ) : (
             discoveredEdges.map((e, i) => (
               <div
@@ -388,7 +412,7 @@ export default function App() {
         </div>
 
         <div>
-          <h3 className="text-xs text-gray-400 mb-2">Discovered RTSP</h3>
+          <h3 className="text-xs text-gray-400 mb-2">Legacy RTSP (LAN)</h3>
           {discovered.map((c, i) => (
             <div
               key={i}
@@ -467,14 +491,24 @@ export default function App() {
               className="bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1"
             >
               <span className="truncate flex-1">{c.name}</span>
-              <button
-                type="button"
-                onClick={() => openSettings(c)}
-                className="text-gray-300 hover:text-white px-1 shrink-0"
-                title="Settings & recordings"
-              >
-                ⚙
-              </button>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => openSettings(c)}
+                  className="text-gray-300 hover:text-white px-1"
+                  title="Settings & recordings"
+                >
+                  ⚙
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteCamera(c)}
+                  className="text-red-400 hover:text-red-300 px-1 text-xs"
+                  title="Remove camera"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -490,7 +524,10 @@ export default function App() {
 
         <div className="flex-1 p-3 overflow-auto min-h-0">
           {liveCams.length === 0 ? (
-            <p className="text-gray-500 text-sm p-4">No cameras. Add one from the sidebar.</p>
+            <p className="text-gray-500 text-sm p-4">
+              No cameras saved. Use Detect cameras or add manually in the sidebar — saved cameras persist across
+              backend restarts until removed.
+            </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-[1600px] mx-auto">
               {liveCams.map((c) => (
