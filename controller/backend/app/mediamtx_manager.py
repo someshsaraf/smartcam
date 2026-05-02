@@ -21,10 +21,13 @@ from . import camera_store
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "mediamtx.generated.yml"
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = _BACKEND_ROOT / "data" / "mediamtx.generated.yml"
+_BUNDLED_MEDIAMTX = _BACKEND_ROOT / "bin" / "mediamtx"
 
 _proc: Optional[subprocess.Popen] = None
 _last_yaml: str = ""
+_last_start_error: str = ""
 _lock = threading.RLock()
 _debounce_timer: Optional[threading.Timer] = None
 
@@ -36,16 +39,18 @@ def _webrtc_listen_address() -> str:
 
 def mediamtx_binary() -> Optional[str]:
     env_bin = os.environ.get("CONTROLLER_MEDIAMTX_BIN", "").strip()
-    candidates = []
+    candidates: list[str] = []
     if env_bin:
         candidates.append(env_bin)
-        p = Path(env_bin)
-        if p.is_file():
-            candidates.append(str(p.resolve()))
+    if _BUNDLED_MEDIAMTX.is_file():
+        candidates.append(str(_BUNDLED_MEDIAMTX.resolve()))
     candidates.append("mediamtx")
     for c in candidates:
-        if Path(c).is_file():
-            return str(Path(c).resolve())
+        if not c:
+            continue
+        p = Path(c)
+        if p.is_file():
+            return str(p.resolve())
         w = shutil.which(c)
         if w:
             return w
@@ -131,7 +136,7 @@ def _stop_proc() -> None:
 
 
 def _apply_config(yaml_text: str) -> None:
-    global _proc, _last_yaml
+    global _proc, _last_yaml, _last_start_error
     bin_path = mediamtx_binary()
     if not bin_path:
         return
@@ -155,6 +160,7 @@ def _apply_config(yaml_text: str) -> None:
             cwd=str(CONFIG_PATH.parent),
         )
         npaths = yaml_text.count("\n    source:")
+        _last_start_error = ""
         logger.info(
             "mediamtx started pid=%s config=%s paths=%s",
             _proc.pid,
@@ -162,6 +168,7 @@ def _apply_config(yaml_text: str) -> None:
             npaths,
         )
     except OSError as e:
+        _last_start_error = str(e)
         logger.error("mediamtx failed to start: %s", e)
 
 
@@ -214,6 +221,29 @@ def start_embedded() -> None:
         _apply_config(yaml_text)
     except Exception:
         logger.exception("mediamtx initial start failed")
+
+
+def status_dict() -> dict[str, Any]:
+    """For GET /system/mediamtx — why the browser may see 'connection refused' on :8889."""
+    with _lock:
+        running = _proc is not None and _proc.poll() is None
+        pid = int(_proc.pid) if running and _proc is not None else None
+    w = _webrtc_listen_address()
+    port = w.rsplit(":", 1)[-1] if ":" in w else "8889"
+    return {
+        "should_run": should_run_mediamtx(),
+        "binary_path": mediamtx_binary(),
+        "process_running": running,
+        "pid": pid,
+        "config_path": str(CONFIG_PATH.resolve()),
+        "webrtc_listen_address": w,
+        "player_port": port,
+        "last_start_error": _last_start_error or None,
+        "ui_hint": (
+            f"Set VITE_MEDIAMTX_BASE to http://<this-host>:{port} "
+            "(same machine as the API) if the live tile refuses to connect."
+        ),
+    }
 
 
 def stop_embedded() -> None:

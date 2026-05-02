@@ -1,4 +1,10 @@
 # FastAPI API + MQTT/WebSocket bridge + OpenCV (diagnostics) + LAN discovery
+#
+# MediaMTX is NOT a PyPI package — it cannot be installed with pip. The controller
+# expects a mediamtx binary (PATH, CONTROLLER_MEDIAMTX_BIN, or backend/bin/mediamtx).
+# One-time install:
+#   cd controller/backend && ./scripts/install_mediamtx.sh
+#
 fastapi>=0.115
 uvicorn[standard]>=0.30
 opencv-python>=4.8

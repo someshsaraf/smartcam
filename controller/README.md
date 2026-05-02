@@ -18,7 +18,7 @@ Layout:
 - Python 3 with `pip` (on each device run `python3 -m venv .venv` inside `controller/backend` and use that environment).
 - **Node.js** and **npm** for the frontend.
 - **ffmpeg** on `PATH` — required for recording pipelines (muxing, continuous copy mode) in the backend.
-- **MediaMTX** — install the `mediamtx` binary on the **controller** host (see [bluenviron/mediamtx releases](https://github.com/bluenviron/mediamtx/releases)), or set **`CONTROLLER_MEDIAMTX_BIN`** to its path. The API starts MediaMTX automatically when the binary is available. **`CONTROLLER_MEDIAMTX_DISABLED=1`** skips startup (e.g. local dev without MediaMTX).
+- **MediaMTX** — **not a Python package**; `pip` / `requirements.txt` cannot install it. On the controller host, run **`./scripts/install_mediamtx.sh`** once (downloads the official release tarball into **`backend/bin/mediamtx`**). Alternatively install from [releases](https://github.com/bluenviron/mediamtx/releases) or set **`CONTROLLER_MEDIAMTX_BIN`**. The API starts MediaMTX when it finds a binary. **`CONTROLLER_MEDIAMTX_DISABLED=1`** skips startup.
 
 **Backend**
 
@@ -29,6 +29,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 export PYTHONPATH="$(pwd)/../shared"
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+bash scripts/install_mediamtx.sh   # MediaMTX binary (needs curl); skip if already on PATH
 ```
 
 **SSD models (motion detection / diagnostics on the controller)**
@@ -66,7 +67,7 @@ Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI de
 - On startup, the backend writes **`backend/data/mediamtx.generated.yml`** from **`backend/data/cameras.json`** (each camera’s **`url`** as an RTSP/HLS pull `source`, path name from **`mediamtx_path`**) and runs **`mediamtx <that file>`** as a child process (see [`backend/app/mediamtx_manager.py`](backend/app/mediamtx_manager.py)).
 - Listeners default to **`webrtcAddress: :8889`** (browser iframe player). Override with **`CONTROLLER_MEDIAMTX_WEBRTC_ADDRESS`** if needed.
 - When you **add, remove, or change saved cameras**, config is **regenerated** and MediaMTX is **restarted** (debounced ~1.2s). Selection-only changes do not alter the config file and do not restart.
-- Point the UI at this instance: **`VITE_MEDIAMTX_BASE=http://<controller-lan-ip>:8889`** (default in the frontend matches the default API host `192.168.2.104`).
+- Point the UI at this instance: **`VITE_MEDIAMTX_BASE=http://<controller-lan-ip>:8889`**, or set **`VITE_API_URL`** and let the dev UI default MediaMTX to **the same host** on port **8889**. If the browser says **“refused to connect”** to that IP, check **`GET /system/mediamtx`** (e.g. `http://<pi5>:8000/system/mediamtx`) for **`process_running`**, **`binary_path`**, and **`last_start_error`**.
 
 **Edge agents (mDNS) vs OpenCV on the controller**
 

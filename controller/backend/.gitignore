@@ -1,0 +1,2 @@
+# Local MediaMTX binary from scripts/install_mediamtx.sh (not a Python wheel)
+bin/mediamtx
