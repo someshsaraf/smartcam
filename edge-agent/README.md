@@ -4,6 +4,12 @@
 
 Runs on **each Raspberry Pi 4** connected to a camera: MobileNet-SSD motion detection, local MP4 recordings, MQTT status events to the broker on the Pi 5 controller, and an HTTP API the controller uses to list and proxy recordings. It also advertises the device on the LAN via mDNS ([`app/main.py`](app/main.py), [`app/zeroconf_publish.py`](app/zeroconf_publish.py)).
 
+### MediaMTX and live tiles
+
+The edge agent **does not run MediaMTX**. It advertises **`SURVEILLANCE_MEDIAMTX_PATH`** over mDNS so the controller knows the stream **path name** for live tiles.
+
+In the **recommended layout**, a **single MediaMTX instance runs on the Raspberry Pi 5 controller** and pulls each camera’s RTSP **`url`** from the controller’s `data/cameras.json` — started automatically by the controller API when the `mediamtx` binary is installed there (see [controller README](../controller/README.md)). Point **`VITE_MEDIAMTX_BASE`** at `http://<Pi5>:8889`.
+
 ### Pi 5 vs Pi 4
 
 - **Controller** code lives on the **Raspberry Pi 5** (`controller/` in the monorepo).
