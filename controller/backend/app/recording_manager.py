@@ -98,11 +98,21 @@ class _CameraWorker:
         while not self._stop.is_set():
             cam = self.snapshot()
             mode = cam.get("settings", {}).get("recording_mode", "motion")
-            if mode == "continuous":
+            if mode == "off":
+                self._run_off_session(cam)
+            elif mode == "continuous":
                 self._run_continuous_session(cam)
             else:
                 self._run_motion_session(cam)
             time.sleep(0.5)
+
+    def _run_off_session(self, cam: dict[str, Any]) -> None:
+        self._terminate_ffmpeg()
+        while not self._stop.is_set():
+            cur = self.snapshot()
+            if cur.get("settings", {}).get("recording_mode") != "off":
+                break
+            time.sleep(0.25)
 
     def _run_continuous_session(self, cam: dict[str, Any]) -> None:
         ff = _which_ffmpeg()
@@ -190,6 +200,11 @@ class _CameraWorker:
                     cap.release()
                     cap = None
                 return
+            if st.get("recording_mode") == "off":
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                return
 
             target_url = cur.get("url")
             if not target_url:
@@ -214,7 +229,11 @@ class _CameraWorker:
             while not self._stop.is_set():
                 cur = self.snapshot()
                 st2 = cur.get("settings", {})
-                if st2.get("recording_mode") == "continuous" or cur.get("url") != target_url:
+                if (
+                    st2.get("recording_mode") == "continuous"
+                    or st2.get("recording_mode") == "off"
+                    or cur.get("url") != target_url
+                ):
                     break
 
                 if cap is None or not cap.isOpened():

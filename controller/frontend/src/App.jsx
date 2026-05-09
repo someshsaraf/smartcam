@@ -54,10 +54,12 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
-function LiveTile({ cam, recording }) {
+function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle }) {
   const wrapRef = useRef(null);
   const [scale, setScale] = useState(1);
   const streamUrl = streamUrlForCamera(cam);
+  const showManual =
+    recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
 
   const zoomIn = () => setScale((s) => Math.min(4, s * 1.15));
   const zoomOut = () => setScale((s) => Math.max(0.5, s / 1.15));
@@ -103,7 +105,21 @@ function LiveTile({ cam, recording }) {
             allow="autoplay; fullscreen"
           />
         </div>
-        <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto">
+        <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto items-center">
+          {showManual ? (
+            <button
+              type="button"
+              onClick={onManualToggle}
+              className={`rounded px-2 py-0.5 text-[10px] font-medium shrink-0 ${
+                manualRecording
+                  ? "bg-red-600 text-white ring-1 ring-white/80 hover:bg-red-500"
+                  : "bg-gray-700 text-gray-100 hover:bg-gray-600"
+              }`}
+              title={manualRecording ? "Stop manual recording" : "Start manual recording"}
+            >
+              {manualRecording ? "■ Stop" : "● Rec"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={zoomOut}
@@ -159,6 +175,8 @@ export default function App() {
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
+  const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
   const [manual, setManual] = useState({
     name: "",
@@ -216,6 +234,39 @@ export default function App() {
   useEffect(() => {
     loadAllRecordings(cams);
   }, [cams, loadAllRecordings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const polled = {};
+      for (const c of cams) {
+        const mode = c.settings?.recording_mode || "motion";
+        if (mode !== "off" || !c.edge_base_url) continue;
+        try {
+          const res = await fetch(`${API}/cameras/${c.id}/recordings/manual/status`);
+          if (res.ok) {
+            const j = await res.json();
+            polled[c.id] = Boolean(j.active);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (cancelled) return;
+      setManualRecordingById((prev) => {
+        const next = { ...prev };
+        for (const c of cams) {
+          const mode = c.settings?.recording_mode || "motion";
+          if (mode !== "off" || !c.edge_base_url) delete next[c.id];
+        }
+        Object.assign(next, polled);
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cams]);
 
   useEffect(() => {
     let ws;
@@ -409,6 +460,31 @@ export default function App() {
       await load();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const toggleManualRecording = async (cam) => {
+    const mode = cam.settings?.recording_mode || "motion";
+    if (mode !== "off") return;
+    if (!cam.edge_base_url) {
+      alert("Manual recording requires a Pi edge camera.");
+      return;
+    }
+    const currentlyOn = manualRecordingById[cam.id] === true;
+    const path = currentlyOn ? "stop" : "start";
+    try {
+      const res = await fetch(`${API}/cameras/${cam.id}/recordings/manual/${path}`, {
+        method: "POST",
+      });
+      const errBody = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof errBody.detail === "string" ? errBody.detail : `${path} failed`);
+        return;
+      }
+      setManualRecordingById((prev) => ({ ...prev, [cam.id]: path === "start" }));
+      await loadAllRecordings(cams);
+    } catch (e) {
+      alert(String(e));
     }
   };
 
@@ -621,6 +697,9 @@ export default function App() {
                     key={c.id}
                     cam={c}
                     recording={recordingById[c.id] === true}
+                    recordingMode={c.settings?.recording_mode || "motion"}
+                    manualRecording={manualRecordingById[c.id] === true}
+                    onManualToggle={() => toggleManualRecording(c)}
                   />
                 ))}
               </div>
@@ -749,11 +828,19 @@ export default function App() {
                 >
                   <option value="motion">Motion (person / vehicle / animal)</option>
                   <option value="continuous">Continuous</option>
+                  <option value="off">Off (manual record button on live tile)</option>
                 </select>
                 {form.recording_mode === "continuous" ? (
                   <p className="text-xs text-amber-400 mt-2">
                     Continuous recording fills the SD card (or NAS) quickly. Use retention or
                     lower quality on the edge.
+                  </p>
+                ) : null}
+                {form.recording_mode === "off" ? (
+                  <p className="text-xs text-gray-400 mt-2">
+                    Automatic recording is disabled. On the main page, edge cameras show a{" "}
+                    <span className="font-mono text-gray-300">Rec</span> toggle on the live tile
+                    to start and stop a clip (Pi edge only).
                   </p>
                 ) : null}
               </div>

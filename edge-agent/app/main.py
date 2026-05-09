@@ -258,6 +258,32 @@ def delete_file(filename: str):
     return {"ok": True}
 
 
+@app.post("/recordings/manual/start")
+def manual_record_start():
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    try:
+        return _recorder.start_manual_recording()
+    except ValueError as e:
+        msg = str(e)
+        code = 409 if "already active" in msg.lower() else 400
+        raise HTTPException(status_code=code, detail=msg) from e
+
+
+@app.post("/recordings/manual/stop")
+def manual_record_stop():
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    return _recorder.stop_manual_recording()
+
+
+@app.get("/recordings/manual/status")
+def manual_record_status():
+    if _recorder is None:
+        return {"active": False, "filename": None}
+    return _recorder.manual_recording_status()
+
+
 @app.get("/settings")
 def get_settings():
     if _recorder is None:

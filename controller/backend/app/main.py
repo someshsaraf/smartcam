@@ -166,6 +166,79 @@ def patch_camera_settings(cam_id: int, body: CameraSettingsPatch):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+def _edge_manual_proxy(edge: str, subpath: str) -> dict[str, Any]:
+    url = f"{edge}/recordings/manual/{subpath}"
+    try:
+        r = httpx.post(url, timeout=120.0)
+        if r.status_code >= 400:
+            detail: Any = r.text
+            try:
+                body = r.json()
+                if isinstance(body, dict) and body.get("detail") is not None:
+                    detail = body["detail"]
+            except Exception:
+                pass
+            raise HTTPException(status_code=r.status_code, detail=str(detail))
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/cameras/{cam_id}/recordings/manual/start")
+def camera_manual_record_start(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Manual recording requires a Pi edge camera (edge_base_url).",
+        )
+    st = c.get("settings") or {}
+    if st.get("recording_mode") != "off":
+        raise HTTPException(
+            status_code=400,
+            detail="Set recording mode to Off in camera settings before using manual recording.",
+        )
+    return _edge_manual_proxy(edge, "start")
+
+
+@app.post("/cameras/{cam_id}/recordings/manual/stop")
+def camera_manual_record_stop(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Manual recording requires a Pi edge camera (edge_base_url).",
+        )
+    return _edge_manual_proxy(edge, "stop")
+
+
+@app.get("/cameras/{cam_id}/recordings/manual/status")
+def camera_manual_record_status(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        return {"active": False, "filename": None}
+    try:
+        r = httpx.get(f"{edge}/recordings/manual/status", timeout=15.0)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"active": False, "filename": None}
+
+
 # =========================
 # Discovery
 # =========================

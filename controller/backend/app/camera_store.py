@@ -16,7 +16,7 @@ cameras: list[dict[str, Any]] = []
 selected_camera: Optional[dict[str, Any]] = None
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "recording_mode": "motion",  # "motion" | "continuous"
+    "recording_mode": "motion",  # "motion" | "continuous" | "off"
     "pre_record_seconds": 10,
     "post_record_seconds": 50,
     "quality": "medium",  # "high" | "medium" | "low"
@@ -228,8 +228,8 @@ def update_camera_settings(cam_id: int, settings: dict[str, Any]) -> dict[str, A
         for k in DEFAULT_SETTINGS:
             if k in settings:
                 current[k] = settings[k]
-        if current["recording_mode"] not in ("motion", "continuous"):
-            raise ValueError("recording_mode must be 'motion' or 'continuous'")
+        if current["recording_mode"] not in ("motion", "continuous", "off"):
+            raise ValueError("recording_mode must be 'motion', 'continuous', or 'off'")
         q = str(current.get("quality", "medium")).lower()
         if q not in ("high", "medium", "low"):
             raise ValueError("quality must be 'high', 'medium', or 'low'")

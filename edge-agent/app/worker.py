@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import collections
 import json
+import signal
 import shutil
 import subprocess
 import threading
@@ -99,6 +100,10 @@ class EdgeRecorder:
         self._thread: Optional[threading.Thread] = None
         self._mqtt: Optional[mqtt.Client] = None
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
+        self._manual_lock = threading.Lock()
+        self._manual_proc: Optional[subprocess.Popen] = None
+        self._manual_out_path: Optional[Path] = None
+        self._manual_rid: str = ""
         self._on_settings_changed = on_settings_changed
         if model_dir:
             import os
@@ -147,7 +152,7 @@ class EdgeRecorder:
             for k, v in s.items():
                 if k in self._settings:
                     self._settings[k] = v
-            if self._settings["recording_mode"] not in ("motion", "continuous"):
+            if self._settings["recording_mode"] not in ("motion", "continuous", "off"):
                 self._settings["recording_mode"] = "motion"
             q = str(self._settings.get("quality", "medium")).lower()
             if q not in ("high", "medium", "low"):
@@ -157,6 +162,8 @@ class EdgeRecorder:
             self._settings["pre_record_seconds"] = int(self._settings["pre_record_seconds"])
             self._settings["post_record_seconds"] = int(self._settings["post_record_seconds"])
             out = dict(self._settings)
+        if prev.get("recording_mode") == "off" and out.get("recording_mode") != "off":
+            self.stop_manual_recording()
         cb = self._on_settings_changed
         if cb and (
             out.get("flip_180") != prev.get("flip_180")
@@ -192,6 +199,7 @@ class EdgeRecorder:
 
     def stop(self) -> None:
         self._stop.set()
+        self.stop_manual_recording()
         self._terminate_ffmpeg()
         if self._mqtt:
             try:
@@ -207,11 +215,127 @@ class EdgeRecorder:
         while not self._stop.is_set():
             st = self.snapshot_settings()
             mode = st.get("recording_mode", "motion")
-            if mode == "continuous":
+            if mode == "off":
+                self._run_off_session()
+            elif mode == "continuous":
                 self._run_continuous_session(st)
             else:
                 self._run_motion_session(st)
             time.sleep(0.5)
+
+    def _run_off_session(self) -> None:
+        """No automatic recording; operator uses HTTP manual start/stop."""
+        self._terminate_ffmpeg()
+        while not self._stop.is_set():
+            cur = self.snapshot_settings()
+            if cur.get("recording_mode") != "off":
+                break
+            time.sleep(0.25)
+
+    def manual_recording_active(self) -> bool:
+        with self._manual_lock:
+            p = self._manual_proc
+            return p is not None and p.poll() is None
+
+    def manual_recording_status(self) -> dict[str, Any]:
+        with self._manual_lock:
+            proc = self._manual_proc
+            path = self._manual_out_path
+            active = proc is not None and proc.poll() is None
+            fn = path.name if path is not None and active else None
+        return {"active": active, "filename": fn}
+
+    def start_manual_recording(self) -> dict[str, Any]:
+        ff = shutil.which("ffmpeg")
+        if not ff:
+            raise ValueError("ffmpeg not found on PATH")
+        st = self.snapshot_settings()
+        if st.get("recording_mode") != "off":
+            raise ValueError("set recording mode to Off before manual recording")
+        with self._manual_lock:
+            if self._manual_proc is not None and self._manual_proc.poll() is None:
+                raise ValueError("manual recording already active")
+            self._recordings_root.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = self._recordings_root / f"manual_{ts}.mp4"
+            cmd = [
+                ff,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                self._rtsp_url,
+            ]
+            if st.get("flip_180"):
+                cmd.extend(["-vf", "vflip,hflip"])
+            cmd.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-an",
+                    "-movflags",
+                    "+faststart",
+                    str(out_path),
+                ]
+            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as e:
+                raise ValueError(f"ffmpeg failed to start: {e}") from e
+            self._manual_proc = proc
+            self._manual_out_path = out_path
+            self._manual_rid = f"manual_{ts}"
+        self._publish(
+            status="Start",
+            recording_id=self._manual_rid,
+            local_path=out_path.resolve().as_posix(),
+        )
+        return {"active": True, "filename": out_path.name, "recording_id": self._manual_rid}
+
+    def stop_manual_recording(self) -> dict[str, Any]:
+        with self._manual_lock:
+            proc = self._manual_proc
+            out_path = self._manual_out_path
+            rid = self._manual_rid
+            self._manual_proc = None
+            self._manual_out_path = None
+            self._manual_rid = ""
+        if proc is None:
+            return {"active": False, "filename": None}
+        filename = out_path.name if out_path else ""
+        try:
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=20)
+        except Exception:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self._publish(
+            status="Stop",
+            recording_id=rid or "manual",
+            local_path=out_path.resolve().as_posix() if out_path else "",
+            filename=filename,
+        )
+        return {"active": False, "filename": filename}
 
     def _run_continuous_session(self, st: dict[str, Any]) -> None:
         ff = shutil.which("ffmpeg")
@@ -340,6 +464,11 @@ class EdgeRecorder:
             if cur.get("recording_mode") == "continuous":
                 if cap is not None:
                     cap.release()
+                return
+            if cur.get("recording_mode") == "off":
+                if cap is not None:
+                    cap.release()
+                    cap = None
                 return
 
             if cap is None or not cap.isOpened():
