@@ -2,7 +2,7 @@
 # install-rpi-mediamtx.sh — install MediaMTX on a Raspberry Pi 4 for the
 # SmartCam edge-agent's LocalPublisher.
 #
-# Idempotent. Detects arm64v8 / armv7, downloads the matching upstream
+# Idempotent. Detects aarch64 / armv7, downloads the matching upstream
 # release tarball, verifies its SHA256 against the upstream checksum file,
 # and installs the binary to /usr/local/bin/mediamtx.
 #
@@ -32,7 +32,9 @@
 
 set -euo pipefail
 
-DEFAULT_VERSION="v1.9.0"
+# Pin a tag that exists on https://github.com/bluenviron/mediamtx/releases
+# (asset names: linux_arm64 / linux_armv7; checksums.sha256).
+DEFAULT_VERSION="v1.18.1"
 
 VERSION=""
 WITH_LIBCAMERA=0
@@ -49,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     --version)
       VERSION="${2:-}"
       if [[ -z "$VERSION" ]]; then
-        echo "Error: --version requires an argument (e.g. v1.9.0)" >&2
+        echo "Error: --version requires an argument (e.g. v1.18.1)" >&2
         exit 1
       fi
       shift 2
@@ -78,6 +80,13 @@ if [[ -z "$VERSION" ]]; then
   VERSION="$DEFAULT_VERSION"
 fi
 
+hint_bad_release() {
+  echo "Hint: ${VERSION} may not exist on GitHub (404), or this script is an older copy." >&2
+  echo "      Update SmartCam and re-run, or pin a real tag, e.g.:" >&2
+  echo "      $0 --version ${DEFAULT_VERSION}" >&2
+  echo "      Releases: https://github.com/bluenviron/mediamtx/releases" >&2
+}
+
 if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Error: --version must look like vMAJOR.MINOR.PATCH (got: $VERSION)" >&2
   exit 1
@@ -99,7 +108,8 @@ require_cmd uname
 arch="$(uname -m)"
 case "$arch" in
   aarch64 | arm64)
-    ARCH_TAG="linux_arm64v8"
+    # Upstream renamed linux_arm64v8 → linux_arm64 (see bluenviron/mediamtx releases).
+    ARCH_TAG="linux_arm64"
     ;;
   armv7l | armv7 | armhf)
     ARCH_TAG="linux_armv7"
@@ -125,30 +135,50 @@ TMP="$(mktemp -d -t smartcam-mediamtx.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 TARBALL="mediamtx_${VERSION}_${ARCH_TAG}.tar.gz"
-SUMFILE="mediamtx_${VERSION}_checksums.txt"
 BASE="https://github.com/bluenviron/mediamtx/releases/download/${VERSION}"
+
+echo "Installing MediaMTX ${VERSION} (${ARCH_TAG}) ..."
 
 echo "Downloading ${BASE}/${TARBALL} ..."
 if ! curl -fsSL -o "${TMP}/${TARBALL}" "${BASE}/${TARBALL}"; then
-  echo "Error: failed to download tarball." >&2
-  exit 4
-fi
-
-# The upstream "checksums.txt" filename has historically appeared as
-# "mediamtx_${VERSION}_checksums.txt". Some releases also publish a
-# "checksums.txt" without the prefix; try the prefixed first, then the bare.
-echo "Downloading checksum file ..."
-if ! curl -fsSL -o "${TMP}/${SUMFILE}" "${BASE}/${SUMFILE}"; then
-  if ! curl -fsSL -o "${TMP}/${SUMFILE}" "${BASE}/checksums.txt"; then
-    echo "Error: cannot fetch checksum file from ${BASE}" >&2
+  # Older releases used linux_arm64v8 instead of linux_arm64.
+  if [[ "$ARCH_TAG" == "linux_arm64" ]]; then
+    LEGACY_TARBALL="mediamtx_${VERSION}_linux_arm64v8.tar.gz"
+    echo "Retrying legacy asset name ${LEGACY_TARBALL} ..."
+    if curl -fsSL -o "${TMP}/${LEGACY_TARBALL}" "${BASE}/${LEGACY_TARBALL}"; then
+      TARBALL="$LEGACY_TARBALL"
+    else
+      echo "Error: failed to download tarball." >&2
+      hint_bad_release
+      exit 4
+    fi
+  else
+    echo "Error: failed to download tarball." >&2
+    hint_bad_release
     exit 4
   fi
 fi
 
+# Checksum sidecar naming has changed across releases; try current then legacy names.
+CHECKSUM_LOCAL="${TMP}/checksums.verify"
+SUMFILE_LABEL=""
+for name in "checksums.sha256" "mediamtx_${VERSION}_checksums.txt" "checksums.txt"; do
+  echo "Downloading checksum file (${name}) ..."
+  if curl -fsSL -o "$CHECKSUM_LOCAL" "${BASE}/${name}"; then
+    SUMFILE_LABEL="$name"
+    break
+  fi
+done
+if [[ -z "$SUMFILE_LABEL" ]]; then
+  echo "Error: cannot fetch checksum file from ${BASE}" >&2
+  hint_bad_release
+  exit 4
+fi
+
 # Build a single-line digest file referencing our tarball name and verify.
-expected="$(awk -v t="$TARBALL" '$2 == t || $2 == "*"t { print $1 }' "${TMP}/${SUMFILE}" | head -n1)"
+expected="$(awk -v t="$TARBALL" '$2 == t || $2 == "*"t { print $1 }' "$CHECKSUM_LOCAL" | head -n1)"
 if [[ -z "$expected" ]]; then
-  echo "Error: checksum entry for ${TARBALL} not found in ${SUMFILE}." >&2
+  echo "Error: checksum entry for ${TARBALL} not found in ${SUMFILE_LABEL}." >&2
   exit 5
 fi
 
