@@ -4,6 +4,8 @@
 
 The Smartcam **controller** runs on the **Raspberry Pi 5** (Hailo-capable host). It provides the FastAPI backend (MQTT bridge with Mosquitto, WebSocket updates, LAN discovery, proxy to edge agents, aggregated recordings), a React dashboard, and the authoritative Python package [`shared/surveillance_shared`](shared/surveillance_shared) (MobileNet-SSD detector helpers and RTSP/OpenCV environment).
 
+**Documentation:** [`docs/`](../docs/) — architecture, MQTT schema, and step-by-step setup ([`docs/SETUP_PI5.md`](../docs/SETUP_PI5.md), [`docs/SETUP_PI4.md`](../docs/SETUP_PI4.md)). Mosquitto bootstrap: [`scripts/install-mosquitto.sh`](scripts/install-mosquitto.sh).
+
 Layout:
 
 - **`backend/`** — FastAPI application (`uvicorn app.main:app`).

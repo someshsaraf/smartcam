@@ -150,11 +150,20 @@ def save() -> None:
 def add_camera(cam: dict[str, Any]) -> dict[str, Any]:
     global cameras
     with _lock:
-        if not cam.get("url") or not isinstance(cam["url"], str):
-            raise ValueError("Camera url is required")
-        existing = next(
-            (c for c in cameras if c["url"] == cam["url"]), None
-        )
+        url_raw = cam.get("url")
+        if (
+            not url_raw
+            or not isinstance(url_raw, str)
+            or not str(url_raw).strip()
+        ):
+            raise ValueError(
+                "Camera URL is required. For Pi 4 edges with no advertised RTSP URL, start the "
+                "edge-agent with SURVEILLANCE_PI_CAMERA=1 and install mediamtx, or set "
+                "SURVEILLANCE_RTSP_URL on the edge, then use Detect cameras again or paste the "
+                "RTSP URL manually."
+            )
+        url = str(url_raw).strip()
+        existing = next((c for c in cameras if c["url"] == url), None)
         if existing:
             return existing
         next_id = max((c["id"] for c in cameras), default=-1) + 1
@@ -165,7 +174,7 @@ def add_camera(cam: dict[str, Any]) -> dict[str, Any]:
             "id": next_id,
             "name": str(cam.get("name", "")),
             "location": str(cam.get("location", "")),
-            "url": str(cam["url"]),
+            "url": url,
             "edge_base_url": eb.strip().rstrip("/")
             if isinstance(eb, str) and eb.strip()
             else None,

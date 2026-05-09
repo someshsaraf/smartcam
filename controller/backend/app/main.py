@@ -12,7 +12,7 @@ from typing import Any, List, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import camera_store, mqtt_bridge
@@ -50,6 +50,18 @@ app.add_middleware(
 )
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
+
+_CHUNK = 1024 * 1024
+
+
+def _iter_mp4_file(path: Path):
+    """Chunked stream without fixed Content-Length (file may still be growing)."""
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            yield chunk
 
 
 class CameraCreate(BaseModel):
@@ -283,7 +295,12 @@ def get_recording_file(cam_id: int, filename: str):
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return StreamingResponse(
+        _iter_mp4_file(path),
+        media_type="video/mp4",
+        headers=headers,
+    )
 
 
 @app.delete("/recordings/{cam_id}/files/{filename}")

@@ -103,7 +103,13 @@ def build_mediamtx_yaml(cameras: list[dict[str, Any]]) -> str:
         "api: false",
         "webrtc: true",
         f"webrtcAddress: {_webrtc_listen_address()}",
-        "webrtcAllowOrigins: ['*']",
+        # webrtcAllowOrigin(s) is intentionally omitted: the field name changed
+        # between MediaMTX versions (singular `webrtcAllowOrigin` in <=1.9.x,
+        # plural `webrtcAllowOrigins` list in newer releases) and MediaMTX
+        # rejects unknown YAML keys strictly. We embed the live view as an
+        # <iframe src="http://<controller>:8889/<path>/">, so the WHEP handshake
+        # is same-origin to the reader page MediaMTX serves and no extra CORS
+        # allow-list is required.
     ]
     if not path_sources:
         lines.append("paths: {}")

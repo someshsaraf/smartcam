@@ -50,6 +50,10 @@ function formatTime(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
+function edgeDiscoveryKey(e) {
+  return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
+}
+
 function LiveTile({ cam, recording }) {
   const wrapRef = useRef(null);
   const [scale, setScale] = useState(1);
@@ -143,7 +147,9 @@ export default function App() {
   const [discoveredEdges, setDiscoveredEdges] = useState([]);
   const [recordingById, setRecordingById] = useState({});
   const [settingsCam, setSettingsCam] = useState(null);
-  const [recordings, setRecordings] = useState([]);
+  /** Flat list: one entry per file, newest first (all cameras). */
+  const [allRecordings, setAllRecordings] = useState([]);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [form, setForm] = useState({
     recording_mode: "motion",
     pre_record_seconds: 10,
@@ -153,6 +159,7 @@ export default function App() {
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
   const [manual, setManual] = useState({
     name: "",
     location: "",
@@ -168,18 +175,47 @@ export default function App() {
     setCams(data);
   }, []);
 
-  const loadRecordings = useCallback(async (camId) => {
-    const res = await fetch(`${API}/recordings/${camId}`);
-    if (!res.ok) {
-      setRecordings([]);
+  const loadAllRecordings = useCallback(async (cameraList) => {
+    if (!cameraList.length) {
+      setAllRecordings([]);
       return;
     }
-    setRecordings(await res.json());
+    setRecordingsLoading(true);
+    try {
+      const results = await Promise.all(
+        cameraList.map(async (cam) => {
+          try {
+            const res = await fetch(`${API}/recordings/${cam.id}`);
+            if (!res.ok) return [];
+            const files = await res.json();
+            if (!Array.isArray(files)) return [];
+            return files.map((r) => ({
+              camId: cam.id,
+              camName: cam.name,
+              name: r.name,
+              size: r.size ?? 0,
+              mtime: r.mtime ?? 0,
+            }));
+          } catch {
+            return [];
+          }
+        })
+      );
+      const flat = results.flat();
+      flat.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+      setAllRecordings(flat);
+    } finally {
+      setRecordingsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadAllRecordings(cams);
+  }, [cams, loadAllRecordings]);
 
   useEffect(() => {
     let ws;
@@ -240,14 +276,31 @@ export default function App() {
   };
 
   const addDiscovered = async (cam) => {
-    const { kind: _k, ...payload } = cam;
+    const k = cam.edge_base_url ? edgeDiscoveryKey(cam) : "";
+    const override = k && Object.prototype.hasOwnProperty.call(edgeRtspOverrides, k)
+      ? edgeRtspOverrides[k]
+      : "";
+    const url =
+      (override != null && String(override).trim()) ||
+      (cam.url != null && String(cam.url).trim()) ||
+      "";
+    if (!url) {
+      window.alert(
+        "RTSP URL is missing — enter the stream URL for this edge, or enable SURVEILLANCE_PI_CAMERA=1 " +
+          "with mediamtx on the Pi (see docs/SETUP_PI4.md)."
+      );
+      return;
+    }
+    const { kind: _k, incomplete: _i, ...rest } = cam;
+    const payload = { ...rest, url };
     const res = await fetch(`${API}/cameras`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      alert("Add failed");
+      const err = await res.json().catch(() => ({}));
+      window.alert(err.detail || "Add failed");
       return;
     }
     await load();
@@ -306,12 +359,10 @@ export default function App() {
         flip_180: Boolean(s.flip_180),
       });
     }
-    await loadRecordings(cam.id);
   };
 
   const closeSettings = () => {
     setSettingsCam(null);
-    setRecordings([]);
   };
 
   const deleteCamera = async (cam) => {
@@ -361,18 +412,17 @@ export default function App() {
     }
   };
 
-  const deleteRecording = async (name) => {
-    if (!settingsCam) return;
+  const deleteRecordingFor = async (camId, name) => {
     if (!window.confirm(`Delete ${name}?`)) return;
     const res = await fetch(
-      `${API}/recordings/${settingsCam.id}/files/${encodeURIComponent(name)}`,
+      `${API}/recordings/${camId}/files/${encodeURIComponent(name)}`,
       { method: "DELETE" }
     );
     if (!res.ok) {
       alert("Delete failed");
       return;
     }
-    await loadRecordings(settingsCam.id);
+    await loadAllRecordings(cams);
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
@@ -420,6 +470,27 @@ export default function App() {
                 <span className="text-[10px] text-gray-500 font-mono truncate">
                   {e.edge_base_url} · id {e.mqtt_camera_id}
                 </span>
+                {e.incomplete ? (
+                  <p
+                    className="text-[10px] text-amber-500 leading-snug"
+                    title="Edge did not advertise an RTSP URL in mDNS TXT (see docs/SETUP_PI4.md)."
+                  >
+                    No RTSP in mDNS — enter the URL below, then Add.
+                  </p>
+                ) : null}
+                {e.incomplete ? (
+                  <input
+                    className="w-full bg-[#0b1220] border border-amber-700/80 rounded px-2 py-1 text-[10px] font-mono"
+                    placeholder={`rtsp://…:8554/${(e.mediamtx_path || e.mqtt_camera_id || "camera1").replace(/^\//, "")}`}
+                    value={edgeRtspOverrides[edgeDiscoveryKey(e)] ?? ""}
+                    onChange={(ev) =>
+                      setEdgeRtspOverrides((o) => ({
+                        ...o,
+                        [edgeDiscoveryKey(e)]: ev.target.value,
+                      }))
+                    }
+                  />
+                ) : null}
               </div>
             ))
           )}
@@ -510,7 +581,7 @@ export default function App() {
                   type="button"
                   onClick={() => openSettings(c)}
                   className="text-gray-300 hover:text-white px-1"
-                  title="Settings & recordings"
+                  title="Camera settings"
                 >
                   ⚙
                 </button>
@@ -536,23 +607,87 @@ export default function App() {
           </code>
         </div>
 
-        <div className="flex-1 p-3 overflow-auto min-h-0">
-          {liveCams.length === 0 ? (
-            <p className="text-gray-500 text-sm p-4">
-              No cameras saved. Use Detect cameras or add manually in the sidebar — saved cameras persist across
-              backend restarts until removed.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-[1600px] mx-auto">
-              {liveCams.map((c) => (
-                <LiveTile
-                  key={c.id}
-                  cam={c}
-                  recording={recordingById[c.id] === true}
-                />
-              ))}
+        <div className="flex-1 p-3 overflow-auto min-h-0 flex flex-col gap-6">
+          <div>
+            {liveCams.length === 0 ? (
+              <p className="text-gray-500 text-sm p-4">
+                No cameras saved. Use Detect cameras or add manually in the sidebar — saved cameras persist across
+                backend restarts until removed.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-[1600px] mx-auto">
+                {liveCams.map((c) => (
+                  <LiveTile
+                    key={c.id}
+                    cam={c}
+                    recording={recordingById[c.id] === true}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="max-w-[1600px] mx-auto w-full border-t border-gray-800 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h2 className="text-sm font-semibold text-gray-200">Recordings</h2>
+              <div className="flex items-center gap-2">
+                {recordingsLoading ? (
+                  <span className="text-[10px] text-gray-500">Loading…</span>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={recordingsLoading || cams.length === 0}
+                  onClick={() => loadAllRecordings(cams)}
+                  className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
-          )}
+            {cams.length === 0 ? (
+              <p className="text-xs text-gray-500">Add a camera to see recordings.</p>
+            ) : allRecordings.length === 0 && !recordingsLoading ? (
+              <p className="text-xs text-gray-500">No clips yet across saved cameras.</p>
+            ) : (
+              <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {allRecordings.map((r) => {
+                  const url = `${API}/recordings/${r.camId}/files/${encodeURIComponent(r.name)}`;
+                  return (
+                    <li key={`${r.camId}-${r.name}`} className="bg-[#111827] rounded-lg p-3 text-xs border border-gray-800">
+                      <div className="flex justify-between gap-2 mb-1">
+                        <span className="truncate font-medium text-gray-200" title={r.camName}>
+                          {r.camName}
+                        </span>
+                        <span className="text-gray-500 shrink-0">{formatBytes(r.size)}</span>
+                      </div>
+                      <p className="font-mono text-[10px] text-gray-400 truncate mb-1" title={r.name}>
+                        {r.name}
+                      </p>
+                      <p className="text-gray-500 mb-2">{formatTime(r.mtime)}</p>
+                      <video
+                        className="w-full rounded bg-black max-h-40"
+                        src={url}
+                        controls
+                        preload="metadata"
+                      />
+                      <div className="flex gap-3 mt-2">
+                        <a href={url} download={r.name} className="text-blue-400 hover:underline">
+                          Download
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => deleteRecordingFor(r.camId, r.name)}
+                          className="text-red-400 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </div>
 
         <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500 space-y-1">
@@ -687,54 +822,9 @@ export default function App() {
                 {saving ? "Saving…" : "Save settings"}
               </button>
 
-              <div className="border-t border-gray-700 pt-4">
-                <h3 className="text-sm font-medium mb-2">Recordings</h3>
-                {recordings.length === 0 ? (
-                  <p className="text-xs text-gray-500">No clips yet.</p>
-                ) : (
-                  <ul className="space-y-3">
-                    {recordings.map((r) => {
-                      const url = `${API}/recordings/${settingsCam.id}/files/${encodeURIComponent(r.name)}`;
-                      return (
-                        <li
-                          key={r.name}
-                          className="bg-[#0b1220] rounded-lg p-2 text-xs"
-                        >
-                          <div className="flex justify-between gap-2 mb-2">
-                            <span className="truncate font-mono">{r.name}</span>
-                            <span className="text-gray-500 shrink-0">
-                              {formatBytes(r.size)}
-                            </span>
-                          </div>
-                          <p className="text-gray-500 mb-2">{formatTime(r.mtime)}</p>
-                          <video
-                            className="w-full rounded bg-black max-h-40"
-                            src={url}
-                            controls
-                            preload="metadata"
-                          />
-                          <div className="flex gap-2 mt-2">
-                            <a
-                              href={url}
-                              download={r.name}
-                              className="text-blue-400 hover:underline"
-                            >
-                              Download
-                            </a>
-                            <button
-                              type="button"
-                              onClick={() => deleteRecording(r.name)}
-                              className="text-red-400 hover:underline"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
+              <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-3">
+                Clips from all cameras are listed on the main page under <span className="text-gray-400">Recordings</span>.
+              </p>
             </div>
           </div>
         </div>

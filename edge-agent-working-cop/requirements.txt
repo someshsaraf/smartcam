@@ -1,0 +1,9 @@
+# Pi 4 edge agent: FastAPI, recorder/detector (OpenCV), MQTT publish
+fastapi>=0.115
+uvicorn[standard]>=0.30
+opencv-python>=4.8
+numpy>=1.26
+paho-mqtt>=2.0
+zeroconf>=0.130
+pytest>=8.0
+httpx>=0.27

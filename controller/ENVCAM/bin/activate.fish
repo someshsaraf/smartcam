@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /home/raspberry/surveillance-system/ENVCAM
+set -gx VIRTUAL_ENV /home/raspberry/SmartCam/smartcam/controller/ENVCAM
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH

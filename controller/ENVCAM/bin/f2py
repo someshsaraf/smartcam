@@ -1,4 +1,4 @@
-#!/home/raspberry/surveillance-system/frontend/ENVCAM/bin/python3
+#!/home/raspberry/SmartCam/smartcam/controller/ENVCAM/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
