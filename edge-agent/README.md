@@ -4,11 +4,16 @@
 
 Runs on **each Raspberry Pi 4** connected to a camera: MobileNet-SSD motion detection, local MP4 recordings, MQTT status events to the broker on the Pi 5 controller, and an HTTP API the controller uses to list and proxy recordings. It also advertises the device on the LAN via mDNS ([`app/main.py`](app/main.py), [`app/zeroconf_publish.py`](app/zeroconf_publish.py)).
 
+### Documentation
+
+Full stack setup, MQTT topics, and topology: **[`docs/`](../docs/)** — Pi 4: [`docs/SETUP_PI4.md`](../docs/SETUP_PI4.md), Pi 5: [`docs/SETUP_PI5.md`](../docs/SETUP_PI5.md), overview: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+
 ### MediaMTX and live tiles
 
-The edge agent **does not run MediaMTX**. It advertises **`SURVEILLANCE_MEDIAMTX_PATH`** over mDNS so the controller knows the stream **path name** for live tiles.
+- **USB / network RTSP camera:** set **`SURVEILLANCE_RTSP_URL`**. The recorder consumes that URL; mDNS advertises it when present.
+- **Raspberry Pi Camera Module:** set **`SURVEILLANCE_PI_CAMERA=1`**, install **`mediamtx`** (see [`scripts/install-rpi-mediamtx.sh`](scripts/install-rpi-mediamtx.sh)). The edge supervises a local MediaMTX child (`source: rpiCamera`) on **`SURVEILLANCE_PUBLISHER_PORT`** (default **8554**). The controller’s MediaMTX (on the Pi 5) pulls **`rtsp://<Pi4>:8554/<path>`** for WebRTC tiles — same layout as before, with RTSP now originating on the Pi 4 when the publisher is enabled.
 
-In the **recommended layout**, a **single MediaMTX instance runs on the Raspberry Pi 5 controller** and pulls each camera’s RTSP **`url`** from the controller’s `data/cameras.json` — started automatically by the controller API when the `mediamtx` binary is installed there (see [controller README](../controller/README.md)). Point **`VITE_MEDIAMTX_BASE`** at `http://<Pi5>:8889`.
+Point the UI’s **`VITE_MEDIAMTX_BASE`** at `http://<Pi5>:8889` (see [controller README](../controller/README.md)).
 
 ### Pi 5 vs Pi 4
 
@@ -69,7 +74,10 @@ Use a port consistent with **`SURVEILLANCE_EDGE_HTTP_PORT`** (default **8080**) 
 
 | Variable | Meaning |
 |----------|---------|
-| `SURVEILLANCE_RTSP_URL` | Input RTSP URL for OpenCV + ffmpeg. If unset, the HTTP API and mDNS can still run; the recorder thread does not start without a stream. |
+| `SURVEILLANCE_RTSP_URL` | Input RTSP URL for OpenCV + ffmpeg. If unset and **`SURVEILLANCE_PI_CAMERA=1`** with a running local MediaMTX child, the agent uses loopback RTSP automatically. |
+| `SURVEILLANCE_PI_CAMERA` | Set to **`1`** to supervise local MediaMTX with **`rpiCamera`** (requires `mediamtx` binary). |
+| `SURVEILLANCE_MEDIAMTX_BIN` | Optional path to the `mediamtx` executable. |
+| `SURVEILLANCE_PUBLISHER_PORT` | Local RTSP bind port for the supervised MediaMTX instance (default **8554**). |
 | `SURVEILLANCE_MQTT_HOST` | MQTT broker (typically on **Pi 5**); default **`192.168.2.104`** if unset. |
 | `SURVEILLANCE_MQTT_PORT` | Default **1883**. |
 | `SURVEILLANCE_MQTT_USER` / `SURVEILLANCE_MQTT_PASSWORD` | Optional broker credentials. |

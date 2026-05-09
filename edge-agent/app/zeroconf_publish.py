@@ -22,6 +22,11 @@ def _controller_ip_for_route() -> str:
     )
 
 
+def get_lan_ipv4() -> str:
+    """Public wrapper: preferred LAN IPv4 for mDNS and advertised RTSP URLs."""
+    return _guess_lan_ipv4()
+
+
 def _guess_lan_ipv4() -> str:
     ip_guess = os.environ.get("SURVEILLANCE_EDGE_IP", "").strip()
     if ip_guess:

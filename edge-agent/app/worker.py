@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -27,13 +27,31 @@ from surveillance_shared.rtsp_env import apply_rtsp_env  # noqa: E402
 apply_rtsp_env()
 
 SEGMENT_SECONDS = 600
-BUFFER_FPS = 10.0
+# Match LocalPublisher PRESETS (local_publisher.py) so RTSP reads keep up with the
+# rpiCamera encoder; reading slower causes MediaMTX "reader is too slow, discarding frames".
+QUALITY_CAPTURE_FPS = {"low": 15.0, "medium": 25.0, "high": 25.0}
 DETECT_EVERY_N_FRAMES = 3
 COOLDOWN_SEC = 2.0
 
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _fps_for_quality(quality: Any) -> float:
+    q = str(quality or "medium").strip().lower()
+    v = QUALITY_CAPTURE_FPS.get(q)
+    if v is not None:
+        return float(v)
+    return 25.0
+
+
+def _configure_rtsp_capture(cap: cv2.VideoCapture) -> None:
+    """Shrink internal queue where supported so stale frames are dropped sooner."""
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
 
 
 def _flip_if_needed(frame: Any, flip: bool) -> Any:
@@ -55,6 +73,7 @@ class EdgeRecorder:
         mqtt_password: Optional[str] = None,
         topic_prefix: str = "surveillance/cameras",
         model_dir: Optional[Path] = None,
+        on_settings_changed: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> None:
         if not camera_mqtt_id or not str(camera_mqtt_id).strip():
             raise ValueError("camera_mqtt_id required")
@@ -80,6 +99,7 @@ class EdgeRecorder:
         self._thread: Optional[threading.Thread] = None
         self._mqtt: Optional[mqtt.Client] = None
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
+        self._on_settings_changed = on_settings_changed
         if model_dir:
             import os
             os.environ["SURVEILLANCE_MODEL_DIR"] = str(model_dir)
@@ -122,6 +142,7 @@ class EdgeRecorder:
             print("[edge] mqtt publish failed:", e)
 
     def update_settings(self, s: dict[str, Any]) -> dict[str, Any]:
+        prev = self.snapshot_settings()
         with self._lock:
             for k, v in s.items():
                 if k in self._settings:
@@ -136,6 +157,12 @@ class EdgeRecorder:
             self._settings["pre_record_seconds"] = int(self._settings["pre_record_seconds"])
             self._settings["post_record_seconds"] = int(self._settings["post_record_seconds"])
             out = dict(self._settings)
+        cb = self._on_settings_changed
+        if cb and (
+            out.get("flip_180") != prev.get("flip_180")
+            or out.get("quality") != prev.get("quality")
+        ):
+            cb(out)
         return out
 
     def snapshot_settings(self) -> dict[str, Any]:
@@ -195,7 +222,13 @@ class EdgeRecorder:
         rid = f"cont_{int(time.time())}"
         out_dir = self._recordings_root
         out_dir.mkdir(parents=True, exist_ok=True)
-        pattern = str(out_dir / "%Y-%m-%d_%H-%M-%S.mp4")
+        list_path = out_dir / "_continuous_segment_list.txt"
+        try:
+            if list_path.is_file():
+                list_path.unlink()
+        except OSError:
+            pass
+        pattern = "%Y-%m-%d_%H-%M-%S.mp4"
         cmd = [
             ff,
             "-hide_banner",
@@ -218,6 +251,12 @@ class EdgeRecorder:
             "segment",
             "-segment_time",
             str(int(SEGMENT_SECONDS)),
+            "-segment_list",
+            list_path.name,
+            "-segment_list_type",
+            "flat",
+            "-segment_list_size",
+            "1000",
             "-reset_timestamps",
             "1",
             "-strftime",
@@ -230,6 +269,7 @@ class EdgeRecorder:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                cwd=str(out_dir),
             )
         except OSError as e:
             print("[edge] ffmpeg start failed:", e)
@@ -241,7 +281,8 @@ class EdgeRecorder:
             recording_id=rid,
             local_path=out_dir.resolve().as_posix(),
         )
-        last_tick = 0.0
+        list_line_count = 0
+        last_filename = ""
         while not self._stop.is_set():
             proc = self._ffmpeg_proc
             if proc is None:
@@ -251,14 +292,28 @@ class EdgeRecorder:
             cur = self.snapshot_settings()
             if cur.get("recording_mode") != "continuous":
                 break
-            now = time.time()
-            if now - last_tick >= 1.0:
-                self._publish(
-                    status="InProgress",
-                    recording_id=rid,
-                    local_path=out_dir.resolve().as_posix(),
-                )
-                last_tick = now
+            if list_path.is_file():
+                try:
+                    lines = list_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                except OSError:
+                    lines = []
+                while list_line_count < len(lines):
+                    raw = lines[list_line_count].strip()
+                    list_line_count += 1
+                    if not raw:
+                        continue
+                    seg_path = Path(raw)
+                    if not seg_path.is_absolute():
+                        seg_path = (out_dir / raw).resolve()
+                    else:
+                        seg_path = seg_path.resolve()
+                    last_filename = seg_path.name
+                    self._publish(
+                        status="InProgress",
+                        recording_id=rid,
+                        local_path=seg_path.as_posix(),
+                        filename=last_filename,
+                    )
             time.sleep(0.2)
 
         self._terminate_ffmpeg()
@@ -266,6 +321,7 @@ class EdgeRecorder:
             status="Stop",
             recording_id=rid,
             local_path=out_dir.resolve().as_posix(),
+            filename=last_filename,
         )
 
     def _run_motion_session(self, st: dict[str, Any]) -> None:
@@ -288,11 +344,13 @@ class EdgeRecorder:
 
             if cap is None or not cap.isOpened():
                 cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
+                _configure_rtsp_capture(cap)
 
             pre_s = int(cur.get("pre_record_seconds", 10))
             post_s = int(cur.get("post_record_seconds", 50))
             flip = bool(cur.get("flip_180", False))
-            maxlen = max(1, int(pre_s * BUFFER_FPS))
+            capture_fps = _fps_for_quality(cur.get("quality"))
+            maxlen = max(1, int(pre_s * capture_fps))
             buf: collections.deque[bytes] = collections.deque(maxlen=maxlen)
             frame_i = 0
 
@@ -304,6 +362,7 @@ class EdgeRecorder:
                 if cap is None or not cap.isOpened():
                     break
 
+                loop_t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     if cap is not None:
@@ -340,7 +399,10 @@ class EdgeRecorder:
                     last_clip_end = time.time()
                     buf.clear()
 
-                time.sleep(max(0, 1.0 / BUFFER_FPS - 0.01))
+                capture_fps = _fps_for_quality(cur.get("quality"))
+                period = 1.0 / capture_fps
+                elapsed = time.perf_counter() - loop_t0
+                time.sleep(max(0.0, period - elapsed))
 
     def _materialize_event(
         self,
@@ -365,6 +427,8 @@ class EdgeRecorder:
                 (tmp / f"{idx:05d}.jpg").write_bytes(blob)
                 idx += 1
 
+            read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
+
             self._publish(
                 status="Start",
                 recording_id=rid,
@@ -379,6 +443,7 @@ class EdgeRecorder:
                 cur = self.snapshot_settings()
                 if cur.get("recording_mode") != "motion":
                     break
+                loop_t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     break
@@ -404,7 +469,10 @@ class EdgeRecorder:
                     (tmp / f"{idx:05d}.jpg").write_bytes(jpg.tobytes())
                     idx += 1
                 post_i += 1
-                time.sleep(max(0, 1.0 / BUFFER_FPS - 0.01))
+                read_fps = _fps_for_quality(cur.get("quality"))
+                read_period = 1.0 / read_fps
+                elapsed = time.perf_counter() - loop_t0
+                time.sleep(max(0.0, read_period - elapsed))
 
             if idx == 0:
                 self._publish(status="Stop", recording_id=rid, local_path="")
@@ -417,7 +485,7 @@ class EdgeRecorder:
                 "-loglevel",
                 "warning",
                 "-framerate",
-                str(int(BUFFER_FPS)),
+                str(max(1, int(round(read_fps)))),
                 "-i",
                 str(tmp / "%05d.jpg"),
                 "-c:v",
