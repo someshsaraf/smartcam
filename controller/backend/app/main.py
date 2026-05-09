@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import camera_store, mqtt_bridge
+from . import camera_store, live_detection, mqtt_bridge
 from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
 from .mediamtx_manager import start_embedded as mediamtx_start_embedded
@@ -33,7 +33,9 @@ async def lifespan(app: FastAPI):
     mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
     mediamtx_start_embedded()
+    live_detection.get_service().start(loop)
     yield
+    live_detection.get_service().stop()
     mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()
@@ -285,6 +287,23 @@ def stream():
 # =========================
 
 
+@app.websocket("/ws/detections")
+async def ws_detections(ws: WebSocket):
+    """Live face boxes (normalized) for dashboard overlays — Phase 1."""
+    await ws.accept()
+    svc = live_detection.get_service()
+    hub = svc.ws_hub
+    await hub.register(ws)
+    try:
+        await ws.send_json({"type": "hello", **svc.status()})
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await hub.unregister(ws)
+
+
 @app.websocket("/ws/recording")
 async def ws_recording(ws: WebSocket):
     await ws.accept()
@@ -416,6 +435,12 @@ def delete_recording_file(cam_id: int, filename: str):
 def system_mediamtx():
     """Whether embedded MediaMTX is running (live iframe targets port player_port)."""
     return mediamtx_status_dict()
+
+
+@app.get("/system/live_detection")
+def system_live_detection():
+    """Phase 1: controller-side face detection workers + WS fan-out."""
+    return live_detection.get_service().status()
 
 
 @app.get("/system/recording")

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
 
 const API = (import.meta.env.VITE_API_URL || "http://192.168.2.104:8000").replace(
   /\/$/,
@@ -23,6 +24,22 @@ const WS_RECORDING =
   (import.meta.env.VITE_WS_RECORDING_URL || "").replace(/\/$/, "") ||
   `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/recording`;
 
+/** Low-latency HLS from embedded MediaMTX (Phase 1 overlays need a real video element). */
+function defaultHlsBaseFromApi() {
+  try {
+    const u = new URL(API.startsWith("http") ? API : `http://${API}`);
+    return `${u.protocol}//${u.hostname}:8888`;
+  } catch {
+    return "http://192.168.2.104:8888";
+  }
+}
+
+const HLS_BASE = (import.meta.env.VITE_HLS_BASE || defaultHlsBaseFromApi()).replace(/\/$/, "");
+
+const WS_DETECTIONS =
+  (import.meta.env.VITE_WS_DETECTIONS_URL || "").replace(/\/$/, "") ||
+  `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/detections`;
+
 const MAX_LIVE_TILES = 6;
 
 function streamPathForCamera(cam) {
@@ -37,6 +54,11 @@ function streamUrlForCamera(cam) {
   const path = streamPathForCamera(cam).replace(/\/+$/, "");
   // MediaMTX embedded reader pages typically expect a trailing slash on the path.
   return `${MEDIAMTX_BASE}/${path}/`;
+}
+
+function hlsPlaylistUrlForCamera(cam) {
+  const path = streamPathForCamera(cam).replace(/\/+$/, "");
+  return `${HLS_BASE}/${path}/index.m3u8`;
 }
 
 function formatBytes(n) {
@@ -54,10 +76,14 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
-function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle }) {
+function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces }) {
   const wrapRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const [scale, setScale] = useState(1);
+  const [useIframeFallback, setUseIframeFallback] = useState(false);
   const streamUrl = streamUrlForCamera(cam);
+  const hlsUrl = hlsPlaylistUrlForCamera(cam);
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
 
@@ -75,6 +101,88 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     if (!el?.requestFullscreen) return;
     el.requestFullscreen().catch(() => {});
   };
+
+  useEffect(() => {
+    if (useIframeFallback) return undefined;
+    const video = videoRef.current;
+    if (!video) return undefined;
+    let hls;
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        lowLatencyMode: true,
+        maxLiveSyncPlaybackRate: 1.5,
+        enableWorker: true,
+      });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          hls?.destroy();
+          setUseIframeFallback(true);
+        }
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = hlsUrl;
+    } else {
+      setUseIframeFallback(true);
+      return undefined;
+    }
+    return () => {
+      if (hls) hls.destroy();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [cam.id, hlsUrl, useIframeFallback]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || useIframeFallback) return undefined;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+
+    const paint = () => {
+      const cw = video.clientWidth;
+      const ch = video.clientHeight;
+      if (cw < 2 || ch < 2) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      canvas.style.width = `${cw}px`;
+      canvas.style.height = `${ch}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cw, ch);
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) return;
+      const scaleContain = Math.min(cw / vw, ch / vh);
+      const dw = vw * scaleContain;
+      const dh = vh * scaleContain;
+      const ox = (cw - dw) / 2;
+      const oy = (ch - dh) / 2;
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.lineWidth = 2;
+      const faceList = Array.isArray(faces) ? faces : [];
+      for (const f of faceList) {
+        const x = ox + Number(f.x) * vw * scaleContain;
+        const y = oy + Number(f.y) * vh * scaleContain;
+        const w = Number(f.w) * vw * scaleContain;
+        const h = Number(f.h) * vh * scaleContain;
+        ctx.strokeRect(x, y, w, h);
+      }
+    };
+
+    paint();
+    video.addEventListener("loadeddata", paint);
+    video.addEventListener("timeupdate", paint);
+    const ro = new ResizeObserver(paint);
+    ro.observe(video);
+    return () => {
+      video.removeEventListener("loadeddata", paint);
+      video.removeEventListener("timeupdate", paint);
+      ro.disconnect();
+    };
+  }, [faces, useIframeFallback, cam.id]);
 
   return (
     <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
@@ -98,12 +206,29 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
           className="w-full h-full origin-center transition-transform duration-75"
           style={{ transform: `scale(${scale})` }}
         >
-          <iframe
-            title={cam.name}
-            src={streamUrl}
-            className="w-full h-full min-h-[140px] border-0 bg-black"
-            allow="autoplay; fullscreen"
-          />
+          {useIframeFallback ? (
+            <iframe
+              title={cam.name}
+              src={streamUrl}
+              className="w-full h-full min-h-[140px] border-0 bg-black"
+              allow="autoplay; fullscreen"
+            />
+          ) : (
+            <div className="relative w-full h-full min-h-[140px] bg-black">
+              <video
+                ref={videoRef}
+                className="absolute inset-0 w-full h-full object-contain bg-black"
+                playsInline
+                muted
+                autoPlay
+              />
+              <canvas
+                ref={canvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                aria-hidden="true"
+              />
+            </div>
+          )}
         </div>
         <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto items-center">
           {showManual ? (
@@ -150,8 +275,11 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
           </button>
         </div>
       </div>
-      <p className="text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug" title="MediaMTX reader URL">
-        {streamUrl}
+      <p
+        className="text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
+        title={useIframeFallback ? "WebRTC reader (no overlay)" : "HLS playlist for video + face overlay"}
+      >
+        {useIframeFallback ? streamUrl : hlsUrl}
       </p>
     </div>
   );
@@ -177,6 +305,8 @@ export default function App() {
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
+  /** Phase 1: controller `/ws/detections` → `{ faces, ts }` per camera id */
+  const [detectionsById, setDetectionsById] = useState({});
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -277,6 +407,41 @@ export default function App() {
             next[Number(id)] = Boolean(row.recording);
           });
           if (alive) setRecordingById(next);
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onclose = () => {
+        if (!alive) return;
+        setTimeout(connect, 3000);
+      };
+    };
+    connect();
+    return () => {
+      alive = false;
+      if (ws) ws.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    let ws;
+    let alive = true;
+    const connect = () => {
+      try {
+        ws = new WebSocket(WS_DETECTIONS);
+      } catch {
+        return;
+      }
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "detections" && msg.camera_id != null && alive) {
+            const id = Number(msg.camera_id);
+            setDetectionsById((prev) => ({
+              ...prev,
+              [id]: { faces: Array.isArray(msg.faces) ? msg.faces : [], ts: msg.ts || "" },
+            }));
+          }
         } catch {
           /* ignore */
         }
@@ -540,9 +705,14 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex justify-between items-center px-4 py-2 border-b border-gray-800 gap-2">
           <code className="text-[10px] text-gray-500 truncate">{API}</code>
-          <code className="text-[10px] text-gray-500 truncate hidden sm:block">
-            {WS_RECORDING}
-          </code>
+          <div className="hidden sm:flex flex-col items-end gap-0.5 min-w-0 max-w-[50%]">
+            <code className="text-[10px] text-gray-500 truncate w-full text-right" title="Face detection WS">
+              {WS_DETECTIONS}
+            </code>
+            <code className="text-[10px] text-gray-500 truncate w-full text-right" title="Recording state WS">
+              {WS_RECORDING}
+            </code>
+          </div>
         </div>
 
         <div className="flex-1 p-3 overflow-auto min-h-0 flex flex-col gap-6">
@@ -562,6 +732,7 @@ export default function App() {
                     recordingMode={c.settings?.recording_mode || "motion"}
                     manualRecording={manualRecordingById[c.id] === true}
                     onManualToggle={() => toggleManualRecording(c)}
+                    faces={detectionsById[c.id]?.faces}
                   />
                 ))}
               </div>
@@ -633,7 +804,9 @@ export default function App() {
 
         <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500 space-y-1">
           <p>
-            Live views use MediaMTX ({MEDIAMTX_BASE}). Red dot = MQTT recording signal via {WS_RECORDING}.
+            Live tiles prefer HLS ({HLS_BASE}) for OpenCV/Hailo face boxes over{" "}
+            <span className="font-mono text-gray-400">{WS_DETECTIONS}</span>. WebRTC reader (
+            {MEDIAMTX_BASE}) is used if HLS fails. Red dot = recording via {WS_RECORDING}.
           </p>
           <p className="text-amber-500/90">
             “Refused to connect” → nothing listening on the MediaMTX URL (usually missing <span className="font-mono text-gray-400">mediamtx</span>{" "}

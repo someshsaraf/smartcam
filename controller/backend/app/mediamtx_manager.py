@@ -37,6 +37,39 @@ def _webrtc_listen_address() -> str:
     return v if v else ":8889"
 
 
+def _hls_listen_address() -> str:
+    v = os.environ.get("CONTROLLER_MEDIAMTX_HLS_ADDRESS", "").strip()
+    return v if v else ":8888"
+
+
+def _hls_enabled() -> bool:
+    return os.environ.get("CONTROLLER_MEDIAMTX_HLS_DISABLED", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def camera_id_to_mediamtx_path(cameras: list[dict[str, Any]]) -> dict[int, str]:
+    """
+    Map camera id -> MediaMTX path key exactly as in generated YAML
+    (see build_mediamtx_yaml).
+    """
+    path_sources: dict[str, str] = {}
+    id_to_key: dict[int, str] = {}
+    for cam in cameras:
+        url = cam.get("url")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        key = _safe_path_key(cam)
+        if key in path_sources:
+            key = f"{key}_{int(cam['id'])}"
+        path_sources[key] = url.strip()
+        id_to_key[int(cam["id"])] = key
+    return id_to_key
+
+
 def mediamtx_binary() -> Optional[str]:
     env_bin = os.environ.get("CONTROLLER_MEDIAMTX_BIN", "").strip()
     candidates: list[str] = []
@@ -111,6 +144,14 @@ def build_mediamtx_yaml(cameras: list[dict[str, Any]]) -> str:
         # is same-origin to the reader page MediaMTX serves and no extra CORS
         # allow-list is required.
     ]
+    if _hls_enabled():
+        lines.extend(
+            [
+                "hls: true",
+                f"hlsAddress: {_hls_listen_address()}",
+                "hlsAllowOrigins: ['*']",
+            ]
+        )
     if not path_sources:
         lines.append("paths: {}")
     else:
@@ -236,6 +277,8 @@ def status_dict() -> dict[str, Any]:
         pid = int(_proc.pid) if running and _proc is not None else None
     w = _webrtc_listen_address()
     port = w.rsplit(":", 1)[-1] if ":" in w else "8889"
+    hls_a = _hls_listen_address()
+    hls_port = hls_a.rsplit(":", 1)[-1] if ":" in hls_a else "8888"
     return {
         "should_run": should_run_mediamtx(),
         "binary_path": mediamtx_binary(),
@@ -244,6 +287,9 @@ def status_dict() -> dict[str, Any]:
         "config_path": str(CONFIG_PATH.resolve()),
         "webrtc_listen_address": w,
         "player_port": port,
+        "hls_enabled": _hls_enabled(),
+        "hls_listen_address": hls_a,
+        "hls_player_port": hls_port,
         "last_start_error": _last_start_error or None,
         "ui_hint": (
             f"Set VITE_MEDIAMTX_BASE to http://<this-host>:{port} "
