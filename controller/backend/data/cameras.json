@@ -9,7 +9,7 @@
       "mediamtx_path": "camera1",
       "mqtt_camera_id": "camera1",
       "settings": {
-        "recording_mode": "motion",
+        "recording_mode": "off",
         "pre_record_seconds": 10,
         "post_record_seconds": 50,
         "quality": "medium",

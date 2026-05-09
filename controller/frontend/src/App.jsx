@@ -159,7 +159,6 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
 
 export default function App() {
   const [cams, setCams] = useState([]);
-  const [discovered, setDiscovered] = useState([]);
   const [discoveredEdges, setDiscoveredEdges] = useState([]);
   const [recordingById, setRecordingById] = useState({});
   const [settingsCam, setSettingsCam] = useState(null);
@@ -178,14 +177,6 @@ export default function App() {
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
-  const [manual, setManual] = useState({
-    name: "",
-    location: "",
-    url: "",
-    edge_base_url: "",
-    mqtt_camera_id: "",
-    mediamtx_path: "",
-  });
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -305,21 +296,12 @@ export default function App() {
   const detectCameras = async () => {
     setDetecting(true);
     setDiscoveredEdges([]);
-    setDiscovered([]);
     try {
-      const [edgesRes, legacyRes] = await Promise.all([
-        fetch(`${API}/detect/edges`),
-        fetch(`${API}/detect`),
-      ]);
+      const edgesRes = await fetch(`${API}/detect/edges`);
       if (edgesRes.ok) {
         setDiscoveredEdges(await edgesRes.json());
       } else {
         setDiscoveredEdges([]);
-      }
-      if (legacyRes.ok) {
-        setDiscovered(await legacyRes.json());
-      } else {
-        setDiscovered([]);
       }
     } finally {
       setDetecting(false);
@@ -354,46 +336,6 @@ export default function App() {
       window.alert(err.detail || "Add failed");
       return;
     }
-    await load();
-  };
-
-  const addManual = async () => {
-    if (!manual.url.trim()) {
-      alert("RTSP / stream URL is required");
-      return;
-    }
-    const body = {
-      name: manual.name.trim() || "Camera",
-      location: manual.location.trim() || "",
-      url: manual.url.trim(),
-    };
-    if (manual.edge_base_url.trim()) {
-      body.edge_base_url = manual.edge_base_url.trim().replace(/\/$/, "");
-    }
-    if (manual.mqtt_camera_id.trim()) {
-      body.mqtt_camera_id = manual.mqtt_camera_id.trim();
-    }
-    if (manual.mediamtx_path.trim()) {
-      body.mediamtx_path = manual.mediamtx_path.trim();
-    }
-    const res = await fetch(`${API}/cameras`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(err.detail || "Add failed");
-      return;
-    }
-    setManual({
-      name: "",
-      location: "",
-      url: "",
-      edge_base_url: "",
-      mqtt_camera_id: "",
-      mediamtx_path: "",
-    });
     await load();
   };
 
@@ -517,21 +459,13 @@ export default function App() {
         >
           {detecting ? "Detecting… (~3s)" : "Detect cameras"}
         </button>
-        <p className="text-[10px] text-gray-600">
-          Scans mDNS for Pi 4 edge agents and legacy LAN RTSP cameras. Nothing runs until you tap this.
-        </p>
 
-        <div>
-          <h3 className="text-xs text-gray-400 mb-2">Edge agents</h3>
-          {discoveredEdges.length === 0 ? (
-            <p className="text-[10px] text-gray-600 mb-2">
-              No matches — tap Detect cameras with edges online, or add manually below.
-            </p>
-          ) : (
-            discoveredEdges.map((e, i) => (
+        {discoveredEdges.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {discoveredEdges.map((e, i) => (
               <div
                 key={`${e.edge_base_url}-${e.mqtt_camera_id}-${i}`}
-                className="bg-[#111827] p-2 rounded mb-2 text-xs flex flex-col gap-1"
+                className="bg-[#111827] p-2 rounded text-xs flex flex-col gap-1"
               >
                 <div className="flex justify-between items-center gap-1">
                   <span className="truncate font-medium">{e.name}</span>
@@ -551,7 +485,7 @@ export default function App() {
                     className="text-[10px] text-amber-500 leading-snug"
                     title="Edge did not advertise an RTSP URL in mDNS TXT (see docs/SETUP_PI4.md)."
                   >
-                    No RTSP in mDNS — enter the URL below, then Add.
+                    No RTSP in mDNS — paste the RTSP URL here, then Add.
                   </p>
                 ) : null}
                 {e.incomplete ? (
@@ -568,84 +502,12 @@ export default function App() {
                   />
                 ) : null}
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        ) : null}
 
         <div>
-          <h3 className="text-xs text-gray-400 mb-2">Legacy RTSP (LAN)</h3>
-          {discovered.map((c, i) => (
-            <div
-              key={i}
-              className="bg-[#111827] p-2 rounded mb-2 text-xs flex justify-between items-center gap-1"
-            >
-              <span className="truncate">{c.name}</span>
-              <button
-                type="button"
-                onClick={() => addDiscovered(c)}
-                className="text-green-400 shrink-0"
-              >
-                Add
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <div className="border-t border-gray-800 pt-3 space-y-2">
-          <h3 className="text-xs text-gray-400">Add Pi 4 edge camera</h3>
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs"
-            placeholder="Name"
-            value={manual.name}
-            onChange={(e) => setManual((m) => ({ ...m, name: e.target.value }))}
-          />
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs"
-            placeholder="Location"
-            value={manual.location}
-            onChange={(e) => setManual((m) => ({ ...m, location: e.target.value }))}
-          />
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-            placeholder="Live RTSP URL (for MediaMTX)"
-            value={manual.url}
-            onChange={(e) => setManual((m) => ({ ...m, url: e.target.value }))}
-          />
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-            placeholder="Edge API http://pi4:8080"
-            value={manual.edge_base_url}
-            onChange={(e) =>
-              setManual((m) => ({ ...m, edge_base_url: e.target.value }))
-            }
-          />
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-            placeholder="MQTT camera id (topic segment)"
-            value={manual.mqtt_camera_id}
-            onChange={(e) =>
-              setManual((m) => ({ ...m, mqtt_camera_id: e.target.value }))
-            }
-          />
-          <input
-            className="w-full bg-[#0b1220] border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-            placeholder="MediaMTX path (optional)"
-            value={manual.mediamtx_path}
-            onChange={(e) =>
-              setManual((m) => ({ ...m, mediamtx_path: e.target.value }))
-            }
-          />
-          <button
-            type="button"
-            onClick={addManual}
-            className="w-full bg-emerald-700 hover:bg-emerald-600 p-2 rounded text-sm"
-          >
-            Add camera
-          </button>
-        </div>
-
-        <div>
-          <h3 className="text-xs text-gray-400 mb-2">Cameras</h3>
+          <h3 className="text-xs text-gray-400 mb-2">Detected Cameras</h3>
           {cams.map((c) => (
             <div
               key={c.id}
@@ -687,7 +549,7 @@ export default function App() {
           <div>
             {liveCams.length === 0 ? (
               <p className="text-gray-500 text-sm p-4">
-                No cameras saved. Use Detect cameras or add manually in the sidebar — saved cameras persist across
+                No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
                 backend restarts until removed.
               </p>
             ) : (
