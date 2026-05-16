@@ -18,7 +18,7 @@ _SERVICE_TYPE = "_vigilance-edge._tcp.local."
 
 def _controller_ip_for_route() -> str:
     return (
-        os.environ.get("SURVEILLANCE_CONTROLLER_IP", "").strip() or "192.168.2.104"
+        os.environ.get("SURVEILLANCE_CONTROLLER_IP", "").strip() or "192.168.2.139"
     )
 
 

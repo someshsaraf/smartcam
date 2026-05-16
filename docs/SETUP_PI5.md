@@ -29,7 +29,7 @@ broker to the controller's LAN IP rather than `0.0.0.0`.
 
 ```bash
 cd /path/to/SmartCam/smartcam/controller
-sudo ./scripts/install-mosquitto.sh 192.168.2.104 smartcam 's3cret-on-LAN'
+sudo ./scripts/install-mosquitto.sh 192.168.2.139 smartcam 's3cret-on-LAN'
 ```
 
 Argument order:
@@ -51,7 +51,7 @@ Verify:
 
 ```bash
 ss -tlnp | grep ':1883'
-mosquitto_sub -h 192.168.2.104 -u smartcam -P 's3cret-on-LAN' -t 'surveillance/cameras/+/recording' -v
+mosquitto_sub -h 192.168.2.139 -u smartcam -P 's3cret-on-LAN' -t 'surveillance/cameras/+/recording' -v
 ```
 
 The same credentials must be set on each Pi 4's `.env`
@@ -95,20 +95,9 @@ Fetch the SSD detector models for the controller's diagnostics path:
 
 ## 5. Configure backend environment
 
-Set in the shell that launches uvicorn (or via a systemd unit's
-`EnvironmentFile=`):
-
-```bash
-export PYTHONPATH="$(pwd)/../shared"
-export CONTROLLER_MQTT_HOST=192.168.2.104
-export CONTROLLER_MQTT_PORT=1883
-export CONTROLLER_MQTT_USER=smartcam
-export CONTROLLER_MQTT_PASSWORD='s3cret-on-LAN'
-export CONTROLLER_MQTT_TOPIC_PREFIX=surveillance/cameras
-# Optional, defaults work:
-# export CONTROLLER_MEDIAMTX_BIN=/usr/local/bin/mediamtx
-# export CONTROLLER_MEDIAMTX_WEBRTC_ADDRESS=:8889
-```
+Edit **`controller/backend/.env`** (loaded automatically on API start). Set your
+Pi 5 LAN IP on `CONTROLLER_MQTT_HOST` and matching MQTT credentials if you use
+auth. All variables are listed in that file; shell exports override `.env` if set.
 
 ## 6. Run the backend
 
@@ -137,15 +126,10 @@ npm install
 npm run dev    # vite --host, binds all interfaces
 ```
 
-Optional `.env.local`:
+Edit **`controller/frontend/.env`** if your Pi 5 IP is not `192.168.2.139`, then
+restart `npm run dev`.
 
-```env
-VITE_API_URL=http://192.168.2.104:8000
-VITE_MEDIAMTX_BASE=http://192.168.2.104:8889
-# VITE_WS_RECORDING_URL=ws://192.168.2.104:8000/ws/recording
-```
-
-Open the **Network** URL Vite prints (e.g. `http://192.168.2.104:5173/`) on
+Open the **Network** URL Vite prints (e.g. `http://192.168.2.139:5173/`) on
 any device on the same LAN.
 
 ## 8. Manual smoke checks
@@ -153,7 +137,7 @@ any device on the same LAN.
 1. Mosquitto broker is alive and authenticates:
 
    ```bash
-   mosquitto_pub -h 192.168.2.104 -u smartcam -P 's3cret-on-LAN' \
+   mosquitto_pub -h 192.168.2.139 -u smartcam -P 's3cret-on-LAN' \
        -t 'surveillance/cameras/test/recording' -m '{"status":"Stop"}'
    ```
 
@@ -176,7 +160,7 @@ any device on the same LAN.
 5. Click **Add** on the discovered entry. The tile starts playing within a
    few seconds.
 6. Open Settings, switch to **Continuous**, save. Watch
-   `mosquitto_sub -h 192.168.2.104 -t 'surveillance/cameras/+/recording' -v`
+   `mosquitto_sub -h 192.168.2.139 -t 'surveillance/cameras/+/recording' -v`
    on the Pi 5: every closed segment emits an `InProgress` with `filename`,
    and a final `Stop` carries the last filename.
 7. Switch back to **Motion**, trigger motion on the camera, wait for the
@@ -227,7 +211,7 @@ journalctl -u smartcam-controller -f
 
 | Symptom | Probable cause | Fix |
 |---------|----------------|-----|
-| Browser tile: `192.168.2.104 refused to connect` | MediaMTX not running on the controller | `which mediamtx`; `journalctl -u smartcam-controller`; install via Step 3 |
+| Browser tile: `192.168.2.139 refused to connect` | MediaMTX not running on the controller | `which mediamtx`; `journalctl -u smartcam-controller`; install via Step 3 |
 | `dial tcp 192.168.2.x:8554: connection refused` repeating in backend log | The Pi 4's `mediamtx` is not running, or the saved camera URL is the old placeholder | Bring the Pi 4 publisher up; re-detect and re-add the camera so the URL becomes the LAN form |
 | `system_recording.mqtt_bridge: false` | Mosquitto unreachable, wrong creds, or `CONTROLLER_MQTT_HOST` unset | Check `journalctl -u mosquitto`; verify env; restart backend |
 | Discovery shows `incomplete: true` | Edge advertised an empty `rtsp` TXT (publisher off and no `SURVEILLANCE_RTSP_URL` set) | Set `SURVEILLANCE_PI_CAMERA=1` on the edge or fill in `SURVEILLANCE_RTSP_URL` |

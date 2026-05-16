@@ -69,27 +69,21 @@ Fetch the SSD detector models (motion mode):
 
 ## 4. Configure environment
 
-Copy `.env_example` to `.env` and edit. The minimum to publish from the
-Camera Module 3 and connect to MQTT on the Pi 5:
+Edit **`edge-agent/.env`** directly (loaded automatically on API start). For a
+Camera Module 3 edge, set at least:
 
 ```bash
-SURVEILLANCE_PI_CAMERA=1                        # enable LocalPublisher (T2)
-SURVEILLANCE_PUBLISHER_PORT=8554                # local RTSP (mediamtx bind)
-SURVEILLANCE_EDGE_CAMERA_ID=cam-frontdoor       # MUST be unique per Pi 4
-SURVEILLANCE_MEDIAMTX_PATH=cam-frontdoor        # match cam id by default
-SURVEILLANCE_MQTT_HOST=192.168.2.104            # Pi 5 IP
-SURVEILLANCE_MQTT_PORT=1883
-SURVEILLANCE_EDGE_HTTP_PORT=8080
-SURVEILLANCE_EDGE_DISPLAY_NAME=Front door
-SURVEILLANCE_CONTROLLER_IP=192.168.2.104
-# Leave SURVEILLANCE_RTSP_URL empty to let LocalPublisher auto-fill it
-SURVEILLANCE_RTSP_URL=
+SURVEILLANCE_PI_CAMERA=1
+SURVEILLANCE_EDGE_CAMERA_ID=cam-frontdoor       # unique per Pi 4
+SURVEILLANCE_MEDIAMTX_PATH=cam-frontdoor
+SURVEILLANCE_MQTT_HOST=192.168.2.139            # Pi 5 IP
+SURVEILLANCE_CONTROLLER_IP=192.168.2.139
+SURVEILLANCE_EDGE_IP=<this-pi4-lan-ip>
 ```
 
 Notes:
 
-- `uvicorn` does not load `.env` automatically. Use `set -a; source .env;
-  set +a` in your shell before launching, or wrap with a systemd unit that
+- Do not run `source .env` (quoted values are fine; unquoted spaces break bash). Use a systemd unit that
   declares `EnvironmentFile=`.
 - If you skip `SURVEILLANCE_PI_CAMERA=1` (e.g. you want to use a USB camera
   with an external RTSP server), set `SURVEILLANCE_RTSP_URL` to that
@@ -100,14 +94,13 @@ Notes:
 ```bash
 cd /path/to/SmartCam/smartcam/edge-agent
 source .venv/bin/activate
-set -a; source .env; set +a
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 Expected startup log:
 
 ```
-[edge] mDNS _vigilance-edge._tcp.local. instance='Front-door-cam-frontdoor' ip=192.168.2.160:8080 id='cam-frontdoor'
+[edge] mDNS _vigilance-edge._tcp.local. instance='Front-door-cam-frontdoor' ip=192.168.2.164:8080 id='cam-frontdoor'
 [edge] LocalPublisher started mediamtx pid=... bind=:8554 path=cam-frontdoor
 INFO:     Uvicorn running on http://0.0.0.0:8080 ...
 ```
@@ -139,7 +132,7 @@ Run these from the Pi 4 unless noted otherwise.
 4. From the **Pi 5**, verify the LAN-side stream:
 
    ```bash
-   ffprobe -rtsp_transport tcp rtsp://192.168.2.160:8554/cam-frontdoor
+   ffprobe -rtsp_transport tcp rtsp://192.168.2.164:8554/cam-frontdoor
    ```
 
    Expect H.264, the resolution implied by the active `quality` preset (medium
@@ -150,7 +143,7 @@ Run these from the Pi 4 unless noted otherwise.
 
    ```bash
    avahi-browse -rt _vigilance-edge._tcp
-   # txt should contain rtsp=rtsp://192.168.2.160:8554/cam-frontdoor
+   # txt should contain rtsp=rtsp://192.168.2.164:8554/cam-frontdoor
    ```
 
 6. From the controller UI on the Pi 5, click **Detect cameras**, then **Add**

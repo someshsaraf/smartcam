@@ -184,7 +184,7 @@ a final `Stop` with the last segment filename.
   `0.0.0.0`) by default in the bootstrap script and authenticates with a
   password unless run with `--anon`.
 - **No secrets in code or git.** All credentials come from the environment;
-  `.env_example` files document the names without values.
+  Committed **`.env`** files hold defaults; **`.env_example`** mirrors them for reference.
 - **Filename safety.** `_SAFE_NAME = ^[A-Za-z0-9._-]+\.mp4$` is enforced on
   every recording GET/DELETE both on the controller and the edge.
 - **Process least-privilege.** The edge `LocalPublisher` invokes `mediamtx`

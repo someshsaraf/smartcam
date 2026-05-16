@@ -229,7 +229,7 @@ def resolve_mediamtx_binary(env_override: Optional[str] = None) -> Optional[str]
     return None
 
 
-def _guess_lan_ip(target: str = "192.168.2.104") -> str:
+def _guess_lan_ip(target: str = "192.168.2.139") -> str:
     """
     Return the local IPv4 address used to reach ``target``.
 
@@ -240,7 +240,7 @@ def _guess_lan_ip(target: str = "192.168.2.104") -> str:
     if forced:
         return forced
     if not isinstance(target, str) or not target.strip():
-        target = "192.168.2.104"
+        target = "192.168.2.139"
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect((target, 1))
@@ -276,7 +276,7 @@ def build_config_from_env(
         cam_id = advertised_path
     bind_port = _int_env("SURVEILLANCE_PUBLISHER_PORT", 8554)
     bin_path = resolve_mediamtx_binary()
-    target = _str_env("SURVEILLANCE_CONTROLLER_IP", "192.168.2.104").strip() or "192.168.2.104"
+    target = _str_env("SURVEILLANCE_CONTROLLER_IP", "192.168.2.139").strip() or "192.168.2.139"
     lan_ip = _guess_lan_ip(target)
     if config_dir is None:
         # Default next to the agent so it's easy to inspect post-mortem.

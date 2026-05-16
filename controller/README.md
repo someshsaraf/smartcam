@@ -59,11 +59,10 @@ From `controller/backend`, with the same venv activated (if you use `.venv`) and
 ```bash
 source .venv/bin/activate   # if using .venv from Installation
 export PYTHONPATH="$(pwd)/../shared"
-cp -n .env_example .env     # first time: edit .env (MQTT host, etc.)
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Settings in **[`backend/.env`](backend/.env)** are loaded automatically at startup (see [`app/env_loader.py`](backend/app/env_loader.py)); you do not need `source .env` unless you prefer shell exports.
+Edit **[`backend/.env`](backend/.env)** for your LAN IPs (loaded automatically via [`app/env_loader.py`](backend/app/env_loader.py); do not `source .env`).
 
 Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
 
@@ -84,27 +83,29 @@ Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI de
 
 **MQTT (recording indicators and bridge)**
 
-Set these when using Mosquitto on the controller network (see [`backend/app/mqtt_bridge.py`](backend/app/mqtt_bridge.py)):
+Set **`CONTROLLER_MQTT_HOST`** to this Pi’s **LAN IPv4** (e.g. `192.168.2.139`, not `127.0.0.1`). When the API starts, it ensures a broker listens on that address (managed `mosquitto` subprocess with config under `backend/data/`, unless something already accepts connections there). Edge agents use the same host in **`SURVEILLANCE_MQTT_HOST`**.
 
 | Variable | Purpose |
 |----------|---------|
-| `CONTROLLER_MQTT_HOST` | Broker hostname or IP (empty disables subscription bridge features that depend on it). |
-| `CONTROLLER_MQTT_PORT` | Broker port; default **1883**. |
-| `CONTROLLER_MQTT_USER` | Optional MQTT username. |
-| `CONTROLLER_MQTT_PASSWORD` | Optional MQTT password. |
-| `CONTROLLER_MQTT_TOPIC_PREFIX` | Topic prefix; default **`surveillance/cameras`**. |
+| `CONTROLLER_MQTT_HOST` | Broker bind/connect address; empty disables broker management and the MQTT bridge. |
+| `CONTROLLER_MQTT_PORT` | Default **1883**. |
+| `CONTROLLER_MQTT_USER` / `CONTROLLER_MQTT_PASSWORD` | Optional; empty = anonymous on the managed broker. |
+| `CONTROLLER_MQTT_TOPIC_PREFIX` | Default **`surveillance/cameras`**. |
+| `CONTROLLER_MOSQUITTO_DISABLED` | Set to **`1`** if you run Mosquitto yourself and do not want the API to start it. |
+| `CONTROLLER_MOSQUITTO_USE_SYSTEM` | Set to **`1`** to run **`systemctl start mosquitto`** (after [`scripts/install-mosquitto.sh`](scripts/install-mosquitto.sh)) instead of the embedded process. |
+
+Diagnostics: **`GET /system/mosquitto`** and **`GET /system/recording`** (`mosquitto` field). Requires **`mosquitto`** on `PATH` (`apt install mosquitto`).
 
 **Frontend (development)**
 
 From `controller/frontend`:
 
 ```bash
-cp -n .env.example .env   # first time: set VITE_API_URL to your controller IP
 npm install
 npm run dev
 ```
 
-Edit **[`frontend/.env`](frontend/.env)** (gitignored) or **`.env.local`** — Vite loads them at startup. **Restart `npm run dev`** after any change (env is baked in at dev-server start).
+Edit **[`frontend/.env`](frontend/.env)** (or **`.env.local`** for machine-specific overrides). **Restart `npm run dev`** after changes.
 
 The dev server uses **`vite --host`**. Open the **Network** URL Vite prints (e.g. `http://<your-pi>:5173/`) from other devices on the LAN.
 
@@ -115,4 +116,4 @@ The dev server uses **`vite --host`**. Open the **Network** URL Vite prints (e.g
 | `VITE_MEDIAMTX_BASE` | MediaMTX WebRTC HTTP, default `http://<same-host-as-api>:8889`. |
 | `VITE_WS_RECORDING_URL` / `VITE_WS_DETECTIONS_URL` | Optional; default from `VITE_API_URL`. |
 
-See [`frontend/.env.example`](frontend/.env.example). If `VITE_API_URL` is unset, the UI falls back to `http://<browser-hostname>:8000` (handy when you open Vite on the Pi’s LAN IP). You can also prefix vars when starting Vite: `VITE_API_URL=http://localhost:8000 npm run dev`.
+If `VITE_API_URL` is unset, the UI falls back to `http://<browser-hostname>:8000`.

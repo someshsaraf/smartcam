@@ -32,20 +32,17 @@ cd controller/frontend
 npm run dev
 ```
 
-Open the URL Vite prints (e.g. `http://<pi5-ip>:5173`). Point **`VITE_API_URL`** and **`VITE_MEDIAMTX_BASE`** at your Pi 5 if defaults in [`frontend/.env.example`](controller/frontend/.env.example) do not match your LAN.
+Open the URL Vite prints (e.g. `http://<pi5-ip>:5173`). Edit [`controller/frontend/.env`](controller/frontend/.env) if your Pi 5 LAN IP is not `192.168.2.139`.
 
 ---
 
 ## Start the edge agent (Raspberry Pi 4)
 
-From `edge-agent`, with venv activated and environment exported (**`uvicorn` does not load `.env` by itself**):
+From `edge-agent`, with venv activated (**.env** loads automatically via `env_loader`):
 
 ```bash
 cd edge-agent
 source .venv/bin/activate
-set -a
-test -f .env && source .env
-set +a
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 

@@ -23,6 +23,9 @@ from .detector import get_detector_diagnostics
 from .mediamtx_manager import start_embedded as mediamtx_start_embedded
 from .mediamtx_manager import status_dict as mediamtx_status_dict
 from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
+from .mosquitto_manager import ensure_broker_started
+from .mosquitto_manager import status_dict as mosquitto_status_dict
+from .mosquitto_manager import stop_managed_broker
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
 
@@ -32,6 +35,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
+    ensure_broker_started()
     mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
     mediamtx_start_embedded()
@@ -41,6 +45,7 @@ async def lifespan(app: FastAPI):
     mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()
+    stop_managed_broker()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -439,6 +444,12 @@ def system_mediamtx():
     return mediamtx_status_dict()
 
 
+@app.get("/system/mosquitto")
+def system_mosquitto():
+    """MQTT broker managed with the API (LAN listener for edge agents)."""
+    return mosquitto_status_dict()
+
+
 @app.get("/system/live_detection")
 def system_live_detection():
     """Phase 1: controller-side face detection workers + WS fan-out."""
@@ -460,6 +471,7 @@ def system_recording():
         "workers": recording_manager.worker_status(),
         "mqtt_bridge": bool(bridge),
         "mqtt_host_configured": bool(os.environ.get("CONTROLLER_MQTT_HOST", "").strip()),
+        "mosquitto": mosquitto_status_dict(),
     }
 
 

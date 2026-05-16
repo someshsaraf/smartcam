@@ -78,7 +78,7 @@ Use a port consistent with **`SURVEILLANCE_EDGE_HTTP_PORT`** (default **8080**) 
 | `SURVEILLANCE_PI_CAMERA` | Set to **`1`** to supervise local MediaMTX with **`rpiCamera`** (requires `mediamtx` binary). |
 | `SURVEILLANCE_MEDIAMTX_BIN` | Optional path to the `mediamtx` executable. |
 | `SURVEILLANCE_PUBLISHER_PORT` | Local RTSP bind port for the supervised MediaMTX instance (default **8554**). |
-| `SURVEILLANCE_MQTT_HOST` | MQTT broker (typically on **Pi 5**); default **`192.168.2.104`** if unset. |
+| `SURVEILLANCE_MQTT_HOST` | MQTT broker (typically on **Pi 5**); default **`192.168.2.139`** if unset. |
 | `SURVEILLANCE_MQTT_PORT` | Default **1883**. |
 | `SURVEILLANCE_MQTT_USER` / `SURVEILLANCE_MQTT_PASSWORD` | Optional broker credentials. |
 | `SURVEILLANCE_MQTT_TOPIC_PREFIX` | Default **`surveillance/cameras`**. |
@@ -90,7 +90,7 @@ Use a port consistent with **`SURVEILLANCE_EDGE_HTTP_PORT`** (default **8080**) 
 | `SURVEILLANCE_EDGE_DISPLAY_NAME` | mDNS / discovery label; default **`Vigilance Edge`**. |
 | `SURVEILLANCE_EDGE_LOCATION` | Optional location string for discovery. |
 | `SURVEILLANCE_MEDIAMTX_PATH` | MediaMTX path segment for discovery/controller; defaults to `SURVEILLANCE_EDGE_CAMERA_ID`. |
-| `SURVEILLANCE_CONTROLLER_IP` | Used to pick outbound interface toward the controller; default **`192.168.2.104`**. |
+| `SURVEILLANCE_CONTROLLER_IP` | Used to pick outbound interface toward the controller; default **`192.168.2.139`**. |
 | `SURVEILLANCE_EDGE_IP` | Optional forced LAN IPv4 for Zeroconf when auto-detection is wrong. |
 
 Optional OpenCV RTSP tuning and detector overrides (`OPENCV_FFMPEG_CAPTURE_OPTIONS`, `SURVEILLANCE_OPENCV_FFMPEG_CAPTURE_OPTIONS`, `SURVEILLANCE_SSD_PROTO`, `SURVEILLANCE_SSD_WEIGHTS`, `SURVEILLANCE_SSD_CONFIDENCE`, etc.) are documented in [`.env_example`](.env_example).

@@ -42,7 +42,7 @@ def _iter_mp4_file(path: Path):
             yield chunk
 
 # Raspberry Pi 5 controller (MQTT). Override with SURVEILLANCE_MQTT_HOST.
-_CONTROLLER_PI5_IP = "192.168.2.104"
+_CONTROLLER_PI5_IP = "192.168.2.139"
 
 
 def _env(name: str, default: str = "") -> str:

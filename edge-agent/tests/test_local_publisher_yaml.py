@@ -34,7 +34,7 @@ def _make_cfg(**overrides):
         flip_180=False,
         bin_path="/usr/local/bin/mediamtx",
         config_dir=Path("."),
-        lan_ip="192.168.2.160",
+        lan_ip="192.168.2.164",
     )
     base.update(overrides)
     return PublisherConfig(**base)
