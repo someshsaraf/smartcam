@@ -27,16 +27,16 @@ function countPeople(faces, personCount) {
 }
 
 /**
- * Delay overlay detections so boxes align with HLS video (inference uses live RTSP).
- * Full delay applies when a person first appears; while they stay in frame, updates
- * debounce quickly so rapid WebSocket messages do not reset a multi-second timer.
+ * Optional delay so boxes align with HLS (inference uses live RTSP).
+ * Initial delay runs once per appearance; rapid WS updates must not reset it.
  */
 export function useOverlaySyncedDetections(faces, personCount, opts) {
   const { videoRef, hlsRef, baseDelayMs, enabled } = opts;
   const [displayed, setDisplayed] = useState({ faces: [], personCount: 0 });
   const latestRef = useRef({ faces: [], personCount: 0 });
   const wasShowingRef = useRef(false);
-  const timerRef = useRef(null);
+  const initialTimerRef = useRef(null);
+  const updateTimerRef = useRef(null);
 
   latestRef.current = {
     faces: Array.isArray(faces) ? faces : [],
@@ -44,42 +44,81 @@ export function useOverlaySyncedDetections(faces, personCount, opts) {
   };
 
   useEffect(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-
     const latest = latestRef.current;
     const n = countPeople(latest.faces, latest.personCount);
 
+    const clearUpdateTimer = () => {
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
+      }
+    };
+
     if (!enabled) {
+      if (initialTimerRef.current) {
+        clearTimeout(initialTimerRef.current);
+        initialTimerRef.current = null;
+      }
+      clearUpdateTimer();
       setDisplayed(latest);
       wasShowingRef.current = n > 0;
       return undefined;
     }
 
-    let delayMs = 100;
-    if (n > 0 && !wasShowingRef.current) {
-      const lagMs = Math.min(estimatePlaybackLagMs(videoRef?.current, hlsRef?.current), 8000);
-      delayMs = Math.max(baseDelayMs, Math.min(lagMs, 10000));
-    } else if (n === 0) {
-      delayMs = 100;
+    if (n === 0) {
+      if (initialTimerRef.current) {
+        clearTimeout(initialTimerRef.current);
+        initialTimerRef.current = null;
+      }
+      clearUpdateTimer();
+      wasShowingRef.current = false;
+      updateTimerRef.current = setTimeout(() => {
+        updateTimerRef.current = null;
+        setDisplayed({ faces: [], personCount: 0 });
+      }, 80);
+      return () => clearUpdateTimer();
     }
 
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
+    if (wasShowingRef.current) {
+      clearUpdateTimer();
+      updateTimerRef.current = setTimeout(() => {
+        updateTimerRef.current = null;
+        const snap = latestRef.current;
+        setDisplayed({ faces: [...snap.faces], personCount: snap.personCount });
+      }, 80);
+      return () => clearUpdateTimer();
+    }
+
+    if (initialTimerRef.current != null) {
+      return undefined;
+    }
+
+    const lagMs = Math.min(estimatePlaybackLagMs(videoRef?.current, hlsRef?.current), 8000);
+    const delayMs = Math.max(baseDelayMs, Math.min(lagMs, 10000));
+
+    initialTimerRef.current = setTimeout(() => {
+      initialTimerRef.current = null;
       const snap = latestRef.current;
       setDisplayed({ faces: [...snap.faces], personCount: snap.personCount });
       wasShowingRef.current = countPeople(snap.faces, snap.personCount) > 0;
     }, delayMs);
 
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    return undefined;
   }, [faces, personCount, baseDelayMs, enabled, videoRef, hlsRef]);
+
+  useEffect(
+    () => () => {
+      if (initialTimerRef.current) {
+        clearTimeout(initialTimerRef.current);
+        initialTimerRef.current = null;
+      }
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   return displayed;
 }

@@ -58,3 +58,11 @@ export function detectionOverlayDelayMs() {
   const n = parseInt(String(raw ?? "3000"), 10);
   return Number.isFinite(n) && n >= 0 ? n : 3000;
 }
+
+/** When false (default), draw boxes immediately from WebSocket (recommended). */
+export function detectionOverlaySyncEnabled() {
+  const v = String(import.meta.env.VITE_DETECTION_OVERLAY_SYNC ?? "0")
+    .trim()
+    .toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}

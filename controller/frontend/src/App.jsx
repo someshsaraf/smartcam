@@ -3,6 +3,7 @@ import Hls from "hls.js";
 import {
   API,
   detectionOverlayDelayMs,
+  detectionOverlaySyncEnabled,
   HLS_BASE,
   MEDIAMTX_BASE,
   WS_DETECTIONS,
@@ -102,6 +103,7 @@ function LiveTile({
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const hlsRef = useRef(null);
+  const overlaySync = detectionOverlaySyncEnabled();
   const baseOverlayDelay =
     typeof overlayDelayMs === "number" && overlayDelayMs >= 0
       ? overlayDelayMs
@@ -111,16 +113,20 @@ function LiveTile({
     videoRef,
     hlsRef,
     baseDelayMs: baseOverlayDelay,
-    enabled: !useIframeFallback,
+    enabled: overlaySync && !useIframeFallback,
   });
-  const overlayFaces = synced.faces;
-  const overlayPersonCount = synced.personCount;
+  const rawFaces = Array.isArray(faces) ? faces : [];
+  const drawFaces = overlaySync && !useIframeFallback ? synced.faces : rawFaces;
+  const drawPersonCount =
+    overlaySync && !useIframeFallback
+      ? synced.personCount
+      : typeof personCount === "number"
+        ? personCount
+        : countPersonDetections(rawFaces);
   const persons =
-    typeof overlayPersonCount === "number"
-      ? overlayPersonCount
-      : countPersonDetections(overlayFaces);
+    typeof drawPersonCount === "number" ? drawPersonCount : countPersonDetections(drawFaces);
   const personDebugLine = formatPersonDebugLine(
-    { ...detectionInfo, faces: overlayFaces, personCount: overlayPersonCount },
+    { ...detectionInfo, faces: rawFaces, personCount: detectionInfo?.personCount ?? drawPersonCount },
     detectionWsOpen
   );
   const personDebugPositive = persons > 0;
@@ -298,7 +304,7 @@ function LiveTile({
       ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       ctx.lineWidth = 2;
       ctx.font = "11px ui-monospace, system-ui, sans-serif";
-      const faceList = Array.isArray(overlayFaces) ? overlayFaces : [];
+      const faceList = Array.isArray(drawFaces) ? drawFaces : [];
       for (const f of faceList) {
         const x = ox + Number(f.x) * vw * scaleContain;
         const y = oy + Number(f.y) * vh * scaleContain;
@@ -336,7 +342,7 @@ function LiveTile({
       ro.disconnect();
       clearInterval(overlayTick);
     };
-  }, [overlayFaces, useIframeFallback, cam.id]);
+  }, [drawFaces, useIframeFallback, cam.id]);
 
   return (
     <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
@@ -394,6 +400,11 @@ function LiveTile({
             aria-label="Recording"
           />
         ) : null}
+        {useIframeFallback && countPersonDetections(rawFaces) > 0 ? (
+          <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-amber-900/90 px-2 py-1 text-[10px] text-amber-100">
+            Person detected — use HLS (LIVE badge) to see boxes on video.
+          </div>
+        ) : null}
         {persons > 0 ? (
           <div
             className="absolute top-2 left-2 z-20 rounded-md bg-blue-600/95 px-2 py-1 text-[10px] font-semibold text-white shadow-lg ring-1 ring-white/20"
@@ -433,7 +444,7 @@ function LiveTile({
               />
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 w-full h-full pointer-events-none"
+                className="absolute inset-0 z-10 w-full h-full pointer-events-none"
                 aria-hidden="true"
               />
             </div>
@@ -932,13 +943,20 @@ export default function App() {
             <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
           </p>
           <p className="text-gray-400">
-            Overlay sync delay:{" "}
+            Overlay on video:{" "}
             <span className="text-gray-200">
-              {typeof detectionSystem?.overlay_delay_ms === "number"
-                ? detectionSystem.overlay_delay_ms
-                : detectionOverlayDelayMs()}{" "}
-              ms
+              {detectionOverlaySyncEnabled() ? "HLS sync (delayed)" : "immediate"}
             </span>
+            {detectionOverlaySyncEnabled() ? (
+              <>
+                {" "}
+                (
+                {typeof detectionSystem?.overlay_delay_ms === "number"
+                  ? detectionSystem.overlay_delay_ms
+                  : detectionOverlayDelayMs()}{" "}
+                ms)
+              </>
+            ) : null}
           </p>
           {liveCams.length > 0 ? (
             <div className="border-t border-gray-700 pt-1.5 space-y-0.5">
