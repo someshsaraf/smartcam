@@ -38,12 +38,16 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
-/** Face detection confidence for overlay label (backend sends 0–1). */
-function formatFaceScore(score) {
-  const n = Number(score);
-  if (!Number.isFinite(n)) return "";
-  if (n <= 1) return `${Math.round(n * 1000) / 10}%`;
-  return n.toFixed(2);
+/** Detection confidence for overlay label (backend sends 0–1). */
+function formatDetectionLabel(det) {
+  const n = Number(det?.score);
+  const score = Number.isFinite(n)
+    ? n <= 1
+      ? `${Math.round(n * 1000) / 10}%`
+      : n.toFixed(2)
+    : "";
+  const label = det?.label ? String(det.label) : "face";
+  return score ? `${label} ${score}` : label;
 }
 
 function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces }) {
@@ -140,7 +144,7 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
         const w = Number(f.w) * vw * scaleContain;
         const h = Number(f.h) * vh * scaleContain;
         ctx.strokeRect(x, y, w, h);
-        const label = formatFaceScore(f.score);
+        const label = formatDetectionLabel(f);
         if (!label) continue;
         const padX = 4;
         const padY = 2;

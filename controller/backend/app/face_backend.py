@@ -1,95 +1,102 @@
+"""Detection backend for controller live preview overlays.
+
+Backends:
+- opencv: original Haar frontal face detector over the full frame.
+- hailo / hailo_person_face / hybrid: Hailo YOLOv8n person detection plus
+  optional OpenCV face detection inside person boxes.
+
+The function name remains detect_faces_normalized for backwards compatibility.
+Returned boxes may be labelled "person" or "face".
 """
-Face box detection for controller live preview (Phase 1).
-
-- ``opencv``: Haar frontal face (bundled with OpenCV). No Hailo required.
-- ``hailo``: reserved; falls back to OpenCV with a one-time log until a Hailo
-  pipeline is integrated.
-
-Output boxes are normalized to the input frame: x, y, w, h in [0, 1] with
-(x, y) top-left in image coordinates.
-"""
-
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List
+from typing import Any, List, Optional
 
 import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
-
-_hailo_warned = False
 _MAX_FACES = 32
+_HAAR: Optional[cv2.CascadeClassifier] = None
+_HAAR_ERROR_LOGGED = False
+_HAILO_FALLBACK_WARNED = False
 
 
 def _parse_backend() -> str:
     v = os.environ.get("SMARTCAM_FACE_BACKEND", "opencv").strip().lower()
-    if v in ("opencv", "hailo"):
-        return v
+    aliases = {"opencv": "opencv", "haar": "opencv", "hailo": "hailo_person_face", "hybrid": "hailo_person_face", "hailo_person_face": "hailo_person_face", "person_face": "hailo_person_face"}
+    if v in aliases:
+        return aliases[v]
     logger.warning("SMARTCAM_FACE_BACKEND invalid %r; using opencv", v)
     return "opencv"
 
 
-def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
+def _env_float(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(lo, min(hi, v))
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(lo, min(hi, v))
+
+
+def _load_haar() -> Optional[cv2.CascadeClassifier]:
+    global _HAAR, _HAAR_ERROR_LOGGED
+    if _HAAR is not None:
+        return _HAAR
+    cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    if not os.path.isfile(cascade_path):
+        if not _HAAR_ERROR_LOGGED:
+            logger.error("Haar cascade missing: %s", cascade_path)
+            _HAAR_ERROR_LOGGED = True
+        return None
+    cascade = cv2.CascadeClassifier(cascade_path)
+    if cascade.empty():
+        if not _HAAR_ERROR_LOGGED:
+            logger.error("Failed to load Haar cascade: %s", cascade_path)
+            _HAAR_ERROR_LOGGED = True
+        return None
+    _HAAR = cascade
+    return _HAAR
+
+
+def _detect_haar_in_region(frame_bgr: np.ndarray, *, roi: Optional[tuple[int, int, int, int]] = None, max_faces: int = _MAX_FACES) -> List[dict[str, Any]]:
     if frame_bgr is None or frame_bgr.size == 0:
         return []
     h, w = frame_bgr.shape[:2]
     if w < 2 or h < 2:
         return []
-
-    backend = _parse_backend()
-    if backend == "hailo":
-        global _hailo_warned
-        if not _hailo_warned:
-            logger.warning(
-                "SMARTCAM_FACE_BACKEND=hailo is not integrated; using OpenCV Haar until "
-                "Hailo runtime is wired (see smartcam/docs/PLAN.md Phase 1)."
-            )
-            _hailo_warned = True
-
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if roi is None:
+        x0, y0, x1, y1 = 0, 0, w, h
+    else:
+        x0, y0, x1, y1 = roi
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(w, x1), min(h, y1)
+        if x1 - x0 < 20 or y1 - y0 < 20:
+            return []
+    crop = frame_bgr[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
-    cascade_path = os.path.join(
-        cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
-    )
-    if not os.path.isfile(cascade_path):
-        logger.error("Haar cascade missing: %s", cascade_path)
+    cascade = _load_haar()
+    if cascade is None:
         return []
-    cascade = cv2.CascadeClassifier(cascade_path)
-    if cascade.empty():
-        logger.error("Failed to load Haar cascade: %s", cascade_path)
-        return []
-
-    min_side = min(w, h)
-    min_neighbors = 4
-    try:
-        min_neighbors = int(os.environ.get("SMARTCAM_FACE_HAAR_MIN_NEIGHBORS", "4"))
-    except ValueError:
-        min_neighbors = 4
-    min_neighbors = max(1, min(12, min_neighbors))
-
-    scale = 1.05
-    try:
-        scale = float(os.environ.get("SMARTCAM_FACE_HAAR_SCALE", "1.05"))
-    except ValueError:
-        scale = 1.05
-    if scale < 1.01 or scale > 1.5:
-        scale = 1.05
-
-    min_size = (max(20, min_side // 20), max(20, min_side // 20))
+    min_neighbors = _env_int("SMARTCAM_FACE_HAAR_MIN_NEIGHBORS", 6, 1, 12)
+    scale = _env_float("SMARTCAM_FACE_HAAR_SCALE", 1.08, 1.01, 1.5)
+    min_face_px = _env_int("SMARTCAM_FACE_MIN_BOX_PX", 32, 12, 4096)
     rects = []
     weights: list[float] = []
-
     if hasattr(cascade, "detectMultiScale3"):
         try:
-            detected = cascade.detectMultiScale3(
-                gray,
-                scaleFactor=scale,
-                minNeighbors=min_neighbors,
-                minSize=min_size,
-                outputRejectLevels=True,
-            )
+            detected = cascade.detectMultiScale3(gray, scaleFactor=scale, minNeighbors=min_neighbors, minSize=(min_face_px, min_face_px), outputRejectLevels=True)
             if isinstance(detected, tuple) and len(detected) >= 3:
                 rects = detected[0]
                 level_weights = detected[2]
@@ -97,35 +104,67 @@ def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
                     weights = [float(v) for v in level_weights.flatten()[: len(rects)]]
         except cv2.error:
             rects = []
-
     if len(rects) == 0:
-        rects = cascade.detectMultiScale(
-            gray,
-            scaleFactor=scale,
-            minNeighbors=min_neighbors,
-            minSize=min_size,
-        )
-
+        rects = cascade.detectMultiScale(gray, scaleFactor=scale, minNeighbors=min_neighbors, minSize=(min_face_px, min_face_px))
     max_weight = max(weights) if weights else 0.0
+    min_aspect = _env_float("SMARTCAM_FACE_MIN_ASPECT", 0.70, 0.1, 3.0)
+    max_aspect = _env_float("SMARTCAM_FACE_MAX_ASPECT", 1.45, 0.2, 5.0)
     out: List[dict[str, Any]] = []
-    for i, (x, y, fw, fh) in enumerate(rects[:_MAX_FACES]):
-        x1 = max(0, min(w - 1, int(x)))
-        y1 = max(0, min(h - 1, int(y)))
-        x2 = max(x1 + 1, min(w, int(x + fw)))
-        y2 = max(y1 + 1, min(h, int(y + fh)))
-        bw = x2 - x1
-        bh = y2 - y1
-        if i < len(weights) and max_weight > 0:
-            score = max(0.0, min(1.0, weights[i] / max_weight))
-        else:
-            score = 1.0
-        out.append(
-            {
-                "x": round(x1 / float(w), 6),
-                "y": round(y1 / float(h), 6),
-                "w": round(bw / float(w), 6),
-                "h": round(bh / float(h), 6),
-                "score": round(score, 4),
-            }
-        )
+    for i, (x, y, fw, fh) in enumerate(rects[:max_faces]):
+        if fw <= 0 or fh <= 0:
+            continue
+        aspect = float(fw) / float(fh)
+        if aspect < min_aspect or aspect > max_aspect:
+            continue
+        ax1 = max(0, min(w - 1, int(x0 + x)))
+        ay1 = max(0, min(h - 1, int(y0 + y)))
+        ax2 = max(ax1 + 1, min(w, int(x0 + x + fw)))
+        ay2 = max(ay1 + 1, min(h, int(y0 + y + fh)))
+        bw, bh = ax2 - ax1, ay2 - ay1
+        if bw < min_face_px or bh < min_face_px:
+            continue
+        score = max(0.0, min(1.0, weights[i] / max_weight)) if i < len(weights) and max_weight > 0 else 1.0
+        out.append({"x": round(ax1 / float(w), 6), "y": round(ay1 / float(h), 6), "w": round(bw / float(w), 6), "h": round(bh / float(h), 6), "score": round(score, 4), "label": "face", "source": "opencv_haar"})
     return out
+
+
+def _person_roi(frame_shape: tuple[int, ...], p: dict[str, Any]) -> tuple[int, int, int, int]:
+    h, w = frame_shape[:2]
+    x, y, bw, bh = float(p.get("x", 0.0)), float(p.get("y", 0.0)), float(p.get("w", 0.0)), float(p.get("h", 0.0))
+    mx, my = 0.08 * bw, 0.08 * bh
+    return int((x - mx) * w), int((y - my) * h), int((x + bw + mx) * w), int((y + min(bh, bh * 0.62) + my) * h)
+
+
+def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
+    global _HAILO_FALLBACK_WARNED
+    try:
+        from .hailo_yolov8_backend import detect_people_normalized, get_detector
+        people = detect_people_normalized(frame_bgr)
+        detector = get_detector()
+        if detector.error and not _HAILO_FALLBACK_WARNED:
+            logger.warning("Hailo backend unavailable (%s); falling back to OpenCV full-frame face detection", detector.error)
+            _HAILO_FALLBACK_WARNED = True
+            return _detect_haar_in_region(frame_bgr)
+    except Exception as e:
+        if not _HAILO_FALLBACK_WARNED:
+            logger.exception("Hailo backend failed; falling back to OpenCV full-frame face detection: %s", e)
+            _HAILO_FALLBACK_WARNED = True
+        return _detect_haar_in_region(frame_bgr)
+
+    out: List[dict[str, Any]] = []
+    include_people = os.environ.get("SMARTCAM_SHOW_PERSON_BOXES", "1").strip().lower() not in ("0", "false", "no", "off")
+    if include_people:
+        out.extend(people)
+    face_stage = os.environ.get("SMARTCAM_HAILO_FACE_SECOND_STAGE", "opencv").strip().lower()
+    if face_stage in ("0", "false", "off", "none", "disabled"):
+        return out
+    max_faces_per_person = _env_int("SMARTCAM_FACE_MAX_PER_PERSON", 3, 0, 16)
+    for p in people:
+        out.extend(_detect_haar_in_region(frame_bgr, roi=_person_roi(frame_bgr.shape, p), max_faces=max_faces_per_person))
+    return out
+
+
+def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
+    if _parse_backend() == "hailo_person_face":
+        return _detect_hailo_person_face(frame_bgr)
+    return _detect_haar_in_region(frame_bgr)
