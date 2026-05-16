@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 from . import env_loader  # noqa: F401  # loads edge-agent/.env
 
+=======
+import logging
+>>>>>>> d6d14a1a5c41c63a99876cfcf5bbe5a7a9646517
 import os
 import re
 from contextlib import asynccontextmanager
@@ -14,12 +18,33 @@ from . import _shared_bootstrap  # noqa: F401
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
+from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
 from .zeroconf_publish import EdgeZeroconfPublisher
 
+logger = logging.getLogger(__name__)
+
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
+
+_CHUNK = 1024 * 1024
+
+
+def _iter_mp4_file(path: Path):
+    """
+    Stream file bytes without a fixed Content-Length.
+
+    ``FileResponse`` pins length at stat time; if the file still grows (encoder
+    finishing the MP4), Starlette can emit more bytes than declared and raise
+    ``RuntimeError: Response content longer than Content-Length``.
+    """
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            yield chunk
 
 # Raspberry Pi 5 controller (MQTT). Override with SURVEILLANCE_MQTT_HOST.
 _CONTROLLER_PI5_IP = "192.168.2.104"
@@ -33,7 +58,7 @@ def _env(name: str, default: str = "") -> str:
 _EDGE_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_MODEL_DIR = _EDGE_ROOT / "models"
 
-_rtsp = _env("SURVEILLANCE_RTSP_URL", "").strip()
+_rtsp_explicit = _env("SURVEILLANCE_RTSP_URL", "").strip()
 _mqtt_host = (_env("SURVEILLANCE_MQTT_HOST", _CONTROLLER_PI5_IP) or _CONTROLLER_PI5_IP).strip()
 _cam_id = _env("SURVEILLANCE_EDGE_CAMERA_ID", "camera1").strip()
 _rec_root = Path(_env("SURVEILLANCE_RECORDINGS_DIR", str(_EDGE_ROOT / "data" / "recordings")))
@@ -45,34 +70,80 @@ _mediamtx_path = _env("SURVEILLANCE_MEDIAMTX_PATH", _cam_id).strip()
 
 _recorder: Optional[EdgeRecorder] = None
 _zc_pub: Optional[EdgeZeroconfPublisher] = None
+_publisher: Optional[LocalPublisher] = None
+_effective_rtsp: str = ""
+_advertised_rtsp: str = ""
+
+
+def _settings_provider() -> dict[str, Any]:
+    """
+    Snapshot of recorder settings used by ``LocalPublisher`` to drive its YAML.
+
+    Returns ``{}`` when the recorder hasn't been constructed yet, in which
+    case ``LocalPublisher`` falls back to its safe defaults.
+    """
+    rec = _recorder
+    if rec is None:
+        return {}
+    try:
+        return rec.snapshot_settings()
+    except Exception as e:
+        logger.warning("settings snapshot failed: %s", e)
+        return {}
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global _recorder, _zc_pub
+    global _recorder, _zc_pub, _publisher, _effective_rtsp, _advertised_rtsp
+
+    # 1) Start the publisher first so the recorder can consume from it.
+    _publisher = LocalPublisher(
+        recorder_settings_provider=_settings_provider,
+        config_dir=_EDGE_ROOT / "data",
+    )
+    try:
+        _publisher.start()
+    except Exception as exc:
+        logger.warning("LocalPublisher start failed: %s", exc)
+
+    # 2) Decide effective and advertised RTSP URLs.
+    pub_loopback = _publisher.effective_rtsp_url() if _publisher else None
+    pub_lan = _publisher.advertised_rtsp_url() if _publisher else None
+    if _rtsp_explicit:
+        # Operator-supplied override always wins; we both consume and advertise it.
+        _effective_rtsp = _rtsp_explicit
+        _advertised_rtsp = _rtsp_explicit
+    else:
+        _effective_rtsp = pub_loopback or ""
+        _advertised_rtsp = pub_lan or ""
+
+    # 3) Register mDNS with whatever URL we resolved (empty string is fine; the
+    # controller will mark the row ``incomplete`` instead of fabricating one).
     _zc_pub = None
     try:
         _zc_pub = EdgeZeroconfPublisher(
             camera_id=_cam_id,
             display_name=_edge_display_name,
             location=_edge_location,
-            rtsp_url=_rtsp,
+            rtsp_url=_advertised_rtsp,
             mediamtx_path=_mediamtx_path,
             http_port=_http_port,
         )
         _zc_pub.register()
     except Exception as exc:
-        print("[edge] Zeroconf registration failed:", exc)
+        logger.warning("Zeroconf registration failed: %s", exc)
 
+    # 4) Start the recorder if (and only if) we have a real RTSP URL.
     try:
-        if _rtsp:
+        if _effective_rtsp:
             port = int(_env("SURVEILLANCE_MQTT_PORT", "1883"))
             user = _env("SURVEILLANCE_MQTT_USER") or None
             pwd = _env("SURVEILLANCE_MQTT_PASSWORD") or None
             prefix = _env("SURVEILLANCE_MQTT_TOPIC_PREFIX", "surveillance/cameras").strip()
+            on_changed = _publisher.update_settings if _publisher is not None else None
             _recorder = EdgeRecorder(
                 camera_mqtt_id=_cam_id,
-                rtsp_url=_rtsp,
+                rtsp_url=_effective_rtsp,
                 recordings_root=_rec_root,
                 mqtt_host=_mqtt_host,
                 mqtt_port=port,
@@ -80,10 +151,15 @@ async def lifespan(_app: FastAPI):
                 mqtt_password=pwd,
                 topic_prefix=prefix,
                 model_dir=_model_dir if _model_dir.is_dir() else None,
+                on_settings_changed=on_changed,
             )
             _recorder.start()
         else:
-            print("[edge] SURVEILLANCE_RTSP_URL not set; recorder not started")
+            print(
+                "[edge] No RTSP URL: set SURVEILLANCE_PI_CAMERA=1 to enable the "
+                "built-in publisher, or SURVEILLANCE_RTSP_URL to point at an "
+                "external source. Recorder not started."
+            )
         yield
     finally:
         if _recorder is not None:
@@ -92,6 +168,9 @@ async def lifespan(_app: FastAPI):
         if _zc_pub is not None:
             _zc_pub.unregister()
             _zc_pub = None
+        if _publisher is not None:
+            _publisher.stop()
+            _publisher = None
 
 
 app = FastAPI(title="Surveillance Edge Agent", lifespan=lifespan)
@@ -105,11 +184,27 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
+    pub_snapshot = _publisher.snapshot() if _publisher is not None else {
+        "enabled": False,
+        "running": False,
+        "binary": None,
+        "loopback_url": None,
+        "lan_url": None,
+        "cam_id": None,
+        "quality": None,
+        "flip_180": None,
+        "bind_port": None,
+    }
     return {
         "role": "edge",
         "camera_mqtt_id": _cam_id,
         "controller_pi5_mqtt_host": _mqtt_host,
-        "rtsp_configured": bool(_rtsp),
+        "rtsp_configured": bool(_effective_rtsp),
+        "rtsp_env_set": bool(_rtsp_explicit),
+        "effective_rtsp_url": _effective_rtsp,
+        "rtsp_source": "publisher"
+        if (not _rtsp_explicit and _effective_rtsp)
+        else ("operator" if _rtsp_explicit else "none"),
         "model_dir": str(_model_dir.resolve()),
         "model_files_present": bool(
             (_model_dir / "MobileNetSSD_deploy.prototxt").is_file()
@@ -120,6 +215,12 @@ def health():
         "edge_http_port": _http_port,
         "edge_display_name": _edge_display_name,
         "mediamtx_path": _mediamtx_path,
+        "publisher_enabled": bool(pub_snapshot.get("enabled")),
+        "publisher_running": bool(pub_snapshot.get("running")),
+        "publisher_url": pub_snapshot.get("loopback_url"),
+        "publisher_loopback_url": pub_snapshot.get("loopback_url"),
+        "publisher_lan_url": pub_snapshot.get("lan_url"),
+        "mediamtx_binary": pub_snapshot.get("binary") or "",
     }
 
 
@@ -143,7 +244,12 @@ def get_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return StreamingResponse(
+        _iter_mp4_file(path),
+        media_type="video/mp4",
+        headers=headers,
+    )
 
 
 @app.delete("/recordings/files/{filename}")
@@ -157,6 +263,32 @@ def delete_file(filename: str):
     return {"ok": True}
 
 
+@app.post("/recordings/manual/start")
+def manual_record_start():
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    try:
+        return _recorder.start_manual_recording()
+    except ValueError as e:
+        msg = str(e)
+        code = 409 if "already active" in msg.lower() else 400
+        raise HTTPException(status_code=code, detail=msg) from e
+
+
+@app.post("/recordings/manual/stop")
+def manual_record_stop():
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    return _recorder.stop_manual_recording()
+
+
+@app.get("/recordings/manual/status")
+def manual_record_status():
+    if _recorder is None:
+        return {"active": False, "filename": None}
+    return _recorder.manual_recording_status()
+
+
 @app.get("/settings")
 def get_settings():
     if _recorder is None:
@@ -166,7 +298,10 @@ def get_settings():
             "post_record_seconds": 50,
             "quality": "medium",
             "flip_180": False,
-            "note": "recorder offline — set SURVEILLANCE_RTSP_URL (MQTT defaults to Pi 5 at 192.168.2.104)",
+            "note": (
+                "recorder offline — set SURVEILLANCE_RTSP_URL or SURVEILLANCE_PI_CAMERA=1 "
+                "with mediamtx installed (see docs/SETUP_PI4.md)"
+            ),
         }
     return _recorder.snapshot_settings()
 
@@ -183,5 +318,3 @@ def patch_settings(body: dict[str, Any]):
     if not allowed:
         return _recorder.snapshot_settings()
     return _recorder.update_settings(allowed)
-
-

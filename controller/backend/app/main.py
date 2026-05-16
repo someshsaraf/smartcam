@@ -14,12 +14,15 @@ from typing import Any, List, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import camera_store, mqtt_bridge
+from . import camera_store, live_detection, mqtt_bridge
 from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
+from .mediamtx_manager import start_embedded as mediamtx_start_embedded
+from .mediamtx_manager import status_dict as mediamtx_status_dict
+from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
 
@@ -31,7 +34,11 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
+    mediamtx_start_embedded()
+    live_detection.get_service().start(loop)
     yield
+    live_detection.get_service().stop()
+    mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()
 
@@ -47,6 +54,18 @@ app.add_middleware(
 )
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
+
+_CHUNK = 1024 * 1024
+
+
+def _iter_mp4_file(path: Path):
+    """Chunked stream without fixed Content-Length (file may still be growing)."""
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            yield chunk
 
 
 class CameraCreate(BaseModel):
@@ -151,6 +170,79 @@ def patch_camera_settings(cam_id: int, body: CameraSettingsPatch):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+def _edge_manual_proxy(edge: str, subpath: str) -> dict[str, Any]:
+    url = f"{edge}/recordings/manual/{subpath}"
+    try:
+        r = httpx.post(url, timeout=120.0)
+        if r.status_code >= 400:
+            detail: Any = r.text
+            try:
+                body = r.json()
+                if isinstance(body, dict) and body.get("detail") is not None:
+                    detail = body["detail"]
+            except Exception:
+                pass
+            raise HTTPException(status_code=r.status_code, detail=str(detail))
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/cameras/{cam_id}/recordings/manual/start")
+def camera_manual_record_start(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Manual recording requires a Pi edge camera (edge_base_url).",
+        )
+    st = c.get("settings") or {}
+    if st.get("recording_mode") != "off":
+        raise HTTPException(
+            status_code=400,
+            detail="Set recording mode to Off in camera settings before using manual recording.",
+        )
+    return _edge_manual_proxy(edge, "start")
+
+
+@app.post("/cameras/{cam_id}/recordings/manual/stop")
+def camera_manual_record_stop(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Manual recording requires a Pi edge camera (edge_base_url).",
+        )
+    return _edge_manual_proxy(edge, "stop")
+
+
+@app.get("/cameras/{cam_id}/recordings/manual/status")
+def camera_manual_record_status(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        return {"active": False, "filename": None}
+    try:
+        r = httpx.get(f"{edge}/recordings/manual/status", timeout=15.0)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"active": False, "filename": None}
+
+
 # =========================
 # Discovery
 # =========================
@@ -195,6 +287,23 @@ def stream():
 # =========================
 # WebSocket recording state (from MQTT bridge)
 # =========================
+
+
+@app.websocket("/ws/detections")
+async def ws_detections(ws: WebSocket):
+    """Live face boxes (normalized) for dashboard overlays — Phase 1."""
+    await ws.accept()
+    svc = live_detection.get_service()
+    hub = svc.ws_hub
+    await hub.register(ws)
+    try:
+        await ws.send_json({"type": "hello", **svc.status()})
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await hub.unregister(ws)
 
 
 @app.websocket("/ws/recording")
@@ -280,7 +389,12 @@ def get_recording_file(cam_id: int, filename: str):
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return StreamingResponse(
+        _iter_mp4_file(path),
+        media_type="video/mp4",
+        headers=headers,
+    )
 
 
 @app.delete("/recordings/{cam_id}/files/{filename}")
@@ -317,6 +431,18 @@ def delete_recording_file(cam_id: int, filename: str):
 # =========================
 # Health / diagnostics
 # =========================
+
+
+@app.get("/system/mediamtx")
+def system_mediamtx():
+    """Whether embedded MediaMTX is running (live iframe targets port player_port)."""
+    return mediamtx_status_dict()
+
+
+@app.get("/system/live_detection")
+def system_live_detection():
+    """Phase 1: controller-side face detection workers + WS fan-out."""
+    return live_detection.get_service().status()
 
 
 @app.get("/system/recording")

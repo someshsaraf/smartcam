@@ -1,2 +1,6 @@
+<<<<<<< HEAD
 .env
+=======
+# Local MediaMTX binary from scripts/install_mediamtx.sh (not a Python wheel)
+>>>>>>> d6d14a1a5c41c63a99876cfcf5bbe5a7a9646517
 bin/mediamtx

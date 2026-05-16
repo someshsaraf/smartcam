@@ -116,14 +116,15 @@ def discover_edge_agents(*, wait_seconds: float = 3.0) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         edge_base_url = f"http://{ip}:{port}"
-        # Prefer advertised RTSP; else a minimal placeholder (operator should fix in UI)
-        stream_url = rtsp if rtsp else f"rtsp://{ip}:8554/{path}"
+        stream_url = rtsp if rtsp else ""
+        incomplete = not bool(stream_url.strip())
         out.append(
             {
                 "kind": "edge_agent",
                 "name": name,
                 "location": location,
                 "url": stream_url,
+                "incomplete": incomplete,
                 "edge_base_url": edge_base_url,
                 "mqtt_camera_id": cam_id,
                 "mediamtx_path": path,

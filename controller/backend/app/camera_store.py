@@ -16,26 +16,33 @@ cameras: list[dict[str, Any]] = []
 selected_camera: Optional[dict[str, Any]] = None
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "recording_mode": "motion",  # "motion" | "continuous"
+    "recording_mode": "motion",  # "motion" | "continuous" | "off"
     "pre_record_seconds": 10,
     "post_record_seconds": 50,
     "quality": "medium",  # "high" | "medium" | "low"
     "flip_180": False,
 }
 
-_on_change: Optional[Callable[[], None]] = None
+_change_listeners: list[Callable[[], None]] = []
 
 
-def set_change_listener(cb: Optional[Callable[[], None]]) -> None:
-    """Recording manager registers this to resync when cameras/settings change."""
-    global _on_change
-    _on_change = cb
+def add_change_listener(cb: Callable[[], None]) -> None:
+    """Register for persist/save-driven camera list changes (add/remove/settings)."""
+    if cb not in _change_listeners:
+        _change_listeners.append(cb)
+
+
+def remove_change_listener(cb: Callable[[], None]) -> None:
+    try:
+        _change_listeners.remove(cb)
+    except ValueError:
+        pass
 
 
 def _notify() -> None:
-    if _on_change:
+    for cb in list(_change_listeners):
         try:
-            _on_change()
+            cb()
         except Exception:
             pass
 
@@ -143,11 +150,20 @@ def save() -> None:
 def add_camera(cam: dict[str, Any]) -> dict[str, Any]:
     global cameras
     with _lock:
-        if not cam.get("url") or not isinstance(cam["url"], str):
-            raise ValueError("Camera url is required")
-        existing = next(
-            (c for c in cameras if c["url"] == cam["url"]), None
-        )
+        url_raw = cam.get("url")
+        if (
+            not url_raw
+            or not isinstance(url_raw, str)
+            or not str(url_raw).strip()
+        ):
+            raise ValueError(
+                "Camera URL is required. For Pi 4 edges with no advertised RTSP URL, start the "
+                "edge-agent with SURVEILLANCE_PI_CAMERA=1 and install mediamtx, or set "
+                "SURVEILLANCE_RTSP_URL on the edge, then use Detect cameras again or paste the "
+                "RTSP URL manually."
+            )
+        url = str(url_raw).strip()
+        existing = next((c for c in cameras if c["url"] == url), None)
         if existing:
             return existing
         next_id = max((c["id"] for c in cameras), default=-1) + 1
@@ -158,7 +174,7 @@ def add_camera(cam: dict[str, Any]) -> dict[str, Any]:
             "id": next_id,
             "name": str(cam.get("name", "")),
             "location": str(cam.get("location", "")),
-            "url": str(cam["url"]),
+            "url": url,
             "edge_base_url": eb.strip().rstrip("/")
             if isinstance(eb, str) and eb.strip()
             else None,
@@ -212,8 +228,8 @@ def update_camera_settings(cam_id: int, settings: dict[str, Any]) -> dict[str, A
         for k in DEFAULT_SETTINGS:
             if k in settings:
                 current[k] = settings[k]
-        if current["recording_mode"] not in ("motion", "continuous"):
-            raise ValueError("recording_mode must be 'motion' or 'continuous'")
+        if current["recording_mode"] not in ("motion", "continuous", "off"):
+            raise ValueError("recording_mode must be 'motion', 'continuous', or 'off'")
         q = str(current.get("quality", "medium")).lower()
         if q not in ("high", "medium", "low"):
             raise ValueError("quality must be 'high', 'medium', or 'low'")
