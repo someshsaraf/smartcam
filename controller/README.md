@@ -99,17 +99,20 @@ Set these when using Mosquitto on the controller network (see [`backend/app/mqtt
 From `controller/frontend`:
 
 ```bash
+cp -n .env.example .env   # first time: set VITE_API_URL to your controller IP
+npm install
 npm run dev
 ```
 
-The dev server is started with **`vite --host`**, so it binds on all interfaces. Open the **Network** URL Vite prints (e.g. `http://192.168.x.x:5173/`) from phones or other PCs on the same LAN.
+Edit **[`frontend/.env`](frontend/.env)** (gitignored) or **`.env.local`** — Vite loads them at startup. **Restart `npm run dev`** after any change (env is baked in at dev-server start).
 
-Vite environment variables (optional; see [`frontend/src/App.jsx`](frontend/src/App.jsx)):
+The dev server uses **`vite --host`**. Open the **Network** URL Vite prints (e.g. `http://<your-pi>:5173/`) from other devices on the LAN.
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_API_URL` | Backend base URL (no trailing slash); default `http://192.168.2.104:8000`. |
-| `VITE_MEDIAMTX_BASE` | Central MediaMTX **HTTP** URL on the controller (iframe); default **`http://192.168.2.104:8889`**. Must match where the backend-started MediaMTX listens (`webrtcAddress`). See [`frontend/.env.example`](frontend/.env.example). |
-| `VITE_WS_RECORDING_URL` | Optional explicit WebSocket URL for recording events; if unset, derived from `VITE_API_URL` as `ws(s)://…/ws/recording`. |
+| `VITE_API_URL` | Controller API, e.g. `http://<pi5>:8000` (set in `.env` for a stable setup). |
+| `VITE_HLS_BASE` | MediaMTX HLS, default `http://<same-host-as-api>:8888`. |
+| `VITE_MEDIAMTX_BASE` | MediaMTX WebRTC HTTP, default `http://<same-host-as-api>:8889`. |
+| `VITE_WS_RECORDING_URL` / `VITE_WS_DETECTIONS_URL` | Optional; default from `VITE_API_URL`. |
 
-Create a `.env` or `.env.local` in `controller/frontend` with `VITE_*` entries, or prefix them when invoking Vite (e.g. `VITE_API_URL=http://localhost:8000 npm run dev`).
+See [`frontend/.env.example`](frontend/.env.example). If `VITE_API_URL` is unset, the UI falls back to `http://<browser-hostname>:8000` (handy when you open Vite on the Pi’s LAN IP). You can also prefix vars when starting Vite: `VITE_API_URL=http://localhost:8000 npm run dev`.

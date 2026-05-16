@@ -1,44 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-
-const API = (import.meta.env.VITE_API_URL || "http://192.168.2.104:8000").replace(
-  /\/$/,
-  ""
-);
-
-/** Same host as the API, port 8889 — avoids hardcoding a stale LAN IP. Override with VITE_MEDIAMTX_BASE. */
-function defaultMediaMtxBaseFromApi() {
-  try {
-    const u = new URL(API.startsWith("http") ? API : `http://${API}`);
-    return `${u.protocol}//${u.hostname}:8889`;
-  } catch {
-    return "http://192.168.2.104:8889";
-  }
-}
-
-const MEDIAMTX_BASE = (
-  import.meta.env.VITE_MEDIAMTX_BASE || defaultMediaMtxBaseFromApi()
-).replace(/\/$/, "");
-
-const WS_RECORDING =
-  (import.meta.env.VITE_WS_RECORDING_URL || "").replace(/\/$/, "") ||
-  `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/recording`;
-
-/** Low-latency HLS from embedded MediaMTX (Phase 1 overlays need a real video element). */
-function defaultHlsBaseFromApi() {
-  try {
-    const u = new URL(API.startsWith("http") ? API : `http://${API}`);
-    return `${u.protocol}//${u.hostname}:8888`;
-  } catch {
-    return "http://192.168.2.104:8888";
-  }
-}
-
-const HLS_BASE = (import.meta.env.VITE_HLS_BASE || defaultHlsBaseFromApi()).replace(/\/$/, "");
-
-const WS_DETECTIONS =
-  (import.meta.env.VITE_WS_DETECTIONS_URL || "").replace(/\/$/, "") ||
-  `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/detections`;
+import { API, HLS_BASE, MEDIAMTX_BASE, WS_DETECTIONS, WS_RECORDING } from "./envConfig";
 
 const MAX_LIVE_TILES = 6;
 
