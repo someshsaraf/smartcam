@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from . import camera_store, live_detection, mqtt_bridge
+from . import camera_store, live_detection, mediamtx_manager, mqtt_bridge
 from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
 from .mediamtx_manager import start_embedded as mediamtx_start_embedded
@@ -177,42 +177,135 @@ def patch_camera(cam_id: int, body: CameraPatch):
 
 
 @app.get("/cameras/{cam_id}/stream_health")
-def camera_stream_health(cam_id: int):
+def camera_stream_health(cam_id: int, probe_rtsp: bool = True):
     """
     Why HLS may be missing: edge publisher, MediaMTX process, upstream RTSP pull.
-  """
+    Set probe_rtsp=false for a fast check (skips ffprobe).
+    """
+    cam = camera_store.get_camera(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail="camera not found")
+    try:
+        path_map = mediamtx_manager.path_map_for_cameras()
+        path_key = path_map.get(int(cam_id), camera_store.mediamtx_path_for_camera(cam))
+        rtsp_url = cam.get("url") if isinstance(cam.get("url"), str) else ""
+        edge_url = camera_store.edge_base_url(cam)
+        edge_health: dict[str, Any] = {"reachable": False}
+        if edge_url:
+            try:
+                r = httpx.get(f"{edge_url}/health", timeout=5.0)
+                edge_health["reachable"] = r.is_success
+                if r.is_success:
+                    edge_health["body"] = r.json()
+            except Exception as e:
+                edge_health["error"] = str(e)
+        mtx = mediamtx_manager.status_dict()
+        hls = mediamtx_manager.probe_hls_local(path_key)
+        rtsp_probe = (
+            mediamtx_manager.probe_rtsp(rtsp_url, timeout_sec=4.0)
+            if probe_rtsp and rtsp_url
+            else None
+        )
+        hls_proxy = f"/cameras/{cam_id}/hls/index.m3u8"
+        summary: list[str] = []
+        pub = (edge_health.get("body") or {}).get("publisher_running")
+        if pub is False:
+            summary.append("Edge RTSP publisher is not running.")
+        if rtsp_probe and rtsp_probe.get("reachable") is False:
+            summary.append("Controller cannot reach edge RTSP (ffprobe failed).")
+        if mtx.get("process_running") is False:
+            summary.append("Controller MediaMTX is not running.")
+        elif hls.get("reachable") is False:
+            summary.append("MediaMTX HLS playlist not ready (upstream RTSP may be down).")
+        return {
+            "camera_id": cam_id,
+            "rtsp_url": rtsp_url,
+            "rtsp_probe": rtsp_probe,
+            "mediamtx_path": path_key,
+            "edge_base_url": edge_url,
+            "edge_health": edge_health,
+            "mediamtx": mtx,
+            "hls_local": hls,
+            "hls_proxy_path": hls_proxy,
+            "summary": summary,
+            "checks": [
+                "On edge Pi: curl -s http://127.0.0.1:8080/health (publisher_running true)",
+                f"On controller: ffprobe -rtsp_transport tcp {rtsp_url}",
+                f"On controller: curl -sI {hls.get('url', '')}",
+                f"UI HLS (proxied): GET /cameras/{cam_id}/hls/index.m3u8",
+                "Restart backend after edge RTSP is up (MediaMTX regenerates config)",
+            ],
+        }
+    except Exception as e:
+        logger.exception("stream_health failed for camera %s", cam_id)
+        return {
+            "camera_id": cam_id,
+            "error": str(e),
+            "summary": [f"stream_health failed: {e}"],
+            "hint": "Check backend logs; ensure git pull and restart uvicorn on the controller.",
+        }
+
+
+@app.api_route(
+    "/cameras/{cam_id}/hls/{asset_path:path}",
+    methods=["GET", "HEAD"],
+)
+async def proxy_camera_hls(cam_id: int, asset_path: str, request: Request):
+    """
+    Same-origin HLS for the React UI (avoids cross-port CORS to :8888).
+    Proxies to controller MediaMTX loopback.
+    """
+    if not mediamtx_manager.hls_enabled():
+        raise HTTPException(status_code=503, detail="HLS disabled on controller")
     cam = camera_store.get_camera(cam_id)
     if not cam:
         raise HTTPException(status_code=404, detail="camera not found")
     path_map = mediamtx_manager.path_map_for_cameras()
     path_key = path_map.get(int(cam_id), camera_store.mediamtx_path_for_camera(cam))
-    edge_url = camera_store.edge_base_url(cam)
-    edge_health: dict[str, Any] = {"reachable": False}
-    if edge_url:
+    safe_asset = asset_path.lstrip("/")
+    if not safe_asset or ".." in safe_asset.split("/"):
+        raise HTTPException(status_code=400, detail="invalid asset path")
+    upstream = f"{mediamtx_manager.hls_local_origin()}/{path_key}/{safe_asset}"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=5.0),
+            follow_redirects=True,
+        ) as client:
+            upstream_req = client.build_request(request.method, upstream)
+            resp = await client.send(upstream_req, stream=True)
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"HLS upstream unreachable ({upstream}): {e}",
+        ) from e
+
+    if resp.status_code >= 400:
+        detail = (await resp.aread())[:500].decode("utf-8", errors="replace")
+        await resp.aclose()
+        raise HTTPException(status_code=resp.status_code, detail=detail or "HLS upstream error")
+
+    media_type = resp.headers.get(
+        "content-type",
+        "application/vnd.apple.mpegurl" if safe_asset.endswith(".m3u8") else "video/mp2t",
+    )
+    pass_headers = {}
+    for key in ("cache-control", "content-length"):
+        if key in resp.headers:
+            pass_headers[key] = resp.headers[key]
+
+    async def body():
         try:
-            r = httpx.get(f"{edge_url}/health", timeout=5.0)
-            edge_health["reachable"] = r.is_success
-            if r.is_success:
-                edge_health["body"] = r.json()
-        except Exception as e:
-            edge_health["error"] = str(e)
-    mtx = mediamtx_manager.status_dict()
-    hls = mediamtx_manager.probe_hls_local(path_key)
-    return {
-        "camera_id": cam_id,
-        "rtsp_url": cam.get("url"),
-        "mediamtx_path": path_key,
-        "edge_base_url": edge_url,
-        "edge_health": edge_health,
-        "mediamtx": mtx,
-        "hls_local": hls,
-        "checks": [
-            "On edge Pi: curl -s http://127.0.0.1:8080/health (publisher_running true)",
-            f"On controller: ffprobe -rtsp_transport tcp {cam.get('url', '')}",
-            f"On controller: curl -sI {hls.get('url', '')}",
-            "Restart backend after edge RTSP is up (MediaMTX regenerates config)",
-        ],
-    }
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+        finally:
+            await resp.aclose()
+
+    if request.method == "HEAD":
+        await resp.aclose()
+        return Response(status_code=resp.status_code, headers=pass_headers)
+
+    return StreamingResponse(body(), media_type=media_type, headers=pass_headers)
 
 
 @app.get("/cameras/{cam_id}/settings")

@@ -19,8 +19,8 @@ function streamUrlForCamera(cam) {
 }
 
 function hlsPlaylistUrlForCamera(cam) {
-  const path = streamPathForCamera(cam).replace(/\/+$/, "");
-  return `${HLS_BASE}/${path}/index.m3u8`;
+  // Proxied via FastAPI (same origin as API) — avoids CORS to :8888.
+  return `${API}/cameras/${cam.id}/hls/index.m3u8`;
 }
 
 function formatBytes(n) {
@@ -135,7 +135,7 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     video.addEventListener("playing", onPlaying);
     if (Hls.isSupported()) {
       hls = new Hls({
-        lowLatencyMode: true,
+        lowLatencyMode: false,
         maxLiveSyncPlaybackRate: 1.5,
         enableWorker: true,
       });
@@ -152,9 +152,19 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
             .then((r) => (r.ok ? r.json() : null))
             .then((h) => {
               if (!h) return;
+              if (Array.isArray(h.summary) && h.summary.length) {
+                setEdgeHint(h.summary.join(" "));
+                return;
+              }
               const pub = h.edge_health?.body?.publisher_running;
               if (pub === false) {
                 setEdgeHint("Edge RTSP publisher is not running (SURVEILLANCE_PI_CAMERA=1 + mediamtx on Pi 4).");
+              } else if (h.rtsp_probe?.reachable === false) {
+                setEdgeHint(
+                  h.rtsp_probe.stderr ||
+                    h.rtsp_probe.error ||
+                    "Controller cannot reach edge RTSP — check Pi 4 mediamtx and firewall."
+                );
               } else if (h.mediamtx?.process_running === false) {
                 setEdgeHint(
                   h.mediamtx?.last_start_error ||
@@ -922,7 +932,8 @@ export default function App() {
 
         <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500 space-y-1">
           <p>
-            Live tiles prefer HLS ({HLS_BASE}) for OpenCV/Hailo face boxes over{" "}
+            Live tiles use HLS via <span className="font-mono text-gray-400">{API}/cameras/&lt;id&gt;/hls/</span>{" "}
+            (proxied from {HLS_BASE}) for OpenCV/Hailo face boxes over{" "}
             <span className="font-mono text-gray-400">{WS_DETECTIONS}</span>. WebRTC reader (
             {MEDIAMTX_BASE}) is used if HLS fails. Red dot = recording via {WS_RECORDING}.
           </p>

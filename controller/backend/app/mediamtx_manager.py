@@ -57,6 +57,10 @@ def _hls_enabled() -> bool:
     )
 
 
+def hls_enabled() -> bool:
+    return _hls_enabled()
+
+
 def camera_id_to_mediamtx_path(cameras: list[dict[str, Any]]) -> dict[int, str]:
     """
     Map camera id -> MediaMTX path key exactly as in generated YAML
@@ -158,6 +162,9 @@ def build_mediamtx_yaml(cameras: list[dict[str, Any]]) -> str:
                 "hls: true",
                 f"hlsAddress: {_hls_listen_address()}",
                 "hlsAllowOrigins: ['*']",
+                # mpegts + always-on remux: best compatibility with hls.js and first viewer.
+                "hlsVariant: mpegts",
+                "hlsAlwaysRemux: true",
             ]
         )
     if not path_sources:
@@ -309,10 +316,72 @@ def path_map_for_cameras() -> dict[int, str]:
     return camera_id_to_mediamtx_path(camera_store.list_cameras())
 
 
+def hls_local_origin() -> str:
+    """Loopback base for controller MediaMTX HLS (no path suffix)."""
+    addr = _hls_listen_address().strip()
+    if not addr.startswith(":"):
+        return f"http://{addr}"
+    port = addr.rsplit(":", 1)[-1]
+    return f"http://127.0.0.1:{port}"
+
+
 def hls_playlist_url(path_key: str, host: str = "127.0.0.1") -> str:
     p = (path_key or "camera1").strip().strip("/")
-    hls_port = _hls_listen_address().rsplit(":", 1)[-1]
-    return f"http://{host}:{hls_port}/{p}/index.m3u8"
+    if host in ("127.0.0.1", "localhost"):
+        base = hls_local_origin()
+    else:
+        hls_port = _hls_listen_address().rsplit(":", 1)[-1]
+        base = f"http://{host}:{hls_port}"
+    return f"{base}/{p}/index.m3u8"
+
+
+def probe_rtsp(url: str, timeout_sec: float = 8.0) -> dict[str, Any]:
+    """Quick ffprobe check from the controller (edge must accept TCP RTSP)."""
+    out: dict[str, Any] = {"url": url, "probe_available": False, "reachable": None}
+    if not isinstance(url, str) or not url.strip().startswith("rtsp://"):
+        out["error"] = "not an rtsp url"
+        return out
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        out["hint"] = "install ffmpeg (ffprobe) on the controller for RTSP checks"
+        return out
+    out["probe_available"] = True
+    cmd = [
+        ffprobe,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rtsp_transport",
+        "tcp",
+        "-i",
+        url.strip(),
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "csv=p=0",
+    ]
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(3.0, timeout_sec) + 2.0,
+        )
+        out["returncode"] = int(r.returncode)
+        if r.returncode == 0 and "video" in (r.stdout or ""):
+            out["reachable"] = True
+        else:
+            out["reachable"] = False
+            err = (r.stderr or r.stdout or "").strip()
+            if err:
+                out["stderr"] = err[-800:]
+    except subprocess.TimeoutExpired:
+        out["reachable"] = False
+        out["error"] = "timeout"
+    except OSError as e:
+        out["reachable"] = False
+        out["error"] = str(e)
+    return out
 
 
 def status_dict() -> dict[str, Any]:
@@ -356,16 +425,21 @@ def probe_hls_local(path_key: str) -> dict[str, Any]:
 
     url = hls_playlist_url(path_key, "127.0.0.1")
     out: dict[str, Any] = {"url": url, "reachable": False, "status": None}
-    try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
-            out["status"] = int(resp.status)
-            out["reachable"] = 200 <= int(resp.status) < 400
-    except urllib.error.HTTPError as e:
-        out["status"] = int(e.code)
-        out["reachable"] = False
-    except Exception as e:
-        out["error"] = str(e)
+    for method in ("HEAD", "GET"):
+        try:
+            req = urllib.request.Request(url, method=method)
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                out["status"] = int(resp.status)
+                out["reachable"] = 200 <= int(resp.status) < 400
+                out["method"] = method
+                break
+        except urllib.error.HTTPError as e:
+            out["status"] = int(e.code)
+            out["reachable"] = False
+            out["method"] = method
+        except Exception as e:
+            out["error"] = str(e)
+            out["method"] = method
     return out
 
 
