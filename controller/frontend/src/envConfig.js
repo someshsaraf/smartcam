@@ -51,3 +51,10 @@ export const WS_DETECTIONS = trimUrl(
   import.meta.env.VITE_WS_DETECTIONS_URL ||
     `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/detections`
 );
+
+/** Base delay before drawing detection boxes over HLS (inference is on live RTSP). */
+export function detectionOverlayDelayMs() {
+  const raw = import.meta.env.VITE_DETECTION_OVERLAY_DELAY_MS;
+  const n = parseInt(String(raw ?? "3000"), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 3000;
+}

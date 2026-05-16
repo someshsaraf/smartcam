@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { API, HLS_BASE, MEDIAMTX_BASE, WS_DETECTIONS, WS_RECORDING } from "./envConfig";
+import {
+  API,
+  detectionOverlayDelayMs,
+  HLS_BASE,
+  MEDIAMTX_BASE,
+  WS_DETECTIONS,
+  WS_RECORDING,
+} from "./envConfig";
+import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
 
 const MAX_LIVE_TILES = 6;
 
@@ -88,16 +96,35 @@ function LiveTile({
   personCount,
   detectionInfo,
   detectionWsOpen,
+  overlayDelayMs,
 }) {
-  const persons =
-    typeof personCount === "number" ? personCount : countPersonDetections(faces);
-  const personDebugLine = formatPersonDebugLine(detectionInfo, detectionWsOpen);
-  const personDebugPositive = persons > 0;
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [scale, setScale] = useState(1);
+  const hlsRef = useRef(null);
+  const baseOverlayDelay =
+    typeof overlayDelayMs === "number" && overlayDelayMs >= 0
+      ? overlayDelayMs
+      : detectionOverlayDelayMs();
   const [useIframeFallback, setUseIframeFallback] = useState(false);
+  const synced = useOverlaySyncedDetections(faces, personCount, {
+    videoRef,
+    hlsRef,
+    baseDelayMs: baseOverlayDelay,
+    enabled: !useIframeFallback,
+  });
+  const overlayFaces = synced.faces;
+  const overlayPersonCount = synced.personCount;
+  const persons =
+    typeof overlayPersonCount === "number"
+      ? overlayPersonCount
+      : countPersonDetections(overlayFaces);
+  const personDebugLine = formatPersonDebugLine(
+    { ...detectionInfo, faces: overlayFaces, personCount: overlayPersonCount },
+    detectionWsOpen
+  );
+  const personDebugPositive = persons > 0;
+  const [scale, setScale] = useState(1);
   const [streamError, setStreamError] = useState("");
   const [edgeHint, setEdgeHint] = useState("");
   const streamUrl = streamUrlForCamera(cam);
@@ -184,14 +211,19 @@ function LiveTile({
     if (Hls.isSupported()) {
       let triedDirectHls = false;
       hls = new Hls({
-        lowLatencyMode: false,
-        maxLiveSyncPlaybackRate: 1.5,
+        lowLatencyMode: true,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDuration: 8,
+        maxLiveSyncPlaybackRate: 1.25,
+        maxBufferLength: 12,
+        backBufferLength: 0,
         enableWorker: true,
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 6,
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
       });
+      hlsRef.current = hls;
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -232,6 +264,7 @@ function LiveTile({
     return () => {
       video.removeEventListener("error", onVideoError);
       video.removeEventListener("playing", onPlaying);
+      hlsRef.current = null;
       if (hls) hls.destroy();
       video.removeAttribute("src");
       video.load();
@@ -267,7 +300,7 @@ function LiveTile({
       ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       ctx.lineWidth = 2;
       ctx.font = "11px ui-monospace, system-ui, sans-serif";
-      const faceList = Array.isArray(faces) ? faces : [];
+      const faceList = Array.isArray(overlayFaces) ? overlayFaces : [];
       for (const f of faceList) {
         const x = ox + Number(f.x) * vw * scaleContain;
         const y = oy + Number(f.y) * vh * scaleContain;
@@ -303,7 +336,7 @@ function LiveTile({
       video.removeEventListener("timeupdate", paint);
       ro.disconnect();
     };
-  }, [faces, useIframeFallback, cam.id]);
+  }, [overlayFaces, useIframeFallback, cam.id]);
 
   return (
     <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
@@ -898,6 +931,15 @@ export default function App() {
             Inference workers:{" "}
             <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
           </p>
+          <p className="text-gray-400">
+            Overlay sync delay:{" "}
+            <span className="text-gray-200">
+              {typeof detectionSystem?.overlay_delay_ms === "number"
+                ? detectionSystem.overlay_delay_ms
+                : detectionOverlayDelayMs()}{" "}
+              ms
+            </span>
+          </p>
           {liveCams.length > 0 ? (
             <div className="border-t border-gray-700 pt-1.5 space-y-0.5">
               {liveCams.map((c) => (
@@ -1042,6 +1084,11 @@ export default function App() {
                     personCount={detectionsById[c.id]?.personCount ?? 0}
                     detectionInfo={detectionsById[c.id]}
                     detectionWsOpen={detectionWsOpen}
+                    overlayDelayMs={
+                      typeof detectionSystem?.overlay_delay_ms === "number"
+                        ? detectionSystem.overlay_delay_ms
+                        : undefined
+                    }
                   />
                 ))}
               </div>

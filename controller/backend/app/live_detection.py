@@ -34,6 +34,11 @@ def _parse_positive_int(name: str, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
+def _overlay_delay_ms() -> int:
+    """UI should delay overlays ~this long so boxes match HLS (inference uses live RTSP)."""
+    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 3000, 0, 15000)
+
+
 class DetectionWsHub:
     """Broadcast detection JSON from worker threads to WS clients."""
 
@@ -219,6 +224,7 @@ class LiveDetectionService:
                 "interval_frames": _parse_positive_int(
                     "SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 5, 1, 120
                 ),
+                "overlay_delay_ms": _overlay_delay_ms(),
                 **inference_debug_status(),
             }
 
