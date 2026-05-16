@@ -155,6 +155,11 @@ class _CameraWorker(threading.Thread):
                 logger.exception("live_detection infer cam_id=%s: %s", cid, e)
                 faces = []
 
+            people = [
+                f
+                for f in faces
+                if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
+            ]
             last_send = now
             self._hub.broadcast_json(
                 {
@@ -162,6 +167,8 @@ class _CameraWorker(threading.Thread):
                     "camera_id": cid,
                     "ts": _utc_iso(),
                     "faces": faces,
+                    "person_count": len(people),
+                    "person_detected": len(people) > 0,
                 }
             )
 

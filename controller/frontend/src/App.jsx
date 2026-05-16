@@ -41,6 +41,17 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
+/** YOLOv8n / Hailo person boxes use label "person". */
+function countPersonDetections(detections) {
+  if (!Array.isArray(detections)) return 0;
+  return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
+}
+
+function personDetectedLabel(count) {
+  if (!count || count < 1) return "";
+  return count === 1 ? "Person detected" : `${count} people detected`;
+}
+
 /** Detection confidence for overlay label (backend sends 0–1). */
 function formatDetectionLabel(det) {
   const n = Number(det?.score);
@@ -53,7 +64,9 @@ function formatDetectionLabel(det) {
   return score ? `${label} ${score}` : label;
 }
 
-function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces }) {
+function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces, personCount }) {
+  const persons =
+    typeof personCount === "number" ? personCount : countPersonDetections(faces);
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -234,6 +247,8 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
         const y = oy + Number(f.y) * vh * scaleContain;
         const w = Number(f.w) * vw * scaleContain;
         const h = Number(f.h) * vh * scaleContain;
+        const isPerson = String(f?.label || "").toLowerCase() === "person";
+        ctx.strokeStyle = isPerson ? "rgba(59, 130, 246, 0.95)" : "rgba(34, 197, 94, 0.95)";
         ctx.strokeRect(x, y, w, h);
         const label = formatDetectionLabel(f);
         if (!label) continue;
@@ -247,9 +262,8 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
         const labelTop = Math.max(0, textY - boxH + 2);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
         ctx.fillRect(labelX, labelTop, boxW, boxH);
-        ctx.fillStyle = "rgba(34, 197, 94, 1)";
+        ctx.fillStyle = isPerson ? "rgba(96, 165, 250, 1)" : "rgba(34, 197, 94, 1)";
         ctx.fillText(label, labelX + padX, labelTop + boxH - padY - 2);
-        ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       }
     };
 
@@ -269,13 +283,23 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
-        <span
-          className={`shrink-0 ${
-            edgeHint ? "text-red-400" : useIframeFallback ? "text-amber-400" : "text-green-400"
-          }`}
-        >
-          {edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {persons > 0 ? (
+            <span
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-blue-600/90 text-white"
+              title={personDetectedLabel(persons)}
+            >
+              {personDetectedLabel(persons)}
+            </span>
+          ) : null}
+          <span
+            className={
+              edgeHint ? "text-red-400" : useIframeFallback ? "text-amber-400" : "text-green-400"
+            }
+          >
+            {edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
+          </span>
+        </div>
       </div>
       {edgeHint && (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
@@ -298,6 +322,15 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
             title="Recording"
             aria-label="Recording"
           />
+        ) : null}
+        {persons > 0 ? (
+          <div
+            className="absolute top-2 left-2 z-20 rounded-md bg-blue-600/95 px-2 py-1 text-[10px] font-semibold text-white shadow-lg ring-1 ring-white/20"
+            role="status"
+            aria-live="polite"
+          >
+            {personDetectedLabel(persons)}
+          </div>
         ) : null}
         <div
           className="w-full h-full origin-center transition-transform duration-75"
@@ -543,9 +576,19 @@ export default function App() {
           const msg = JSON.parse(ev.data);
           if (msg.type === "detections" && msg.camera_id != null && alive) {
             const id = Number(msg.camera_id);
+            const faces = Array.isArray(msg.faces) ? msg.faces : [];
+            const personCount =
+              typeof msg.person_count === "number"
+                ? msg.person_count
+                : countPersonDetections(faces);
             setDetectionsById((prev) => ({
               ...prev,
-              [id]: { faces: Array.isArray(msg.faces) ? msg.faces : [], ts: msg.ts || "" },
+              [id]: {
+                faces,
+                ts: msg.ts || "",
+                personCount,
+                personDetected: Boolean(msg.person_detected) || personCount > 0,
+              },
             }));
           }
         } catch {
@@ -743,6 +786,13 @@ export default function App() {
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
+  const anyPersonDetected = liveCams.some((c) => {
+    const d = detectionsById[c.id];
+    if (!d) return false;
+    const n =
+      typeof d.personCount === "number" ? d.personCount : countPersonDetections(d.faces);
+    return n > 0;
+  });
 
   return (
     <div className="flex h-screen bg-[#0b1220] text-white">
@@ -851,6 +901,15 @@ export default function App() {
 
         <div className="flex-1 p-3 overflow-auto min-h-0 flex flex-col gap-6">
           <div>
+            {anyPersonDetected ? (
+              <p
+                className="mb-3 rounded-lg border border-blue-500/40 bg-blue-950/50 px-3 py-2 text-sm text-blue-200"
+                role="status"
+                aria-live="polite"
+              >
+                Person detected (YOLOv8n) on one or more live cameras.
+              </p>
+            ) : null}
             {liveCams.length === 0 ? (
               <p className="text-gray-500 text-sm p-4">
                 No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
@@ -871,6 +930,7 @@ export default function App() {
                     manualRecording={manualRecordingById[c.id] === true}
                     onManualToggle={() => toggleManualRecording(c)}
                     faces={detectionsById[c.id]?.faces}
+                    personCount={detectionsById[c.id]?.personCount ?? 0}
                   />
                 ))}
               </div>
