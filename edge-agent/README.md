@@ -48,12 +48,14 @@ pip install -r requirements.txt
 
 **Configuration**
 
-Copy [`.env_example`](.env_example) to `.env` as a reference. **`uvicorn` does not load `.env` automatically** — export variables in your shell, use `set -a; source .env; set +a` if the file is valid shell syntax, or run under a process manager that injects env from `.env`.
+Edit **[`.env`](.env)** in this directory (copy from [`.env_example`](.env_example) on first setup). Variables are loaded automatically when you start the API (see [`app/env_loader.py`](app/env_loader.py)); shell exports override `.env` values.
 
 ## Execution
 
 ```bash
 cd /path/to/edge-agent
+pip install -r requirements.txt
+cp -n .env_example .env   # first time: edit RTSP URL, MQTT host, camera id, etc.
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 

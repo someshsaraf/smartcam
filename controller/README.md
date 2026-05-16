@@ -55,8 +55,11 @@ From `controller/backend`, with the same venv activated (if you use `.venv`) and
 ```bash
 source .venv/bin/activate   # if using .venv from Installation
 export PYTHONPATH="$(pwd)/../shared"
+cp -n .env_example .env     # first time: edit .env (MQTT host, etc.)
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+Settings in **[`backend/.env`](backend/.env)** are loaded automatically at startup (see [`app/env_loader.py`](backend/app/env_loader.py)); you do not need `source .env` unless you prefer shell exports.
 
 Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
 

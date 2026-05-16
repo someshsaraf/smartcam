@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import env_loader  # noqa: F401  # loads edge-agent/.env
+
 import os
 import re
 from contextlib import asynccontextmanager

@@ -1,6 +1,7 @@
 # FastAPI API + MQTT/WebSocket bridge + OpenCV (diagnostics) + LAN discovery
 fastapi>=0.115
 uvicorn[standard]>=0.30
+python-dotenv>=1.0
 opencv-python>=4.8
 numpy>=1.26
 zeroconf>=0.130

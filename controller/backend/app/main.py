@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import env_loader  # noqa: F401  # loads controller/backend/.env
+
 import asyncio
 import logging
 import os
