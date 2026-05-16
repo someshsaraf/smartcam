@@ -4,8 +4,8 @@
       "id": 0,
       "name": "Vigilance Edge",
       "location": "",
-      "url": "rtsp://192.168.2.160:8554/camera1",
-      "edge_base_url": "http://192.168.2.160:8080",
+      "url": "rtsp://192.168.2.164:8554/camera1",
+      "edge_base_url": "http://192.168.2.164:8080",
       "mediamtx_path": "camera1",
       "mqtt_camera_id": "camera1",
       "settings": {

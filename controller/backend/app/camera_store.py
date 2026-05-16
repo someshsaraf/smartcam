@@ -218,6 +218,36 @@ def get_camera(cam_id: int) -> Optional[dict[str, Any]]:
         return deepcopy(c) if c else None
 
 
+def update_camera(cam_id: int, patch: dict[str, Any]) -> dict[str, Any]:
+    """Update name, location, RTSP url, or edge_base_url (triggers MediaMTX regen on url change)."""
+    global cameras
+    with _lock:
+        c = next((x for x in cameras if x["id"] == cam_id), None)
+        if not c:
+            raise KeyError("camera not found")
+        if "name" in patch and patch["name"] is not None:
+            c["name"] = str(patch["name"])
+        if "location" in patch and patch["location"] is not None:
+            c["location"] = str(patch["location"])
+        if "url" in patch and patch["url"] is not None:
+            url = str(patch["url"]).strip()
+            if not url.lower().startswith("rtsp://"):
+                raise ValueError("url must be an rtsp:// URL")
+            c["url"] = url
+        if "edge_base_url" in patch:
+            eb = patch["edge_base_url"]
+            if eb is None or (isinstance(eb, str) and not eb.strip()):
+                c["edge_base_url"] = None
+            elif isinstance(eb, str):
+                c["edge_base_url"] = eb.strip().rstrip("/")
+            else:
+                raise ValueError("edge_base_url must be a string or null")
+        save()
+        out = deepcopy(c)
+    _notify()
+    return out
+
+
 def update_camera_settings(cam_id: int, settings: dict[str, Any]) -> dict[str, Any]:
     global cameras
     with _lock:

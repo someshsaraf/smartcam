@@ -82,6 +82,13 @@ class CameraCreate(BaseModel):
     mqtt_camera_id: Optional[str] = None
 
 
+class CameraPatch(BaseModel):
+    name: Optional[str] = None
+    location: Optional[str] = None
+    url: Optional[str] = None
+    edge_base_url: Optional[str] = None
+
+
 class CameraSettingsPatch(BaseModel):
     recording_mode: Optional[str] = None
     pre_record_seconds: Optional[int] = None
@@ -147,6 +154,26 @@ def select_camera_endpoint(cam_id: int):
 @app.get("/cameras/selected")
 def get_selected_camera_endpoint():
     return camera_store.get_selected_camera()
+
+
+@app.patch("/cameras/{cam_id}")
+def patch_camera(cam_id: int, body: CameraPatch):
+    """Update RTSP URL / edge HTTP base (e.g. when a Pi 4 gets a new LAN IP)."""
+    patch = body.model_dump(exclude_unset=True)
+    if not patch:
+        c = camera_store.get_camera(cam_id)
+        if not c:
+            raise HTTPException(status_code=404, detail="camera not found")
+        return c
+    try:
+        cam = camera_store.update_camera(cam_id, patch)
+        if "edge_base_url" in patch:
+            _push_edge_settings(cam_id)
+        return cam
+    except KeyError:
+        raise HTTPException(status_code=404, detail="camera not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/cameras/{cam_id}/settings")

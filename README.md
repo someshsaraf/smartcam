@@ -2,6 +2,13 @@
 
 LAN surveillance stack: **Pi 4 edge agents** (record, detect motion, optional local RTSP from the Pi camera) and a **Pi 5 controller** (dashboard, MQTT bridge, central MediaMTX for live tiles).
 
+**This deployment**
+
+| Host | IP | Main ports |
+|------|-----|------------|
+| Controller (Pi 5) | `192.168.2.139` | API `8000`, MQTT `1883`, HLS `8888`, WebRTC `8889`, UI `5173` |
+| Edge / camera (Pi 4) | `192.168.2.164` | HTTP `8080`, RTSP `8554` |
+
 | Path | Role |
 |------|------|
 | [`edge-agent/`](edge-agent/) | FastAPI on each camera Pi |

@@ -290,6 +290,7 @@ export default function App() {
     quality: "medium",
     flip_180: false,
   });
+  const [connectionForm, setConnectionForm] = useState({ url: "", edge_base_url: "" });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
@@ -496,6 +497,10 @@ export default function App() {
 
   const openSettings = async (cam) => {
     setSettingsCam(cam);
+    setConnectionForm({
+      url: cam.url || "",
+      edge_base_url: cam.edge_base_url || "",
+    });
     const res = await fetch(`${API}/cameras/${cam.id}/settings`);
     if (res.ok) {
       const s = await res.json();
@@ -530,6 +535,29 @@ export default function App() {
     if (!settingsCam) return;
     setSaving(true);
     try {
+      const connBody = {};
+      const urlTrim = String(connectionForm.url || "").trim();
+      const edgeTrim = String(connectionForm.edge_base_url || "").trim();
+      if (urlTrim && urlTrim !== (settingsCam.url || "")) {
+        connBody.url = urlTrim;
+      }
+      const prevEdge = settingsCam.edge_base_url || "";
+      if (edgeTrim !== prevEdge) {
+        connBody.edge_base_url = edgeTrim || null;
+      }
+      if (Object.keys(connBody).length > 0) {
+        const connRes = await fetch(`${API}/cameras/${settingsCam.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(connBody),
+        });
+        if (!connRes.ok) {
+          const err = await connRes.json().catch(() => ({}));
+          alert(err.detail || "Failed to update stream URL");
+          return;
+        }
+      }
+
       const res = await fetch(`${API}/cameras/${settingsCam.id}/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -555,6 +583,7 @@ export default function App() {
         flip_180: Boolean(next.flip_180),
       });
       await load();
+      closeSettings();
     } finally {
       setSaving(false);
     }
@@ -842,6 +871,35 @@ export default function App() {
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">RTSP URL (MediaMTX pull source)</label>
+                <input
+                  type="text"
+                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm font-mono"
+                  value={connectionForm.url}
+                  onChange={(e) =>
+                    setConnectionForm((f) => ({ ...f, url: e.target.value }))
+                  }
+                  placeholder="rtsp://192.168.2.164:8554/camera1"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Pi 4 edge with Pi camera: rtsp://&lt;edge-ip&gt;:8554/&lt;camera_id&gt;
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Edge HTTP API (optional)</label>
+                <input
+                  type="text"
+                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm font-mono"
+                  value={connectionForm.edge_base_url}
+                  onChange={(e) =>
+                    setConnectionForm((f) => ({ ...f, edge_base_url: e.target.value }))
+                  }
+                  placeholder="http://192.168.2.164:8080"
+                />
+              </div>
+
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Recording</label>
                 <select
