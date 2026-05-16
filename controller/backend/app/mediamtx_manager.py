@@ -160,6 +160,8 @@ def build_mediamtx_yaml(cameras: list[dict[str, Any]]) -> str:
             src = json.dumps(path_sources[key])
             lines.append(f"  {key}:")
             lines.append(f"    source: {src}")
+            # TCP is more reliable than UDP for Pi-to-Pi RTSP over Wi‑Fi/Ethernet.
+            lines.append("    rtspTransport: tcp")
     return "\n".join(lines) + "\n"
 
 

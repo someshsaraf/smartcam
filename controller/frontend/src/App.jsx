@@ -56,19 +56,15 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
   const canvasRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [useIframeFallback, setUseIframeFallback] = useState(false);
+  const [streamError, setStreamError] = useState("");
+  const [edgeHint, setEdgeHint] = useState("");
   const streamUrl = streamUrlForCamera(cam);
   const hlsUrl = hlsPlaylistUrlForCamera(cam);
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
 
-  const zoomIn = () => setScale((s) => Math.min(4, s * 1.15));
-  const zoomOut = () => setScale((s) => Math.max(0.5, s / 1.15));
-
-  const onWheel = (e) => {
-    e.preventDefault();
-    if (e.deltaY < 0) zoomIn();
-    else zoomOut();
-  };
+  const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
+  const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
 
   const goFs = () => {
     const el = wrapRef.current;
@@ -77,10 +73,66 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
   };
 
   useEffect(() => {
+    setUseIframeFallback(false);
+    setStreamError("");
+    setEdgeHint("");
+    setScale(1);
+  }, [cam.id, cam.url, hlsUrl]);
+
+  /** Wheel over <iframe> does not bubble; capture on the tile so zoom never hits the reader page. */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return undefined;
+    const onWheel = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.deltaY < 0) zoomIn();
+      else zoomOut();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [zoomIn, zoomOut]);
+
+  useEffect(() => {
+    const edge = cam.edge_base_url;
+    if (!edge) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${edge}/health`);
+        if (!res.ok || cancelled) return;
+        const h = await res.json();
+        if (cancelled) return;
+        if (!h.publisher_running) {
+          setEdgeHint(
+            "Edge RTSP publisher is not running — check SURVEILLANCE_PI_CAMERA=1 and mediamtx on the Pi 4."
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setEdgeHint(`Cannot reach edge API at ${edge}`);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cam.edge_base_url]);
+
+  useEffect(() => {
     if (useIframeFallback) return undefined;
     const video = videoRef.current;
     if (!video) return undefined;
     let hls;
+    const onVideoError = () => {
+      setStreamError("HLS playback failed — trying WebRTC reader…");
+      setUseIframeFallback(true);
+    };
+    const onPlaying = () => {
+      setStreamError("");
+    };
+    video.addEventListener("error", onVideoError);
+    video.addEventListener("playing", onPlaying);
     if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: true,
@@ -91,6 +143,11 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
+          setStreamError(
+            data.type === Hls.ErrorTypes.NETWORK_ERROR
+              ? `No HLS stream at ${hlsUrl} — is MediaMTX running and pulling ${cam.url || "RTSP"}?`
+              : "HLS error — trying WebRTC reader…"
+          );
           hls?.destroy();
           setUseIframeFallback(true);
         }
@@ -98,15 +155,18 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = hlsUrl;
     } else {
+      setStreamError("HLS not supported in this browser — using WebRTC reader.");
       setUseIframeFallback(true);
       return undefined;
     }
     return () => {
+      video.removeEventListener("error", onVideoError);
+      video.removeEventListener("playing", onPlaying);
       if (hls) hls.destroy();
       video.removeAttribute("src");
       video.load();
     };
-  }, [cam.id, hlsUrl, useIframeFallback]);
+  }, [cam.id, cam.url, hlsUrl, useIframeFallback]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -178,12 +238,26 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
-        <span className="text-green-400 shrink-0">LIVE</span>
+        <span
+          className={`shrink-0 ${useIframeFallback && !streamError ? "text-amber-400" : streamError || edgeHint ? "text-red-400" : "text-green-400"}`}
+        >
+          {streamError || edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
+        </span>
       </div>
+      {(streamError || edgeHint) && (
+        <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
+          {edgeHint || streamError}
+          {cam.url ? (
+            <>
+              {" "}
+              Expected RTSP: <span className="font-mono text-gray-300">{cam.url}</span>
+            </>
+          ) : null}
+        </p>
+      )}
       <div
         ref={wrapRef}
-        className="relative flex-1 min-h-[140px] max-h-[280px] rounded-lg bg-black overflow-hidden"
-        onWheel={onWheel}
+        className="relative flex-1 min-h-[140px] max-h-[280px] rounded-lg bg-black overflow-hidden touch-none"
       >
         {recording ? (
           <div
@@ -197,12 +271,20 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
           style={{ transform: `scale(${scale})` }}
         >
           {useIframeFallback ? (
-            <iframe
-              title={cam.name}
-              src={streamUrl}
-              className="w-full h-full min-h-[140px] border-0 bg-black"
-              allow="autoplay; fullscreen"
-            />
+            <div className="relative w-full h-full min-h-[140px]">
+              <iframe
+                title={cam.name}
+                src={streamUrl}
+                className="w-full h-full min-h-[140px] border-0 bg-black pointer-events-none"
+                allow="autoplay; fullscreen"
+                sandbox="allow-scripts allow-same-origin allow-autoplay allow-fullscreen"
+              />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
+                {streamError || edgeHint
+                  ? "WebRTC reader — upstream RTSP may be down. Fix edge publisher, then restart controller backend."
+                  : "WebRTC reader (no face overlay). If blank, edge RTSP is not reaching controller MediaMTX."}
+              </div>
+            </div>
           ) : (
             <div className="relative w-full h-full min-h-[140px] bg-black">
               <video

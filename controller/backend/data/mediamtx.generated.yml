@@ -4,6 +4,10 @@ logDestinations: [stdout]
 api: false
 webrtc: true
 webrtcAddress: :8889
+hls: true
+hlsAddress: :8888
+hlsAllowOrigins: ['*']
 paths:
   camera1:
     source: "rtsp://192.168.2.164:8554/camera1"
+    rtspTransport: tcp
