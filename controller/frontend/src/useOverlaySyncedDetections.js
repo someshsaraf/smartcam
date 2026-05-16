@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** Estimate how far behind the live edge the <video> element is playing (ms). */
 export function estimatePlaybackLagMs(video, hls) {
@@ -20,41 +20,64 @@ export function estimatePlaybackLagMs(video, hls) {
   return 0;
 }
 
+function countPeople(faces, personCount) {
+  if (typeof personCount === "number") return personCount;
+  if (!Array.isArray(faces)) return 0;
+  return faces.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
+}
+
 /**
  * Delay overlay detections so boxes align with HLS video (inference uses live RTSP).
- * @param {Array|undefined} faces
- * @param {number|undefined} personCount
- * @param {{ videoRef: import('react').RefObject<HTMLVideoElement>, hlsRef: import('react').RefObject<unknown>, baseDelayMs: number, enabled: boolean }} opts
+ * Full delay applies when a person first appears; while they stay in frame, updates
+ * debounce quickly so rapid WebSocket messages do not reset a multi-second timer.
  */
 export function useOverlaySyncedDetections(faces, personCount, opts) {
   const { videoRef, hlsRef, baseDelayMs, enabled } = opts;
   const [displayed, setDisplayed] = useState({ faces: [], personCount: 0 });
+  const latestRef = useRef({ faces: [], personCount: 0 });
+  const wasShowingRef = useRef(false);
+  const timerRef = useRef(null);
+
+  latestRef.current = {
+    faces: Array.isArray(faces) ? faces : [],
+    personCount: typeof personCount === "number" ? personCount : 0,
+  };
 
   useEffect(() => {
-    const nextFaces = Array.isArray(faces) ? faces : [];
-    const nextCount = typeof personCount === "number" ? personCount : 0;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const latest = latestRef.current;
+    const n = countPeople(latest.faces, latest.personCount);
 
     if (!enabled) {
-      setDisplayed({ faces: nextFaces, personCount: nextCount });
+      setDisplayed(latest);
+      wasShowingRef.current = n > 0;
       return undefined;
     }
 
-    const lagMs = estimatePlaybackLagMs(videoRef?.current, hlsRef?.current);
-    const delayMs = Math.max(0, Math.max(baseDelayMs, lagMs));
-    const releaseAt = performance.now() + delayMs;
-    let raf = 0;
+    let delayMs = 100;
+    if (n > 0 && !wasShowingRef.current) {
+      const lagMs = Math.min(estimatePlaybackLagMs(videoRef?.current, hlsRef?.current), 8000);
+      delayMs = Math.max(baseDelayMs, Math.min(lagMs, 10000));
+    } else if (n === 0) {
+      delayMs = 100;
+    }
 
-    const tick = () => {
-      if (performance.now() >= releaseAt) {
-        setDisplayed({ faces: nextFaces, personCount: nextCount });
-        return;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      const snap = latestRef.current;
+      setDisplayed({ faces: [...snap.faces], personCount: snap.personCount });
+      wasShowingRef.current = countPeople(snap.faces, snap.personCount) > 0;
+    }, delayMs);
 
     return () => {
-      if (raf) cancelAnimationFrame(raf);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [faces, personCount, baseDelayMs, enabled, videoRef, hlsRef]);
 

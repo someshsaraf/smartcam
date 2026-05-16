@@ -329,10 +329,12 @@ function LiveTile({
     video.addEventListener("timeupdate", paint);
     const ro = new ResizeObserver(paint);
     ro.observe(video);
+    const overlayTick = setInterval(paint, 200);
     return () => {
       video.removeEventListener("loadeddata", paint);
       video.removeEventListener("timeupdate", paint);
       ro.disconnect();
+      clearInterval(overlayTick);
     };
   }, [overlayFaces, useIframeFallback, cam.id]);
 
