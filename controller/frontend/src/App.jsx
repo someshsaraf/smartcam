@@ -210,13 +210,11 @@ function LiveTile({
     video.addEventListener("playing", onPlaying);
     if (Hls.isSupported()) {
       let triedDirectHls = false;
+      // Use Count *or* Duration live-sync keys, not both (hls.js rejects mixed config).
+      // MediaMTX serves mpegts HLS; overlay delay syncs boxes to playback.
       hls = new Hls({
-        lowLatencyMode: true,
-        liveSyncDurationCount: 2,
-        liveMaxLatencyDuration: 8,
-        maxLiveSyncPlaybackRate: 1.25,
-        maxBufferLength: 12,
-        backBufferLength: 0,
+        lowLatencyMode: false,
+        maxLiveSyncPlaybackRate: 1.5,
         enableWorker: true,
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 6,
