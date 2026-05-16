@@ -93,6 +93,71 @@ Fetch the SSD detector models for the controller's diagnostics path:
 ./scripts/fetch_ssd_models.sh
 ```
 
+## 4b. Hailo YOLOv8n person detection (Pi 5 + AI HAT / AI Kit)
+
+SmartCam person detection uses **`hailo_platform`** inside the **same `.venv`** that runs
+uvicorn. It is **not** installed by `pip install -r requirements.txt`.
+
+### A. System Hailo stack (once per Pi)
+
+The chip can appear in `lspci` before runtime software is installed. Install from the
+**Raspberry Pi** apt archive (not only `deb.debian.org`):
+
+```bash
+apt-cache policy hailo-all
+# Candidate should list: http://archive.raspberrypi.com/debian bookworm/main
+
+sudo apt update
+sudo apt install hailo-all
+sudo reboot
+```
+
+Then verify:
+
+```bash
+lspci | grep -i hailo
+hailortcli fw-control identify
+dmesg | grep -i hailo | tail
+```
+
+If `hailo-all` is **Unable to locate package**, enable the Pi archive (usually
+`/etc/apt/sources.list.d/raspi.list` with `archive.raspberrypi.com`) and
+`sudo apt full-upgrade`, or follow
+[Raspberry Pi AI software](https://www.raspberrypi.com/documentation/computers/ai.html).
+
+### B. Python wheel into the backend venv
+
+Download **HailoRT** for **arm64** from
+[Hailo developer zone](https://hailo.ai/developer-zone/software-downloads/) (`.deb` +
+`hailo_platform` `.whl` for your Python version, e.g. 3.11).
+
+```bash
+cd /path/to/SmartCam/smartcam/controller/backend
+source .venv/bin/activate
+sudo dpkg -i hailort_*_arm64.deb   # if not already installed via Pi AI guide
+pip install /path/to/hailo_platform-*-py3*-linux_aarch64.whl
+python -c "import hailo_platform; print('hailo_platform OK')"
+```
+
+### C. Model file
+
+```bash
+cp /path/to/yolov8n.hef models/yolov8n.hef
+bash scripts/check_hailo.sh
+```
+
+See also [HAILO_YOLOV8N_SMARTCAM.md](HAILO_YOLOV8N_SMARTCAM.md).
+
+In **`.env`** keep:
+
+```env
+SMARTCAM_FACE_BACKEND=hailo_person_face
+SMARTCAM_HAILO_HEF_PATH=models/yolov8n.hef
+```
+
+Restart uvicorn after installing Hailo. The UI debug panel should show **Hailo: ready**
+and **Person test: YES** when someone is in view.
+
 ## 5. Configure backend environment
 
 Edit **`controller/backend/.env`** (loaded automatically on API start). Set your
