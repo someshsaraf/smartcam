@@ -52,6 +52,20 @@ function personDetectedLabel(count) {
   return count === 1 ? "Person detected" : `${count} people detected`;
 }
 
+/** Always-on debug line for YOLOv8n person test (not tied to recording mode). */
+function formatPersonDebugLine(info, wsOpen) {
+  if (!wsOpen) return "Person test: WS disconnected";
+  if (!info?.ts && !info?.error) return "Person test: waiting for frames…";
+  if (info.error) return `Person test: — (${info.error})`;
+  if (info.hailoError) return `Person test: — (Hailo: ${info.hailoError})`;
+  const n =
+    typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
+  if (n > 0) return `Person test: YES — ${n} person(s)`;
+  const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
+  if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
+  return "Person test: no person in frame";
+}
+
 /** Detection confidence for overlay label (backend sends 0–1). */
 function formatDetectionLabel(det) {
   const n = Number(det?.score);
@@ -64,9 +78,21 @@ function formatDetectionLabel(det) {
   return score ? `${label} ${score}` : label;
 }
 
-function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces, personCount }) {
+function LiveTile({
+  cam,
+  recording,
+  recordingMode,
+  manualRecording,
+  onManualToggle,
+  faces,
+  personCount,
+  detectionInfo,
+  detectionWsOpen,
+}) {
   const persons =
     typeof personCount === "number" ? personCount : countPersonDetections(faces);
+  const personDebugLine = formatPersonDebugLine(detectionInfo, detectionWsOpen);
+  const personDebugPositive = persons > 0;
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -301,6 +327,18 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
           </span>
         </div>
       </div>
+      <p
+        className={`text-[10px] mb-1 font-mono leading-snug ${
+          personDebugPositive
+            ? "text-blue-300 font-semibold"
+            : personDebugLine.includes("—") || personDebugLine.includes("waiting") || personDebugLine.includes("disconnected")
+              ? "text-amber-400/90"
+              : "text-gray-500"
+        }`}
+        title="YOLOv8n person detection debug (independent of recording mode)"
+      >
+        {personDebugLine}
+      </p>
       {edgeHint && (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
@@ -444,8 +482,10 @@ export default function App() {
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
-  /** Phase 1: controller `/ws/detections` → `{ faces, ts }` per camera id */
+  /** Phase 1: controller `/ws/detections` → per-camera inference + person debug */
   const [detectionsById, setDetectionsById] = useState({});
+  const [detectionWsOpen, setDetectionWsOpen] = useState(false);
+  const [detectionSystem, setDetectionSystem] = useState(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -563,18 +603,47 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API}/system/live_detection`);
+        if (res.ok && !cancelled) {
+          setDetectionSystem(await res.json());
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    poll();
+    const iv = setInterval(poll, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, []);
+
+  useEffect(() => {
     let ws;
     let alive = true;
     const connect = () => {
+      setDetectionWsOpen(false);
       try {
         ws = new WebSocket(WS_DETECTIONS);
       } catch {
         return;
       }
+      ws.onopen = () => {
+        if (alive) setDetectionWsOpen(true);
+      };
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === "detections" && msg.camera_id != null && alive) {
+          if (!alive) return;
+          if (msg.type === "hello") {
+            setDetectionSystem(msg);
+            return;
+          }
+          if (msg.type === "detections" && msg.camera_id != null) {
             const id = Number(msg.camera_id);
             const faces = Array.isArray(msg.faces) ? msg.faces : [];
             const personCount =
@@ -588,6 +657,10 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected: Boolean(msg.person_detected) || personCount > 0,
+                faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
+                error: msg.error || null,
+                hailoError: msg.hailo_error || null,
+                backend: msg.backend || null,
               },
             }));
           }
@@ -596,13 +669,18 @@ export default function App() {
         }
       };
       ws.onclose = () => {
+        if (alive) setDetectionWsOpen(false);
         if (!alive) return;
         setTimeout(connect, 3000);
+      };
+      ws.onerror = () => {
+        if (alive) setDetectionWsOpen(false);
       };
     };
     connect();
     return () => {
       alive = false;
+      setDetectionWsOpen(false);
       if (ws) ws.close();
     };
   }, []);
@@ -800,6 +878,37 @@ export default function App() {
         <h1 className="text-xl font-bold">Vigilance</h1>
         <p className="text-[10px] text-gray-500">Controller UI · up to {MAX_LIVE_TILES} live tiles</p>
 
+        <div className="rounded-lg border border-gray-700 bg-[#111827] p-2 text-[10px] space-y-1.5">
+          <p className="font-semibold text-gray-300">Person detection (debug)</p>
+          <p className={detectionWsOpen ? "text-green-400" : "text-amber-400"}>
+            WebSocket: {detectionWsOpen ? "connected" : "disconnected"}
+          </p>
+          <p className="text-gray-400">
+            Backend: <span className="text-gray-200">{detectionSystem?.backend || "—"}</span>
+          </p>
+          <p className="text-gray-400">
+            Hailo:{" "}
+            <span className="text-gray-200">
+              {detectionSystem?.hailo_ready
+                ? "ready"
+                : detectionSystem?.hailo_error || "not ready"}
+            </span>
+          </p>
+          <p className="text-gray-400">
+            Inference workers:{" "}
+            <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
+          </p>
+          {liveCams.length > 0 ? (
+            <div className="border-t border-gray-700 pt-1.5 space-y-0.5">
+              {liveCams.map((c) => (
+                <p key={c.id} className="text-gray-400 font-mono leading-snug">
+                  {c.name}: {formatPersonDebugLine(detectionsById[c.id], detectionWsOpen)}
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
         <button
           type="button"
           disabled={detecting}
@@ -931,6 +1040,8 @@ export default function App() {
                     onManualToggle={() => toggleManualRecording(c)}
                     faces={detectionsById[c.id]?.faces}
                     personCount={detectionsById[c.id]?.personCount ?? 0}
+                    detectionInfo={detectionsById[c.id]}
+                    detectionWsOpen={detectionWsOpen}
                   />
                 ))}
               </div>

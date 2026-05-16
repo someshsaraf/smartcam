@@ -5,6 +5,7 @@ from . import env_loader  # noqa: F401  # loads controller/backend/.env
 import asyncio
 import logging
 import os
+import threading
 import re
 import shutil
 from contextlib import asynccontextmanager
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
     if bridge is not None:
         bridge.reconcile_recording_state()
     live_detection.get_service().start(loop)
+    threading.Timer(4.0, live_detection.get_service().restart_workers).start()
     yield
     live_detection.get_service().stop()
     mediamtx_stop_embedded()

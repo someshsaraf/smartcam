@@ -164,6 +164,27 @@ def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
     return out
 
 
+def inference_debug_status() -> dict[str, Any]:
+    """Diagnostics for UI / WebSocket (independent of recording mode)."""
+    backend = _parse_backend()
+    out: dict[str, Any] = {
+        "backend": backend,
+        "hailo_ready": False,
+        "hailo_error": None,
+    }
+    if backend != "hailo_person_face":
+        return out
+    try:
+        from .hailo_yolov8_backend import get_detector
+
+        det = get_detector()
+        out["hailo_error"] = det.error
+        out["hailo_ready"] = det.error is None
+    except Exception as e:
+        out["hailo_error"] = str(e)
+    return out
+
+
 def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
     if _parse_backend() == "hailo_person_face":
         return _detect_hailo_person_face(frame_bgr)

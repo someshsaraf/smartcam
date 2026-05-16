@@ -14,7 +14,7 @@ import cv2
 
 from . import camera_store
 from . import mediamtx_manager
-from .face_backend import detect_faces_normalized
+from .face_backend import detect_faces_normalized, inference_debug_status
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -121,13 +121,20 @@ class _CameraWorker(threading.Thread):
                     logger.warning(
                         "live_detection cannot open cam_id=%s (retry in 3s)", cid
                     )
+                    meta = inference_debug_status()
                     self._hub.broadcast_json(
                         {
                             "type": "detections",
                             "camera_id": cid,
                             "ts": _utc_iso(),
                             "faces": [],
+                            "person_count": 0,
+                            "person_detected": False,
+                            "face_count": 0,
                             "error": "capture_unavailable",
+                            "backend": meta.get("backend"),
+                            "hailo_ready": meta.get("hailo_ready"),
+                            "hailo_error": meta.get("hailo_error"),
                         }
                     )
                     self._stop.wait(3.0)
@@ -149,17 +156,20 @@ class _CameraWorker(threading.Thread):
             if now - last_send < self._min_interval_sec:
                 continue
 
+            infer_error: Optional[str] = None
             try:
                 faces = detect_faces_normalized(frame)
             except Exception as e:
                 logger.exception("live_detection infer cam_id=%s: %s", cid, e)
                 faces = []
+                infer_error = str(e)
 
             people = [
                 f
                 for f in faces
                 if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
             ]
+            meta = inference_debug_status()
             last_send = now
             self._hub.broadcast_json(
                 {
@@ -167,8 +177,12 @@ class _CameraWorker(threading.Thread):
                     "camera_id": cid,
                     "ts": _utc_iso(),
                     "faces": faces,
+                    "face_count": len(faces),
                     "person_count": len(people),
                     "person_detected": len(people) > 0,
+                    "backend": meta.get("backend"),
+                    "hailo_ready": meta.get("hailo_ready"),
+                    "hailo_error": meta.get("hailo_error") or infer_error,
                 }
             )
 
@@ -190,14 +204,27 @@ class LiveDetectionService:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            worker_cameras: list[dict[str, Any]] = []
+            for w in self._workers:
+                worker_cameras.append(
+                    {
+                        "camera_id": int(w._cam["id"]),
+                        "rtsp_url": w._rtsp_url,
+                    }
+                )
             return {
                 "enabled": self._started,
                 "workers": len(self._workers),
-                "backend": os.environ.get("SMARTCAM_FACE_BACKEND", "opencv"),
+                "worker_cameras": worker_cameras,
                 "interval_frames": _parse_positive_int(
                     "SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 5, 1, 120
                 ),
+                **inference_debug_status(),
             }
+
+    def restart_workers(self) -> None:
+        """Public: rebind RTSP workers (e.g. after MediaMTX starts)."""
+        self._restart_workers()
 
     def _resolve_rtsp_url(self, cam: dict[str, Any]) -> Optional[str]:
         """Prefer localhost MediaMTX RTSP when embedded MTX runs (one upstream pull)."""
@@ -268,6 +295,7 @@ class LiveDetectionService:
         camera_store.add_change_listener(self._on_cameras_changed)
         # MediaMTX needs a moment to accept RTSP reads after restart.
         threading.Timer(0.8, self._restart_workers).start()
+        threading.Timer(3.5, self._restart_workers).start()
         logger.info("live_detection service started")
 
     def stop(self) -> None:
