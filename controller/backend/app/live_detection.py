@@ -44,9 +44,15 @@ def _overlay_delay_ms() -> int:
 class _DelayedFrameBuffer:
     """Hold recent frames; return the newest frame at least delay_sec old."""
 
-    def __init__(self, delay_sec: float, *, max_frames: int = 64) -> None:
+    def __init__(self, delay_sec: float, *, max_frames: Optional[int] = None) -> None:
         self._delay_sec = max(0.0, float(delay_sec))
-        cap = max(8, min(120, int(max_frames)))
+        if max_frames is not None:
+            cap = max(16, min(400, int(max_frames)))
+        else:
+            # deque maxlen must exceed delay * fps or oldest frames are dropped too soon.
+            cap = max(48, int(self._delay_sec * 30 * 2) + 20)
+            cap = min(cap, 400)
+        self._maxlen = cap
         self._frames: Deque[Tuple[float, np.ndarray]] = deque(maxlen=cap)
         self._zero_delay_latest: Optional[np.ndarray] = None
 
@@ -57,6 +63,11 @@ class _DelayedFrameBuffer:
             self._zero_delay_latest = frame
             return
         self._frames.append((time.monotonic(), frame.copy()))
+
+    def oldest_age_ms(self) -> int:
+        if not self._frames:
+            return 0
+        return int(max(0.0, (time.monotonic() - self._frames[0][0]) * 1000))
 
     def frame_for_inference(self) -> Optional[np.ndarray]:
         if self._delay_sec <= 0.0:
@@ -148,6 +159,8 @@ class _CameraWorker(threading.Thread):
         cap: Optional[cv2.VideoCapture] = None
         frame_i = 0
         last_send = 0.0
+        last_buffer_status = 0.0
+        delay_ms = int(self._inference_delay_sec * 1000)
         logger.info(
             "live_detection worker start cam_id=%s url=%s inference_delay_ms=%d",
             cid,
@@ -207,6 +220,29 @@ class _CameraWorker(threading.Thread):
 
             infer_frame = self._frame_buffer.frame_for_inference()
             if infer_frame is None:
+                if (
+                    self._inference_delay_sec > 0.0
+                    and now - last_buffer_status >= 1.5
+                ):
+                    last_buffer_status = now
+                    meta = inference_debug_status()
+                    self._hub.broadcast_json(
+                        {
+                            "type": "detections",
+                            "camera_id": cid,
+                            "ts": _utc_iso(),
+                            "faces": [],
+                            "person_count": 0,
+                            "person_detected": False,
+                            "face_count": 0,
+                            "status": "buffering",
+                            "buffer_age_ms": self._frame_buffer.oldest_age_ms(),
+                            "inference_delay_ms": delay_ms,
+                            "backend": meta.get("backend"),
+                            "hailo_ready": meta.get("hailo_ready"),
+                            "hailo_error": meta.get("hailo_error"),
+                        }
+                    )
                 continue
 
             infer_error: Optional[str] = None

@@ -65,6 +65,12 @@ function personDetectedLabel(count) {
 function formatPersonDebugLine(info, wsOpen) {
   if (!wsOpen) return "Person test: WS disconnected";
   if (!info?.ts && !info?.error) return "Person test: waiting for frames…";
+  if (info.status === "buffering") {
+    const age = typeof info.bufferAgeMs === "number" ? info.bufferAgeMs : 0;
+    const need =
+      typeof info.inferenceDelayMs === "number" ? info.inferenceDelayMs : 4500;
+    return `Person test: syncing video (${age} / ${need} ms)…`;
+  }
   if (info.error) return `Person test: — (${info.error})`;
   if (info.hailoError) return `Person test: — (Hailo: ${info.hailoError})`;
   const n =
@@ -705,6 +711,13 @@ export default function App() {
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
                 backend: msg.backend || null,
+                status: msg.status || null,
+                bufferAgeMs:
+                  typeof msg.buffer_age_ms === "number" ? msg.buffer_age_ms : null,
+                inferenceDelayMs:
+                  typeof msg.inference_delay_ms === "number"
+                    ? msg.inference_delay_ms
+                    : null,
               },
             }));
           }
