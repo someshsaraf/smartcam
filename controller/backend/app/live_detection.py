@@ -38,7 +38,7 @@ def _parse_positive_int(name: str, default: int, lo: int, hi: int) -> int:
 
 def _overlay_delay_ms() -> int:
     """Run inference on RTSP frames this many ms behind live (aligns with HLS playback)."""
-    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 4500, 0, 15000)
+    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 6500, 0, 15000)
 
 
 class _DelayedFrameBuffer:
