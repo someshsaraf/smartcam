@@ -247,6 +247,36 @@ def camera_stream_health(cam_id: int, probe_rtsp: bool = True):
         }
 
 
+def _rewrite_hls_playlist(content: bytes, path_key: str) -> bytes:
+    """
+    MediaMTX may emit absolute URIs (/camera1/seg.ts). hls.js resolves those against
+    the site root, not /cameras/<id>/hls/, so rewrite to path-relative names.
+    """
+    pk = (path_key or "camera1").strip().strip("/")
+    if not pk:
+        return content
+    out: list[str] = []
+    for line in content.decode("utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            out.append(line)
+            continue
+        uri = s
+        if uri.startswith("http://") or uri.startswith("https://"):
+            for marker in (f"/{pk}/", f"{pk}/"):
+                idx = uri.find(marker)
+                if idx >= 0:
+                    uri = uri[idx + len(marker) :]
+                    break
+        elif uri.startswith("/"):
+            parts = uri.lstrip("/").split("/", 1)
+            if parts and parts[0] == pk:
+                uri = parts[1] if len(parts) > 1 else ""
+        if uri:
+            out.append(uri)
+    return "\n".join(out).encode("utf-8")
+
+
 @app.api_route(
     "/cameras/{cam_id}/hls/{asset_path:path}",
     methods=["GET", "HEAD"],
@@ -268,12 +298,17 @@ async def proxy_camera_hls(cam_id: int, asset_path: str, request: Request):
         raise HTTPException(status_code=400, detail="invalid asset path")
     upstream = f"{mediamtx_manager.hls_local_origin()}/{path_key}/{safe_asset}"
 
+    method = request.method
+    if method == "HEAD" and safe_asset.endswith(".m3u8"):
+        # MediaMTX often has no useful HEAD on playlists; use GET for existence.
+        method = "GET"
+
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=5.0),
             follow_redirects=True,
         ) as client:
-            upstream_req = client.build_request(request.method, upstream)
+            upstream_req = client.build_request(method, upstream)
             resp = await client.send(upstream_req, stream=True)
     except httpx.RequestError as e:
         raise HTTPException(
@@ -290,6 +325,19 @@ async def proxy_camera_hls(cam_id: int, asset_path: str, request: Request):
         "content-type",
         "application/vnd.apple.mpegurl" if safe_asset.endswith(".m3u8") else "video/mp2t",
     )
+
+    if safe_asset.endswith(".m3u8"):
+        raw = await resp.aread()
+        await resp.aclose()
+        body_bytes = _rewrite_hls_playlist(raw, path_key)
+        headers = {
+            "cache-control": resp.headers.get("cache-control", "no-cache"),
+            "content-length": str(len(body_bytes)),
+        }
+        if request.method == "HEAD":
+            return Response(status_code=200, media_type=media_type, headers=headers)
+        return Response(content=body_bytes, media_type=media_type, headers=headers)
+
     pass_headers = {}
     for key in ("cache-control", "content-length"):
         if key in resp.headers:

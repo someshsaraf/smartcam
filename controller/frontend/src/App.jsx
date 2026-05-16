@@ -18,9 +18,12 @@ function streamUrlForCamera(cam) {
   return `${MEDIAMTX_BASE}/${path}/`;
 }
 
-function hlsPlaylistUrlForCamera(cam) {
-  // Proxied via FastAPI (same origin as API) — avoids CORS to :8888.
-  return `${API}/cameras/${cam.id}/hls/index.m3u8`;
+function hlsPlaylistUrlForCamera(cam, viaApi = true) {
+  const path = streamPathForCamera(cam).replace(/\/+$/, "");
+  if (viaApi) {
+    return `${API}/cameras/${cam.id}/hls/index.m3u8`;
+  }
+  return `${HLS_BASE}/${path}/index.m3u8`;
 }
 
 function formatBytes(n) {
@@ -59,7 +62,9 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
   const [streamError, setStreamError] = useState("");
   const [edgeHint, setEdgeHint] = useState("");
   const streamUrl = streamUrlForCamera(cam);
-  const hlsUrl = hlsPlaylistUrlForCamera(cam);
+  const hlsProxyUrl = hlsPlaylistUrlForCamera(cam, true);
+  const hlsDirectUrl = hlsPlaylistUrlForCamera(cam, false);
+  const [hlsUrl, setHlsUrl] = useState(hlsProxyUrl);
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
 
@@ -76,8 +81,9 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     setUseIframeFallback(false);
     setStreamError("");
     setEdgeHint("");
+    setHlsUrl(hlsProxyUrl);
     setScale(1);
-  }, [cam.id, cam.url, hlsUrl]);
+  }, [cam.id, cam.url, hlsProxyUrl]);
 
   /** Wheel over <iframe> does not bubble; capture on the tile so zoom never hits the reader page. */
   useEffect(() => {
@@ -107,6 +113,8 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
           setEdgeHint(
             "Edge RTSP publisher is not running — check SURVEILLANCE_PI_CAMERA=1 and mediamtx on the Pi 4."
           );
+        } else {
+          setEdgeHint("");
         }
       } catch {
         if (!cancelled) {
@@ -125,59 +133,55 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
     if (!video) return undefined;
     let hls;
     const onVideoError = () => {
-      setStreamError("HLS playback failed — trying WebRTC reader…");
+      setStreamError("");
       setUseIframeFallback(true);
     };
     const onPlaying = () => {
       setStreamError("");
+      setEdgeHint("");
     };
     video.addEventListener("error", onVideoError);
     video.addEventListener("playing", onPlaying);
     if (Hls.isSupported()) {
+      let triedDirectHls = false;
       hls = new Hls({
         lowLatencyMode: false,
         maxLiveSyncPlaybackRate: 1.5,
         enableWorker: true,
+        manifestLoadingTimeOut: 20000,
+        manifestLoadingMaxRetry: 6,
+        fragLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
       });
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          const base =
-            data.type === Hls.ErrorTypes.NETWORK_ERROR
-              ? `No HLS at ${hlsUrl}. Check edge RTSP ${cam.url || ""} and GET ${API}/cameras/${cam.id}/stream_health`
-              : "HLS error — trying WebRTC reader…";
-          setStreamError(base);
-          fetch(`${API}/cameras/${cam.id}/stream_health`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((h) => {
-              if (!h) return;
-              if (Array.isArray(h.summary) && h.summary.length) {
-                setEdgeHint(h.summary.join(" "));
-                return;
-              }
-              const pub = h.edge_health?.body?.publisher_running;
-              if (pub === false) {
-                setEdgeHint("Edge RTSP publisher is not running (SURVEILLANCE_PI_CAMERA=1 + mediamtx on Pi 4).");
-              } else if (h.rtsp_probe?.reachable === false) {
-                setEdgeHint(
-                  h.rtsp_probe.stderr ||
-                    h.rtsp_probe.error ||
-                    "Controller cannot reach edge RTSP — check Pi 4 mediamtx and firewall."
-                );
-              } else if (h.mediamtx?.process_running === false) {
-                setEdgeHint(
-                  h.mediamtx?.last_start_error ||
-                    "Controller MediaMTX is not running — install mediamtx and restart backend."
-                );
-              } else if (h.hls_local?.reachable === false && h.mediamtx?.stderr_tail) {
-                setEdgeHint(`MediaMTX: ${String(h.mediamtx.stderr_tail).slice(-200)}`);
-              }
-            })
-            .catch(() => {});
-          hls?.destroy();
-          setUseIframeFallback(true);
+        if (!data.fatal) return;
+        if (
+          data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+          !triedDirectHls &&
+          hlsUrl === hlsProxyUrl &&
+          hlsDirectUrl !== hlsProxyUrl
+        ) {
+          triedDirectHls = true;
+          setHlsUrl(hlsDirectUrl);
+          hls.loadSource(hlsDirectUrl);
+          return;
         }
+        hls?.destroy();
+        setStreamError("");
+        setUseIframeFallback(true);
+        fetch(`${API}/cameras/${cam.id}/stream_health?probe_rtsp=false`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((h) => {
+            if (!h) return;
+            if (Array.isArray(h.summary) && h.summary.length) {
+              setEdgeHint(h.summary.join(" "));
+              return;
+            }
+            setEdgeHint("");
+          })
+          .catch(() => {});
       });
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = hlsUrl;
@@ -266,18 +270,20 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <span
-          className={`shrink-0 ${useIframeFallback && !streamError ? "text-amber-400" : streamError || edgeHint ? "text-red-400" : "text-green-400"}`}
+          className={`shrink-0 ${
+            edgeHint ? "text-red-400" : useIframeFallback ? "text-amber-400" : "text-green-400"
+          }`}
         >
-          {streamError || edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
+          {edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
         </span>
       </div>
-      {(streamError || edgeHint) && (
+      {edgeHint && (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
-          {edgeHint || streamError}
+          {edgeHint}
           {cam.url ? (
             <>
               {" "}
-              Expected RTSP: <span className="font-mono text-gray-300">{cam.url}</span>
+              RTSP: <span className="font-mono text-gray-300">{cam.url}</span>
             </>
           ) : null}
         </p>
@@ -307,9 +313,9 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
                 sandbox="allow-scripts allow-same-origin allow-autoplay allow-fullscreen"
               />
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
-                {streamError || edgeHint
-                  ? "WebRTC reader — upstream RTSP may be down. Fix edge publisher, then restart controller backend."
-                  : "WebRTC reader (no face overlay). If blank, edge RTSP is not reaching controller MediaMTX."}
+                {edgeHint
+                  ? "WebRTC reader — see message above."
+                  : "WebRTC reader (no face overlay). HLS unavailable for detection boxes."}
               </div>
             </div>
           ) : (
