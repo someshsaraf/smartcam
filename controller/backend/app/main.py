@@ -37,9 +37,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     ensure_broker_started()
-    mqtt_bridge.init_bridge_from_env(loop)
+    bridge = mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
     mediamtx_start_embedded()
+    _push_all_edge_settings()
+    if bridge is not None:
+        bridge.reconcile_recording_state()
     live_detection.get_service().start(loop)
     yield
     live_detection.get_service().stop()
@@ -104,19 +107,28 @@ def _recordings_dir(cam_id: int) -> Path:
     return d
 
 
-def _push_edge_settings(cam_id: int) -> None:
+def _push_edge_settings(cam_id: int) -> bool:
     c = camera_store.get_camera(cam_id)
     if not c:
-        return
+        return False
     edge = camera_store.edge_base_url(c)
     if not edge:
-        return
+        return False
     settings = c.get("settings", {})
     try:
         r = httpx.patch(f"{edge}/settings", json=settings, timeout=20.0)
         r.raise_for_status()
+        return True
     except Exception as e:
         logger.warning("edge settings push failed cam_id=%s: %s", cam_id, e)
+        return False
+
+
+def _push_all_edge_settings() -> None:
+    """Sync cameras.json settings to each Pi edge (avoids mode mismatch at startup)."""
+    for c in camera_store.list_cameras():
+        if camera_store.edge_base_url(c):
+            _push_edge_settings(int(c["id"]))
 
 
 # =========================
@@ -127,7 +139,10 @@ def _push_edge_settings(cam_id: int) -> None:
 @app.post("/cameras")
 def add_camera_endpoint(cam: CameraCreate):
     try:
-        return camera_store.add_camera(cam.model_dump(exclude_unset=True))
+        created = camera_store.add_camera(cam.model_dump(exclude_unset=True))
+        if camera_store.edge_base_url(created):
+            _push_edge_settings(int(created["id"]))
+        return created
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -376,6 +391,9 @@ def patch_camera_settings(cam_id: int, body: CameraSettingsPatch):
     try:
         cam = camera_store.update_camera_settings(cam_id, patch)
         _push_edge_settings(cam_id)
+        bridge = mqtt_bridge.get_bridge()
+        if bridge is not None:
+            bridge.reconcile_recording_state()
         return cam["settings"]
     except KeyError:
         raise HTTPException(status_code=404, detail="camera not found") from None
@@ -420,6 +438,7 @@ def camera_manual_record_start(cam_id: int):
             status_code=400,
             detail="Set recording mode to Off in camera settings before using manual recording.",
         )
+    _push_edge_settings(cam_id)
     return _edge_manual_proxy(edge, "start")
 
 

@@ -112,8 +112,49 @@ class MqttRecordingBridge:
                 out[str(cid)] = dict(row)
             return {"cameras": out}
 
+    def reconcile_recording_state(self) -> None:
+        """
+        Drop stale MQTT 'recording' flags when mode is Off (manual_* ids only).
+        Called after pushing settings to edges on controller startup.
+        """
+        changed = False
+        with self._lock:
+            for c in camera_store.list_cameras():
+                cid = int(c["id"])
+                mode = (c.get("settings") or {}).get("recording_mode", "motion")
+                if mode != "off":
+                    continue
+                row = self._state.get(cid)
+                if not row or not row.get("recording"):
+                    continue
+                rid = str(row.get("recording_id") or "")
+                if rid.startswith("manual_"):
+                    continue
+                self._state[cid] = {
+                    **row,
+                    "recording": False,
+                    "status": "Stop",
+                }
+                changed = True
+        if changed:
+            self._publish_snapshot()
+
     def _publish_snapshot(self) -> None:
         self._hub.broadcast_json(self.snapshot())
+
+    @staticmethod
+    def _recording_active_for_camera(
+        cam_id: int, status: str, payload: dict[str, Any]
+    ) -> bool:
+        """When mode is Off, only manual recordings should light the UI indicator."""
+        if status not in ("Start", "InProgress"):
+            return False
+        cam = camera_store.get_camera(cam_id)
+        mode = (cam.get("settings") or {}).get("recording_mode", "motion") if cam else "motion"
+        if mode != "off":
+            return True
+        rid = str(payload.get("recording_id") or "")
+        return rid.startswith("manual_")
 
     def _on_message(self, _cli: Any, _userdata: Any, msg: mqtt.MQTTMessage) -> None:
         try:
@@ -130,7 +171,7 @@ class MqttRecordingBridge:
             return
 
         status = str(payload.get("status", "")).strip()
-        recording = status in ("Start", "InProgress")
+        recording = self._recording_active_for_camera(cid, status, payload)
         row = {
             "recording": recording,
             "status": status,

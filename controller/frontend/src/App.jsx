@@ -862,7 +862,11 @@ export default function App() {
                   <LiveTile
                     key={c.id}
                     cam={c}
-                    recording={recordingById[c.id] === true}
+                    recording={
+                      (c.settings?.recording_mode || "motion") === "off"
+                        ? manualRecordingById[c.id] === true
+                        : recordingById[c.id] === true
+                    }
                     recordingMode={c.settings?.recording_mode || "motion"}
                     manualRecording={manualRecordingById[c.id] === true}
                     onManualToggle={() => toggleManualRecording(c)}
