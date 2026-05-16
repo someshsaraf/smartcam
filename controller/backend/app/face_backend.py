@@ -77,27 +77,55 @@ def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
     if scale < 1.01 or scale > 1.5:
         scale = 1.05
 
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=scale,
-        minNeighbors=min_neighbors,
-        minSize=(max(20, min_side // 20), max(20, min_side // 20)),
-    )
+    min_size = (max(20, min_side // 20), max(20, min_side // 20))
+    rects = []
+    weights: list[float] = []
+
+    if hasattr(cascade, "detectMultiScale3"):
+        try:
+            detected = cascade.detectMultiScale3(
+                gray,
+                scaleFactor=scale,
+                minNeighbors=min_neighbors,
+                minSize=min_size,
+                outputRejectLevels=True,
+            )
+            if isinstance(detected, tuple) and len(detected) >= 3:
+                rects = detected[0]
+                level_weights = detected[2]
+                if level_weights is not None and len(level_weights):
+                    weights = [float(v) for v in level_weights.flatten()[: len(rects)]]
+        except cv2.error:
+            rects = []
+
+    if len(rects) == 0:
+        rects = cascade.detectMultiScale(
+            gray,
+            scaleFactor=scale,
+            minNeighbors=min_neighbors,
+            minSize=min_size,
+        )
+
+    max_weight = max(weights) if weights else 0.0
     out: List[dict[str, Any]] = []
-    for (x, y, fw, fh) in faces[:_MAX_FACES]:
+    for i, (x, y, fw, fh) in enumerate(rects[:_MAX_FACES]):
         x1 = max(0, min(w - 1, int(x)))
         y1 = max(0, min(h - 1, int(y)))
         x2 = max(x1 + 1, min(w, int(x + fw)))
         y2 = max(y1 + 1, min(h, int(y + fh)))
         bw = x2 - x1
         bh = y2 - y1
+        if i < len(weights) and max_weight > 0:
+            score = max(0.0, min(1.0, weights[i] / max_weight))
+        else:
+            score = 1.0
         out.append(
             {
                 "x": round(x1 / float(w), 6),
                 "y": round(y1 / float(h), 6),
                 "w": round(bw / float(w), 6),
                 "h": round(bh / float(h), 6),
-                "score": 1.0,
+                "score": round(score, 4),
             }
         )
     return out

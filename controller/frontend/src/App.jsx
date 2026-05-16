@@ -38,6 +38,14 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
+/** Face detection confidence for overlay label (backend sends 0–1). */
+function formatFaceScore(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "";
+  if (n <= 1) return `${Math.round(n * 1000) / 10}%`;
+  return n.toFixed(2);
+}
+
 function LiveTile({ cam, recording, recordingMode, manualRecording, onManualToggle, faces }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
@@ -124,6 +132,7 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
       const oy = (ch - dh) / 2;
       ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       ctx.lineWidth = 2;
+      ctx.font = "11px ui-monospace, system-ui, sans-serif";
       const faceList = Array.isArray(faces) ? faces : [];
       for (const f of faceList) {
         const x = ox + Number(f.x) * vw * scaleContain;
@@ -131,6 +140,21 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
         const w = Number(f.w) * vw * scaleContain;
         const h = Number(f.h) * vh * scaleContain;
         ctx.strokeRect(x, y, w, h);
+        const label = formatFaceScore(f.score);
+        if (!label) continue;
+        const padX = 4;
+        const padY = 2;
+        const textY = Math.max(12, y - 4);
+        const metrics = ctx.measureText(label);
+        const boxW = metrics.width + padX * 2;
+        const boxH = 14;
+        const labelX = Math.min(Math.max(0, x), cw - boxW);
+        const labelTop = Math.max(0, textY - boxH + 2);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+        ctx.fillRect(labelX, labelTop, boxW, boxH);
+        ctx.fillStyle = "rgba(34, 197, 94, 1)";
+        ctx.fillText(label, labelX + padX, labelTop + boxH - padY - 2);
+        ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       }
     };
 
