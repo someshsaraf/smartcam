@@ -105,6 +105,14 @@ npm install
 npm run dev
 ```
 
+Use **Node.js 20+** (LTS recommended). Install dependencies **on the same machine** that runs the UI (do not copy `node_modules` from a Mac to a Pi). If `npm run dev` fails, run:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npm run dev
+```
+
 Edit **[`frontend/.env`](frontend/.env)** (or **`.env.local`** for machine-specific overrides). **Restart `npm run dev`** after changes.
 
 The dev server uses **`vite --host`**. Open the **Network** URL Vite prints (e.g. `http://<your-pi>:5173/`) from other devices on the LAN.
