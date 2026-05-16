@@ -22,6 +22,7 @@ from .discovery import discover, discover_edge_agents
 from .detector import get_detector_diagnostics
 from .mediamtx_manager import start_embedded as mediamtx_start_embedded
 from .mediamtx_manager import status_dict as mediamtx_status_dict
+from .mediamtx_manager import restart_embedded as mediamtx_restart_embedded
 from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
@@ -601,6 +602,12 @@ def delete_recording_file(cam_id: int, filename: str):
 def system_mediamtx():
     """Whether embedded MediaMTX is running (live iframe targets port player_port)."""
     return mediamtx_status_dict()
+
+
+@app.post("/system/mediamtx/restart")
+def system_mediamtx_restart():
+    """Regenerate config from cameras.json and restart embedded MediaMTX."""
+    return mediamtx_restart_embedded()
 
 
 @app.get("/system/mosquitto")

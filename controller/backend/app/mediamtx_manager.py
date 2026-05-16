@@ -443,6 +443,21 @@ def probe_hls_local(path_key: str) -> dict[str, Any]:
     return out
 
 
+def restart_embedded() -> dict[str, Any]:
+    """Force-regenerate YAML and restart MediaMTX (e.g. after installing the binary)."""
+    global _last_yaml
+    if not should_run_mediamtx():
+        return status_dict()
+    with _lock:
+        _last_yaml = ""
+    try:
+        yaml_text = build_mediamtx_yaml(camera_store.list_cameras())
+        _apply_config(yaml_text)
+    except Exception:
+        logger.exception("mediamtx manual restart failed")
+    return status_dict()
+
+
 def stop_embedded() -> None:
     global _debounce_timer
     camera_store.remove_change_listener(_on_camera_store_changed)
