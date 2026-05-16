@@ -943,19 +943,20 @@ export default function App() {
             <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
           </p>
           <p className="text-gray-400">
-            Overlay on video:{" "}
+            Inference delay:{" "}
             <span className="text-gray-200">
-              {detectionOverlaySyncEnabled() ? "HLS sync (delayed)" : "immediate"}
+              {typeof detectionSystem?.inference_delay_ms === "number"
+                ? detectionSystem.inference_delay_ms
+                : typeof detectionSystem?.overlay_delay_ms === "number"
+                  ? detectionSystem.overlay_delay_ms
+                  : "—"}{" "}
+              ms
             </span>
             {detectionOverlaySyncEnabled() ? (
-              <>
+              <span className="text-gray-500">
                 {" "}
-                (
-                {typeof detectionSystem?.overlay_delay_ms === "number"
-                  ? detectionSystem.overlay_delay_ms
-                  : detectionOverlayDelayMs()}{" "}
-                ms)
-              </>
+                (+ UI {detectionOverlayDelayMs()} ms)
+              </span>
             ) : null}
           </p>
           {liveCams.length > 0 ? (

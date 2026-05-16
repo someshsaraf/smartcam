@@ -7,10 +7,12 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Deque, Optional, Tuple
 
 import cv2
+import numpy as np
 
 from . import camera_store
 from . import mediamtx_manager
@@ -35,8 +37,40 @@ def _parse_positive_int(name: str, default: int, lo: int, hi: int) -> int:
 
 
 def _overlay_delay_ms() -> int:
-    """UI should delay overlays ~this long so boxes match HLS (inference uses live RTSP)."""
-    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 3000, 0, 15000)
+    """Run inference on RTSP frames this many ms behind live (aligns with HLS playback)."""
+    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 4500, 0, 15000)
+
+
+class _DelayedFrameBuffer:
+    """Hold recent frames; return the newest frame at least delay_sec old."""
+
+    def __init__(self, delay_sec: float, *, max_frames: int = 64) -> None:
+        self._delay_sec = max(0.0, float(delay_sec))
+        cap = max(8, min(120, int(max_frames)))
+        self._frames: Deque[Tuple[float, np.ndarray]] = deque(maxlen=cap)
+        self._zero_delay_latest: Optional[np.ndarray] = None
+
+    def push(self, frame: np.ndarray) -> None:
+        if frame is None or frame.size == 0:
+            return
+        if self._delay_sec <= 0.0:
+            self._zero_delay_latest = frame
+            return
+        self._frames.append((time.monotonic(), frame.copy()))
+
+    def frame_for_inference(self) -> Optional[np.ndarray]:
+        if self._delay_sec <= 0.0:
+            return self._zero_delay_latest
+        if not self._frames:
+            return None
+        now = time.monotonic()
+        chosen: Optional[np.ndarray] = None
+        chosen_t = -1.0
+        for ts, frame in self._frames:
+            if now - ts >= self._delay_sec and ts > chosen_t:
+                chosen = frame
+                chosen_t = ts
+        return chosen
 
 
 class DetectionWsHub:
@@ -94,6 +128,7 @@ class _CameraWorker(threading.Thread):
         hub: DetectionWsHub,
         interval_frames: int,
         min_interval_sec: float,
+        inference_delay_sec: float,
     ) -> None:
         super().__init__(daemon=True)
         self._cam = cam
@@ -101,6 +136,8 @@ class _CameraWorker(threading.Thread):
         self._hub = hub
         self._interval_frames = max(1, interval_frames)
         self._min_interval_sec = max(0.05, min_interval_sec)
+        self._inference_delay_sec = max(0.0, float(inference_delay_sec))
+        self._frame_buffer = _DelayedFrameBuffer(self._inference_delay_sec)
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -111,7 +148,12 @@ class _CameraWorker(threading.Thread):
         cap: Optional[cv2.VideoCapture] = None
         frame_i = 0
         last_send = 0.0
-        logger.info("live_detection worker start cam_id=%s url=%s", cid, self._rtsp_url)
+        logger.info(
+            "live_detection worker start cam_id=%s url=%s inference_delay_ms=%d",
+            cid,
+            self._rtsp_url,
+            int(self._inference_delay_sec * 1000),
+        )
 
         while not self._stop.is_set():
             if cap is None or not cap.isOpened():
@@ -153,6 +195,8 @@ class _CameraWorker(threading.Thread):
                 self._stop.wait(1.0)
                 continue
 
+            self._frame_buffer.push(frame)
+
             frame_i += 1
             if frame_i % self._interval_frames != 0:
                 continue
@@ -161,9 +205,13 @@ class _CameraWorker(threading.Thread):
             if now - last_send < self._min_interval_sec:
                 continue
 
+            infer_frame = self._frame_buffer.frame_for_inference()
+            if infer_frame is None:
+                continue
+
             infer_error: Optional[str] = None
             try:
-                faces = detect_faces_normalized(frame)
+                faces = detect_faces_normalized(infer_frame)
             except Exception as e:
                 logger.exception("live_detection infer cam_id=%s: %s", cid, e)
                 faces = []
@@ -225,6 +273,7 @@ class LiveDetectionService:
                     "SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 5, 1, 120
                 ),
                 "overlay_delay_ms": _overlay_delay_ms(),
+                "inference_delay_ms": _overlay_delay_ms(),
                 **inference_debug_status(),
             }
 
@@ -270,6 +319,7 @@ class LiveDetectionService:
             except ValueError:
                 min_gap = 0.12
             min_gap = max(0.05, min(2.0, min_gap))
+            infer_delay_sec = _overlay_delay_ms() / 1000.0
 
             cams = camera_store.list_cameras()
             for cam in cams[:max_cams]:
@@ -282,6 +332,7 @@ class LiveDetectionService:
                     hub=self._hub,
                     interval_frames=interval,
                     min_interval_sec=min_gap,
+                    inference_delay_sec=infer_delay_sec,
                 )
                 self._workers.append(w)
                 w.start()

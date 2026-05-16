@@ -27,16 +27,14 @@ function countPeople(faces, personCount) {
 }
 
 /**
- * Optional delay so boxes align with HLS (inference uses live RTSP).
- * Initial delay runs once per appearance; rapid WS updates must not reset it.
+ * Optional extra UI delay on top of backend inference delay.
+ * Uses a release queue so rapid WebSocket updates never reset a multi-second timer.
  */
 export function useOverlaySyncedDetections(faces, personCount, opts) {
   const { videoRef, hlsRef, baseDelayMs, enabled } = opts;
   const [displayed, setDisplayed] = useState({ faces: [], personCount: 0 });
   const latestRef = useRef({ faces: [], personCount: 0 });
-  const wasShowingRef = useRef(false);
-  const initialTimerRef = useRef(null);
-  const updateTimerRef = useRef(null);
+  const queueRef = useRef([]);
 
   latestRef.current = {
     faces: Array.isArray(faces) ? faces : [],
@@ -45,80 +43,50 @@ export function useOverlaySyncedDetections(faces, personCount, opts) {
 
   useEffect(() => {
     const latest = latestRef.current;
-    const n = countPeople(latest.faces, latest.personCount);
-
-    const clearUpdateTimer = () => {
-      if (updateTimerRef.current) {
-        clearTimeout(updateTimerRef.current);
-        updateTimerRef.current = null;
-      }
-    };
-
     if (!enabled) {
-      if (initialTimerRef.current) {
-        clearTimeout(initialTimerRef.current);
-        initialTimerRef.current = null;
-      }
-      clearUpdateTimer();
+      queueRef.current = [];
       setDisplayed(latest);
-      wasShowingRef.current = n > 0;
       return undefined;
     }
 
-    if (n === 0) {
-      if (initialTimerRef.current) {
-        clearTimeout(initialTimerRef.current);
-        initialTimerRef.current = null;
-      }
-      clearUpdateTimer();
-      wasShowingRef.current = false;
-      updateTimerRef.current = setTimeout(() => {
-        updateTimerRef.current = null;
-        setDisplayed({ faces: [], personCount: 0 });
-      }, 80);
-      return () => clearUpdateTimer();
+    const lagMs = Math.min(estimatePlaybackLagMs(videoRef?.current, hlsRef?.current), 12000);
+    const delayMs = Math.max(0, baseDelayMs + Math.round(lagMs * 0.35));
+
+    queueRef.current.push({
+      faces: [...latest.faces],
+      personCount: latest.personCount,
+      releaseAt: performance.now() + delayMs,
+    });
+    if (queueRef.current.length > 80) {
+      queueRef.current = queueRef.current.slice(-80);
     }
-
-    if (wasShowingRef.current) {
-      clearUpdateTimer();
-      updateTimerRef.current = setTimeout(() => {
-        updateTimerRef.current = null;
-        const snap = latestRef.current;
-        setDisplayed({ faces: [...snap.faces], personCount: snap.personCount });
-      }, 80);
-      return () => clearUpdateTimer();
-    }
-
-    if (initialTimerRef.current != null) {
-      return undefined;
-    }
-
-    const lagMs = Math.min(estimatePlaybackLagMs(videoRef?.current, hlsRef?.current), 8000);
-    const delayMs = Math.max(baseDelayMs, Math.min(lagMs, 10000));
-
-    initialTimerRef.current = setTimeout(() => {
-      initialTimerRef.current = null;
-      const snap = latestRef.current;
-      setDisplayed({ faces: [...snap.faces], personCount: snap.personCount });
-      wasShowingRef.current = countPeople(snap.faces, snap.personCount) > 0;
-    }, delayMs);
 
     return undefined;
   }, [faces, personCount, baseDelayMs, enabled, videoRef, hlsRef]);
 
-  useEffect(
-    () => () => {
-      if (initialTimerRef.current) {
-        clearTimeout(initialTimerRef.current);
-        initialTimerRef.current = null;
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    let raf = 0;
+    const tick = () => {
+      const now = performance.now();
+      const q = queueRef.current;
+      let chosen = null;
+      for (let i = q.length - 1; i >= 0; i -= 1) {
+        if (q[i].releaseAt <= now) {
+          chosen = q[i];
+          break;
+        }
       }
-      if (updateTimerRef.current) {
-        clearTimeout(updateTimerRef.current);
-        updateTimerRef.current = null;
+      if (chosen) {
+        setDisplayed({ faces: [...chosen.faces], personCount: chosen.personCount });
+        queueRef.current = q.filter((e) => e.releaseAt > chosen.releaseAt);
       }
-    },
-    []
-  );
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [enabled]);
 
   return displayed;
 }

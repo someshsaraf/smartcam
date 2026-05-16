@@ -52,14 +52,17 @@ export const WS_DETECTIONS = trimUrl(
     `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/detections`
 );
 
-/** Base delay before drawing detection boxes over HLS (inference is on live RTSP). */
+/**
+ * Extra UI delay (ms) on top of backend inference delay.
+ * Set to 0 when SMARTCAM_DETECTION_OVERLAY_DELAY_MS is tuned on the Pi.
+ */
 export function detectionOverlayDelayMs() {
   const raw = import.meta.env.VITE_DETECTION_OVERLAY_DELAY_MS;
-  const n = parseInt(String(raw ?? "3000"), 10);
-  return Number.isFinite(n) && n >= 0 ? n : 3000;
+  const n = parseInt(String(raw ?? "0"), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-/** When false (default), draw boxes immediately from WebSocket (recommended). */
+/** Extra frontend-only HLS sync (backend already delays inference frames). */
 export function detectionOverlaySyncEnabled() {
   const v = String(import.meta.env.VITE_DETECTION_OVERLAY_SYNC ?? "0")
     .trim()
