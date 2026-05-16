@@ -143,11 +143,28 @@ function LiveTile({ cam, recording, recordingMode, manualRecording, onManualTogg
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          setStreamError(
+          const base =
             data.type === Hls.ErrorTypes.NETWORK_ERROR
-              ? `No HLS stream at ${hlsUrl} — is MediaMTX running and pulling ${cam.url || "RTSP"}?`
-              : "HLS error — trying WebRTC reader…"
-          );
+              ? `No HLS at ${hlsUrl}. Check edge RTSP ${cam.url || ""} and GET ${API}/cameras/${cam.id}/stream_health`
+              : "HLS error — trying WebRTC reader…";
+          setStreamError(base);
+          fetch(`${API}/cameras/${cam.id}/stream_health`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((h) => {
+              if (!h) return;
+              const pub = h.edge_health?.body?.publisher_running;
+              if (pub === false) {
+                setEdgeHint("Edge RTSP publisher is not running (SURVEILLANCE_PI_CAMERA=1 + mediamtx on Pi 4).");
+              } else if (h.mediamtx?.process_running === false) {
+                setEdgeHint(
+                  h.mediamtx?.last_start_error ||
+                    "Controller MediaMTX is not running — install mediamtx and restart backend."
+                );
+              } else if (h.hls_local?.reachable === false && h.mediamtx?.stderr_tail) {
+                setEdgeHint(`MediaMTX: ${String(h.mediamtx.stderr_tail).slice(-200)}`);
+              }
+            })
+            .catch(() => {});
           hls?.destroy();
           setUseIframeFallback(true);
         }

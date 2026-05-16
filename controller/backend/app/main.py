@@ -176,6 +176,45 @@ def patch_camera(cam_id: int, body: CameraPatch):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@app.get("/cameras/{cam_id}/stream_health")
+def camera_stream_health(cam_id: int):
+    """
+    Why HLS may be missing: edge publisher, MediaMTX process, upstream RTSP pull.
+  """
+    cam = camera_store.get_camera(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail="camera not found")
+    path_map = mediamtx_manager.path_map_for_cameras()
+    path_key = path_map.get(int(cam_id), camera_store.mediamtx_path_for_camera(cam))
+    edge_url = camera_store.edge_base_url(cam)
+    edge_health: dict[str, Any] = {"reachable": False}
+    if edge_url:
+        try:
+            r = httpx.get(f"{edge_url}/health", timeout=5.0)
+            edge_health["reachable"] = r.is_success
+            if r.is_success:
+                edge_health["body"] = r.json()
+        except Exception as e:
+            edge_health["error"] = str(e)
+    mtx = mediamtx_manager.status_dict()
+    hls = mediamtx_manager.probe_hls_local(path_key)
+    return {
+        "camera_id": cam_id,
+        "rtsp_url": cam.get("url"),
+        "mediamtx_path": path_key,
+        "edge_base_url": edge_url,
+        "edge_health": edge_health,
+        "mediamtx": mtx,
+        "hls_local": hls,
+        "checks": [
+            "On edge Pi: curl -s http://127.0.0.1:8080/health (publisher_running true)",
+            f"On controller: ffprobe -rtsp_transport tcp {cam.get('url', '')}",
+            f"On controller: curl -sI {hls.get('url', '')}",
+            "Restart backend after edge RTSP is up (MediaMTX regenerates config)",
+        ],
+    }
+
+
 @app.get("/cameras/{cam_id}/settings")
 def get_camera_settings(cam_id: int):
     c = camera_store.get_camera(cam_id)
