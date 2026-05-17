@@ -94,101 +94,148 @@ function bentoTileClass(index, total) {
   return "";
 }
 
+function recordingKey(r) {
+  return `${r.camId}-${r.name}`;
+}
+
 function RecordingsTimeline({
   recordings,
+  activeCameraName,
   loading,
   hasCameras,
   onRefresh,
   onDelete,
 }) {
   const [playing, setPlaying] = useState(null);
+  const [selectedKey, setSelectedKey] = useState(null);
 
   const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
+  const selected =
+    recordings.find((r) => recordingKey(r) === selectedKey) ?? null;
+  const selectedUrl = selected ? recordingFileUrl(selected.camId, selected.name) : "";
+
+  useEffect(() => {
+    if (!recordings.length) {
+      setSelectedKey(null);
+      return;
+    }
+    const keys = new Set(recordings.map(recordingKey));
+    if (!selectedKey || !keys.has(selectedKey)) {
+      setSelectedKey(recordingKey(recordings[0]));
+    }
+  }, [recordings, selectedKey]);
+
+  const handleDeleteSelected = () => {
+    if (!selected) return;
+    if (playing && recordingKey(playing) === selectedKey) setPlaying(null);
+    onDelete(selected.camId, selected.name);
+  };
 
   return (
     <>
       <section
-        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex flex-col max-h-[200px] min-h-[120px]"
+        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex max-h-[200px] min-h-[120px]"
         aria-label="Recordings timeline"
       >
-        <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
-          <h2 className="text-xs font-semibold text-gray-200">Recent clips</h2>
-          <div className="flex items-center gap-2">
-            {loading ? <span className="text-[10px] text-gray-500">Loading…</span> : null}
+        <div className="w-36 shrink-0 border-r border-gray-800 flex flex-col p-2 gap-2">
+          <div>
+            <h2 className="text-xs font-semibold text-gray-200">Clips</h2>
+            <p className="text-[10px] text-gray-500 truncate mt-0.5" title={activeCameraName || ""}>
+              {activeCameraName ? activeCameraName : "No camera selected"}
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5 mt-auto">
+            <a
+              href={selectedUrl || undefined}
+              download={selected?.name}
+              className={`text-center text-[10px] px-2 py-1.5 rounded font-medium ${
+                selected
+                  ? "bg-gray-700 hover:bg-gray-600 text-gray-100"
+                  : "bg-gray-800 text-gray-500 pointer-events-none"
+              }`}
+              aria-disabled={!selected}
+              onClick={(e) => {
+                if (!selected) e.preventDefault();
+              }}
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              disabled={!selected}
+              onClick={handleDeleteSelected}
+              className="text-[10px] px-2 py-1.5 rounded font-medium bg-red-900/50 hover:bg-red-800/60 text-red-300 disabled:opacity-40 disabled:cursor-not-allowed border border-red-800/50"
+            >
+              Delete
+            </button>
             <button
               type="button"
               disabled={loading || !hasCameras}
               onClick={onRefresh}
-              className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-200"
             >
-              Refresh
+              {loading ? "Loading…" : "Refresh"}
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-3 py-2">
-          {!hasCameras ? (
-            <p className="text-xs text-gray-500 py-2">Add a camera to see recordings.</p>
-          ) : recordings.length === 0 && !loading ? (
-            <p className="text-xs text-gray-500 py-2">No clips yet.</p>
-          ) : (
-            <ul className="flex gap-3 pb-1">
-              {recordings.map((r) => {
-                const url = recordingFileUrl(r.camId, r.name);
-                const active = playing?.camId === r.camId && playing?.name === r.name;
-                return (
-                  <li
-                    key={`${r.camId}-${r.name}`}
-                    className={`shrink-0 w-[11rem] rounded-lg border p-1.5 flex flex-col gap-1 ${
-                      active
-                        ? "border-indigo-500 bg-[#111827]"
-                        : "border-gray-800 bg-[#111827]/60 hover:border-gray-600"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setPlaying(r)}
-                      className="w-full aspect-video rounded overflow-hidden bg-black border border-gray-700 hover:border-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      title="Play clip"
-                    >
-                      <RecordingThumbnail
-                        src={url}
-                        className="w-full h-full object-cover pointer-events-none"
-                      />
-                    </button>
-                    <div className="min-w-0 text-[10px] px-0.5">
-                      <p className="font-medium text-gray-200 truncate" title={r.camName}>
-                        {r.camName}
-                      </p>
-                      <p className="text-gray-500 truncate">{formatTime(r.mtime)}</p>
-                      <p className="text-gray-600">{formatBytes(r.size)}</p>
-                    </div>
-                    <div className="flex gap-2 text-[10px] px-0.5">
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="px-2 py-1 border-b border-gray-800/80 shrink-0">
+            <p className="text-[10px] text-gray-500">
+              {hasCameras
+                ? recordings.length
+                  ? `${recordings.length} clip${recordings.length === 1 ? "" : "s"} · click to select`
+                  : loading
+                    ? "Loading clips…"
+                    : "No clips for this camera"
+                : "Add a camera to see recordings"}
+            </p>
+          </div>
+          <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-2 py-2">
+            {hasCameras && recordings.length > 0 ? (
+              <ul className="flex gap-3 pb-1">
+                {recordings.map((r) => {
+                  const url = recordingFileUrl(r.camId, r.name);
+                  const key = recordingKey(r);
+                  const isSelected = selectedKey === key;
+                  const isPlaying = playing?.camId === r.camId && playing?.name === r.name;
+                  return (
+                    <li key={key}>
                       <button
                         type="button"
-                        onClick={() => setPlaying(r)}
-                        className="text-blue-400 hover:underline"
+                        onClick={() => setSelectedKey(key)}
+                        onDoubleClick={() => setPlaying(r)}
+                        className={`shrink-0 w-[10.5rem] rounded-lg border p-1.5 flex flex-col gap-1 text-left transition-colors ${
+                          isSelected
+                            ? "border-indigo-500 bg-[#111827] ring-1 ring-indigo-500/50"
+                            : "border-gray-800 bg-[#111827]/60 hover:border-gray-600"
+                        } ${isPlaying ? "outline outline-1 outline-blue-400/60" : ""}`}
+                        title="Click to select · double-click to play"
                       >
-                        Play
+                        <span
+                          className="w-full aspect-video rounded overflow-hidden bg-black border border-gray-700 block"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedKey(key);
+                            setPlaying(r);
+                          }}
+                          role="presentation"
+                        >
+                          <RecordingThumbnail
+                            src={url}
+                            className="w-full h-full object-cover pointer-events-none"
+                          />
+                        </span>
+                        <span className="min-w-0 text-[10px]">
+                          <span className="text-gray-500 block truncate">{formatTime(r.mtime)}</span>
+                          <span className="text-gray-600">{formatBytes(r.size)}</span>
+                        </span>
                       </button>
-                      <a href={url} download={r.name} className="text-gray-400 hover:underline">
-                        Save
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (active) setPlaying(null);
-                          onDelete(r.camId, r.name);
-                        }}
-                        className="text-red-400 hover:underline"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -224,6 +271,7 @@ function RecordingsTimeline({
     </>
   );
 }
+
 
 function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
@@ -693,6 +741,8 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  /** Which camera drives the bottom clips timeline (click a live tile or sidebar entry). */
+  const [activeCameraId, setActiveCameraId] = useState(null);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
@@ -744,6 +794,17 @@ export default function App() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!cams.length) {
+      setActiveCameraId(null);
+      return;
+    }
+    setActiveCameraId((prev) => {
+      if (prev != null && cams.some((c) => c.id === prev)) return prev;
+      return cams[0].id;
+    });
+  }, [cams]);
 
   useEffect(() => {
     loadAllRecordings(cams);
@@ -1085,6 +1146,10 @@ export default function App() {
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
+  const activeCamera = cams.find((c) => c.id === activeCameraId) ?? null;
+  const recordingsForActiveCamera = activeCameraId
+    ? allRecordings.filter((r) => r.camId === activeCameraId)
+    : [];
 
   return (
     <div className="flex h-screen bg-[#0b1220] text-white">
@@ -1209,13 +1274,30 @@ export default function App() {
           {cams.map((c) => (
             <div
               key={c.id}
-              className="bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1"
+              role="button"
+              tabIndex={0}
+              onClick={() => setActiveCameraId(c.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setActiveCameraId(c.id);
+                }
+              }}
+              className={`bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1 cursor-pointer border ${
+                activeCameraId === c.id
+                  ? "border-indigo-500 ring-1 ring-indigo-500/40"
+                  : "border-transparent hover:border-gray-600"
+              }`}
+              title="Show this camera's clips in the timeline"
             >
               <span className="truncate flex-1">{c.name}</span>
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
-                  onClick={() => openSettings(c)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openSettings(c);
+                  }}
                   className="text-gray-300 hover:text-white px-1"
                   title="Camera settings"
                 >
@@ -1223,7 +1305,10 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => deleteCamera(c)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteCamera(c);
+                  }}
                   className="text-red-400 hover:text-red-300 px-1 text-xs"
                   title="Remove camera"
                 >
@@ -1240,6 +1325,11 @@ export default function App() {
           <span className="text-xs font-medium text-gray-200">
             {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
           </span>
+          {activeCamera ? (
+            <span className="text-[10px] px-2 py-0.5 rounded-full border border-indigo-500/50 text-indigo-200 bg-indigo-500/10">
+              Active: {activeCamera.name}
+            </span>
+          ) : null}
           <span
             className={`text-[10px] px-2 py-0.5 rounded-full border ${
               detectionWsOpen
@@ -1286,7 +1376,27 @@ export default function App() {
               }`}
             >
               {liveCams.map((c, i) => (
-                <div key={c.id} className={`min-h-0 min-w-0 ${bentoTileClass(i, liveCams.length)}`}>
+                <div
+                  key={c.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    if (e.target.closest("button, a")) return;
+                    setActiveCameraId(c.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActiveCameraId(c.id);
+                    }
+                  }}
+                  className={`min-h-0 min-w-0 rounded-xl transition-shadow cursor-pointer ${bentoTileClass(i, liveCams.length)} ${
+                    activeCameraId === c.id
+                      ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-[#0b1220]"
+                      : "hover:ring-1 hover:ring-gray-600"
+                  }`}
+                  title={activeCameraId === c.id ? "Active camera (clips below)" : "Click to activate — show this camera's clips"}
+                >
                   <LiveTile
                     cam={c}
                     layout={i === 0 ? "hero" : "default"}
@@ -1315,7 +1425,8 @@ export default function App() {
         </div>
 
         <RecordingsTimeline
-          recordings={allRecordings}
+          recordings={recordingsForActiveCamera}
+          activeCameraName={activeCamera?.name ?? ""}
           loading={recordingsLoading}
           hasCameras={cams.length > 0}
           onRefresh={() => loadAllRecordings(cams)}
