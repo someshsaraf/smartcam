@@ -5,3 +5,4 @@ data/mosquitto.smartcam.conf
 data/mosquitto.passwd
 data/mosquitto_persistence/
 data/mediamtx.stderr.log
+data/events.db

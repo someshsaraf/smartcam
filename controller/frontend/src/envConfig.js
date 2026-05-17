@@ -64,7 +64,7 @@ export function detectionOverlayDelayMs() {
 
 /** Extra frontend-only HLS sync (backend already delays inference frames). */
 export function detectionOverlaySyncEnabled() {
-  const v = String(import.meta.env.VITE_DETECTION_OVERLAY_SYNC ?? "0")
+  const v = String(import.meta.env.VITE_DETECTION_OVERLAY_SYNC ?? "1")
     .trim()
     .toLowerCase();
   return v === "1" || v === "true" || v === "yes" || v === "on";

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, List, Optional, Sequence
 
@@ -16,6 +17,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 PERSON_CLASS_ID = 0
+REQUIRED_HEF_BASENAME = "yolov8n.hef"
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
@@ -34,9 +36,93 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _person_confidence() -> float:
+    """One threshold for overlay, recording, and events — person class only (default 90%)."""
+    return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+
+
+def _box_plausible(box: dict[str, Any]) -> bool:
+    w = float(box.get("w", 0.0))
+    h = float(box.get("h", 0.0))
+    if w <= 0.0 or h <= 0.0:
+        return False
+    area = w * h
+    min_area = _env_float("SMARTCAM_PERSON_MIN_BOX_AREA", 0.018, 0.001, 0.5)
+    max_area = _env_float("SMARTCAM_PERSON_MAX_BOX_AREA", 0.42, 0.05, 0.95)
+    if area < min_area or area > max_area:
+        return False
+    ar = h / max(1e-6, w)
+    min_ar = _env_float("SMARTCAM_PERSON_MIN_ASPECT", 0.35, 0.1, 8.0)
+    max_ar = _env_float("SMARTCAM_PERSON_MAX_ASPECT", 2.5, 0.5, 8.0)
+    if ar < min_ar or ar > max_ar:
+        return False
+    min_w = _env_float("SMARTCAM_PERSON_MIN_BOX_WIDTH", 0.08, 0.02, 0.95)
+    if w < min_w:
+        return False
+    min_h = _env_float("SMARTCAM_PERSON_MIN_BOX_HEIGHT", 0.12, 0.02, 0.95)
+    if h < min_h:
+        return False
+    return True
+
+
+def _hailo_coord_order() -> str:
+    """Corner order in each detection row: yxyx (Hailo postprocess default) or xyxy."""
+    raw = os.environ.get("SMARTCAM_HAILO_COORD_ORDER", "yxyx").strip().lower()
+    return "xyxy" if raw in ("xyxy", "xy", "x") else "yxyx"
+
+
+def _corners_from_row(
+    row: Sequence[float], input_size: int
+) -> Optional[tuple[float, float, float, float]]:
+    """Parse Hailo row to xmin, ymin, xmax, ymax in model-input normalized space."""
+    if len(row) < 4:
+        return None
+    c0, c1, c2, c3 = (float(row[i]) for i in range(4))
+    vals = [c0, c1, c2, c3]
+    if max(vals) > 1.5:
+        inv = 1.0 / float(input_size)
+        vals = [v * inv for v in vals]
+        c0, c1, c2, c3 = vals
+    if not all(np.isfinite(v) for v in (c0, c1, c2, c3)):
+        return None
+    if _hailo_coord_order() == "yxyx":
+        ymin, xmin, ymax, xmax = c0, c1, c2, c3
+    else:
+        xmin, ymin, xmax, ymax = c0, c1, c2, c3
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return xmin, ymin, xmax, ymax
+
+
 def _default_hef_path() -> str:
     here = Path(__file__).resolve()
-    return str(here.parents[1] / "models" / "yolov8n.hef")
+    return str((here.parents[1] / "models" / REQUIRED_HEF_BASENAME).resolve())
+
+
+def _resolve_hef_path(raw: str) -> tuple[str, Optional[str]]:
+    """Return (absolute path, error). Only yolov8n.hef is permitted."""
+    p = Path(raw.strip()).expanduser()
+    if not p.is_absolute():
+        backend_root = Path(__file__).resolve().parents[1]
+        p = (backend_root / p).resolve()
+    if p.name != REQUIRED_HEF_BASENAME:
+        return (
+            str(p),
+            f"SMARTCAM_HAILO_HEF_PATH must be {REQUIRED_HEF_BASENAME} (YOLOv8n on Hailo), not {p.name}",
+        )
+    if not p.is_file():
+        return (
+            str(p),
+            f"{REQUIRED_HEF_BASENAME} not found at {p} — copy compiled HEF to controller/backend/models/",
+        )
+    return str(p), None
 
 
 def _clip01(v: float) -> float:
@@ -57,6 +143,98 @@ def _iou(a: dict[str, Any], b: dict[str, Any]) -> float:
     return inter / denom if denom > 0 else 0.0
 
 
+def _scan_hailo_device_ids() -> list[str]:
+    """Resolve PCIe device id(s). Empty VDevice(device_ids) causes error 74 on many systems."""
+    override = os.environ.get("SMARTCAM_HAILO_DEVICE_ID", "").strip()
+    if override:
+        return [override]
+    from hailo_platform import Device  # type: ignore
+
+    ids = Device.scan()
+    return list(ids) if ids else []
+
+
+def _release_vdevice(target: Any) -> None:
+    if target is None:
+        return
+    try:
+        target.release()
+    except Exception:
+        pass
+
+
+def _looks_like_per_class_detections(obj: list | tuple) -> bool:
+    n = len(obj)
+    if n < 1 or n > 120:
+        return False
+    for i in range(min(n, 4)):
+        if not isinstance(obj[i], (list, tuple, np.ndarray)):
+            return False
+    return True
+
+
+def _summarize_hailo_output(outputs: Any) -> str:
+    parts: list[str] = []
+
+    def walk(obj: Any, depth: int = 0) -> None:
+        if depth > 4 or len(parts) > 12:
+            return
+        if isinstance(obj, dict):
+            parts.append(f"dict(keys={list(obj.keys())[:4]})")
+            for v in list(obj.values())[:2]:
+                walk(v, depth + 1)
+        elif isinstance(obj, (list, tuple)):
+            parts.append(f"list(len={len(obj)})")
+            if len(obj) > PERSON_CLASS_ID:
+                walk(obj[PERSON_CLASS_ID], depth + 1)
+        else:
+            try:
+                arr = np.asarray(obj)
+                if arr.size:
+                    parts.append(f"ndarray{arr.shape} dtype={arr.dtype}")
+            except Exception:
+                parts.append(type(obj).__name__)
+
+    walk(outputs)
+    return "; ".join(parts) or "empty"
+
+
+def _parse_person_rows(
+    obj: Any,
+    parsed: List[dict[str, Any]],
+    det: "HailoYolov8Detector",
+    *,
+    score_min: float,
+) -> None:
+    try:
+        arr = np.squeeze(np.asarray(obj, dtype=np.float32))
+    except Exception:
+        return
+    if arr.size == 0:
+        return
+    if arr.ndim == 3 and arr.shape[-1] >= 5 and arr.shape[0] > PERSON_CLASS_ID:
+        arr = arr[PERSON_CLASS_ID]
+    if arr.ndim == 1 and arr.shape[0] >= 5:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2 or arr.shape[1] < 5:
+        return
+    for row in arr:
+        score = float(row[4])
+        if score > 1.0 and score <= 100.0:
+            score /= 100.0
+        if not np.isfinite(score) or score <= 0.0 or score < score_min:
+            continue
+        corners = _corners_from_row(row, det.input_size)
+        if corners is None:
+            continue
+        box = det._row_to_frame_box(*corners, score)
+        if box is None:
+            continue
+        if box["w"] * det._lb_src_w < det.min_box_px or box["h"] * det._lb_src_h < det.min_box_px:
+            continue
+        parsed.append(box)
+
+
 def _nms(boxes: List[dict[str, Any]], iou_thr: float) -> List[dict[str, Any]]:
     boxes = sorted(boxes, key=lambda d: float(d.get("score", 0.0)), reverse=True)
     kept: List[dict[str, Any]] = []
@@ -68,15 +246,18 @@ def _nms(boxes: List[dict[str, Any]], iou_thr: float) -> List[dict[str, Any]]:
 
 class HailoYolov8Detector:
     def __init__(self) -> None:
-        self.hef_path = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+        raw_hef = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+        self.hef_path, hef_err = _resolve_hef_path(raw_hef)
         self.input_size = _env_int("SMARTCAM_HAILO_INPUT_SIZE", 640, 64, 2048)
         self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
-        self._lock = threading.Lock()
+        self._use_letterbox = _env_bool("SMARTCAM_HAILO_LETTERBOX", False)
+        self._infer_lock = threading.Lock()
+        self._init_lock = threading.Lock()
         self._ready = False
-        self._error: Optional[str] = None
+        self._error: Optional[str] = hef_err
         self._hef = None
         self._target = None
         self._network_group = None
@@ -84,19 +265,39 @@ class HailoYolov8Detector:
         self._output_vstreams_params = None
         self._input_name: Optional[str] = None
         self._InferVStreams = None
+        self._lb_scale = 1.0
+        self._lb_pad_x = 0
+        self._lb_pad_y = 0
+        self._lb_src_w = 1
+        self._lb_src_h = 1
+        self._hold_boxes: List[dict[str, Any]] = []
+        self._hold_until = 0.0
+        if hef_err:
+            logger.error(hef_err)
 
     @property
     def error(self) -> Optional[str]:
         return self._error
 
+    @property
+    def ready(self) -> bool:
+        return self._ready
+
     def _init(self) -> bool:
         if self._ready:
             return True
-        if self._error:
-            return False
-        with self._lock:
+        with self._init_lock:
             if self._ready:
                 return True
+            if self._error:
+                return False
+            self.hef_path, hef_err = _resolve_hef_path(
+                os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+            )
+            if hef_err:
+                self._error = hef_err
+                logger.error(self._error)
+                return False
             try:
                 from hailo_platform import (  # type: ignore
                     ConfigureParams,
@@ -112,19 +313,28 @@ class HailoYolov8Detector:
                 logger.error(self._error)
                 return False
 
-            if not os.path.isfile(self.hef_path):
-                self._error = f"HEF not found: {self.hef_path}"
-                logger.error(self._error)
-                return False
-
+            target: Any = None
             try:
                 self._hef = HEF(self.hef_path)
-                self._target = VDevice()
+                device_ids = _scan_hailo_device_ids()
+                if not device_ids:
+                    self._error = (
+                        "HailoRT Device.scan() found no devices. If hailortcli works, set "
+                        "SMARTCAM_HAILO_DEVICE_ID=0001:01:00.0 (from hailortcli identify) and "
+                        "restart uvicorn."
+                    )
+                    logger.error(self._error)
+                    return False
+                logger.info("Opening Hailo VDevice device_ids=%s hef=%s", device_ids, self.hef_path)
+                target = VDevice(device_ids=device_ids)
+                self._target = target
                 configure_params = ConfigureParams.create_from_hef(
                     hef=self._hef,
                     interface=HailoStreamInterface.PCIe,
                 )
-                network_groups = self._target.configure(self._hef, configure_params)
+                network_groups = target.configure(self._hef, configure_params)
+                if not network_groups:
+                    raise RuntimeError("Hailo configure returned no network groups")
                 self._network_group = network_groups[0]
                 self._input_vstreams_params = InputVStreamParams.make(self._network_group)
                 self._output_vstreams_params = OutputVStreamParams.make(self._network_group)
@@ -134,17 +344,100 @@ class HailoYolov8Detector:
                 self._input_name = in_infos[0].name
                 self._InferVStreams = InferVStreams
                 self._ready = True
-                logger.info("Hailo YOLOv8 backend ready hef=%s input=%s", self.hef_path, self._input_name)
+                self._error = None
+                logger.info(
+                    "Hailo YOLOv8 ready devices=%s hef=%s input=%s",
+                    device_ids,
+                    self.hef_path,
+                    self._input_name,
+                )
                 return True
             except Exception as e:
-                self._error = f"Failed to initialize Hailo backend: {e}"
+                _release_vdevice(target)
+                self._target = None
+                self._hef = None
+                err = str(e)
+                if "74" in err or "HAILO_OUT_OF_PHYSICAL_DEVICES" in err:
+                    self._error = (
+                        f"Failed to open Hailo device: {e}. "
+                        "Stop other Hailo apps, run: hailortcli fw-control identify, "
+                        "then set SMARTCAM_HAILO_DEVICE_ID to that PCIe id (e.g. 0001:01:00.0)."
+                    )
+                elif "73" in err or "HAILO_DEVICE_IN_USE" in err:
+                    self._error = (
+                        f"Failed to open Hailo device: {e}. "
+                        "Only one process may use the NPU. Stop other hailort/uvicorn instances, "
+                        "do not run check_hailo.sh while the backend is running, then restart uvicorn."
+                    )
+                else:
+                    self._error = f"Failed to initialize Hailo backend: {e}"
                 logger.exception(self._error)
                 return False
 
     def _preprocess(self, frame_bgr: np.ndarray) -> np.ndarray:
-        img = cv2.resize(frame_bgr, (self.input_size, self.input_size), interpolation=cv2.INTER_LINEAR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return np.ascontiguousarray(img, dtype=np.uint8)
+        """Preprocess to model input. Letterbox (default) or stretch (baseline)."""
+        h, w = frame_bgr.shape[:2]
+        size = self.input_size
+        self._lb_src_w = max(1, w)
+        self._lb_src_h = max(1, h)
+        if h < 2 or w < 2:
+            self._lb_scale = 1.0
+            self._lb_pad_x = 0
+            self._lb_pad_y = 0
+            return np.zeros((size, size, 3), dtype=np.uint8)
+
+        if not self._use_letterbox:
+            self._lb_scale = 1.0
+            self._lb_pad_x = 0
+            self._lb_pad_y = 0
+            img = cv2.resize(frame_bgr, (size, size), interpolation=cv2.INTER_LINEAR)
+            return np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), dtype=np.uint8)
+
+        scale = min(size / float(w), size / float(h))
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        resized = cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+        pad_x = (size - nw) // 2
+        pad_y = (size - nh) // 2
+        canvas[pad_y : pad_y + nh, pad_x : pad_x + nw] = rgb
+
+        self._lb_scale = scale
+        self._lb_pad_x = pad_x
+        self._lb_pad_y = pad_y
+        self._lb_src_w = w
+        self._lb_src_h = h
+        return np.ascontiguousarray(canvas, dtype=np.uint8)
+
+    def _unmap_letterbox_corners(
+        self, xmin: float, ymin: float, xmax: float, ymax: float, score: float
+    ) -> Optional[dict[str, Any]]:
+        """Map model-input normalized corners (letterboxed 640) to source-frame box."""
+        s = float(self.input_size)
+        x1p = (xmin * s - self._lb_pad_x) / self._lb_scale
+        y1p = (ymin * s - self._lb_pad_y) / self._lb_scale
+        x2p = (xmax * s - self._lb_pad_x) / self._lb_scale
+        y2p = (ymax * s - self._lb_pad_y) / self._lb_scale
+        return self._make_box(
+            x1p / float(self._lb_src_w),
+            y1p / float(self._lb_src_h),
+            x2p / float(self._lb_src_w),
+            y2p / float(self._lb_src_h),
+            score,
+        )
+
+    def _row_to_frame_box(
+        self, xmin: float, ymin: float, xmax: float, ymax: float, score: float
+    ) -> Optional[dict[str, Any]]:
+        """Map Hailo row corners to source-frame normalized box."""
+        if self._use_letterbox:
+            box = self._unmap_letterbox_corners(xmin, ymin, xmax, ymax, score)
+        else:
+            box = self._make_box(xmin, ymin, xmax, ymax, score)
+        if box is None or not _box_plausible(box):
+            return None
+        return box
 
     def _infer(self, frame_bgr: np.ndarray) -> Optional[dict[str, Any]]:
         if not self._init():
@@ -155,7 +448,7 @@ class HailoYolov8Detector:
         assert self._output_vstreams_params is not None
         assert self._input_name is not None
         input_data = {self._input_name: np.expand_dims(self._preprocess(frame_bgr), axis=0)}
-        with self._lock:
+        with self._infer_lock:
             with self._network_group.activate():
                 with self._InferVStreams(self._network_group, self._input_vstreams_params, self._output_vstreams_params) as pipe:
                     return pipe.infer(input_data)
@@ -166,13 +459,77 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
+        conf = _person_confidence()
+        self.conf = conf
+        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
-        boxes = _nms(self._parse_outputs(outputs), self.nms_iou)
+        boxes = [
+            b
+            for b in _nms(self._parse_outputs(outputs, score_min=conf), self.nms_iou)
+            if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
+        ]
+        now = time.monotonic()
+        if boxes:
+            self._hold_boxes = list(boxes)
+            self._hold_until = now + hold_sec
+        elif self._hold_boxes and now <= self._hold_until:
+            boxes = [
+                b
+                for b in self._hold_boxes
+                if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
+            ]
+        else:
+            self._hold_boxes = []
+            self._hold_until = 0.0
+        if (
+            not boxes
+            and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        ):
+            logger.info("Hailo parse: 0 boxes; output summary=%s", _summarize_hailo_output(outputs))
         return boxes[: self.max_detections]
 
-    def _parse_outputs(self, outputs: Any) -> List[dict[str, Any]]:
+    def _parse_outputs(self, outputs: Any, *, score_min: Optional[float] = None) -> List[dict[str, Any]]:
+        threshold = self.conf if score_min is None else score_min
+        """Parse HailoRT-postprocess YOLO (y0,x0,y1,x1,score per class) and legacy tensor layouts."""
+        parsed: List[dict[str, Any]] = []
+        visited: set[int] = set()
+
+        def consume(obj: Any) -> None:
+            if obj is None:
+                return
+            oid = id(obj)
+            if oid in visited:
+                return
+            visited.add(oid)
+
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    consume(v)
+                return
+
+            if isinstance(obj, (list, tuple)) and _looks_like_per_class_detections(obj):
+                if len(obj) > PERSON_CLASS_ID:
+                    _parse_person_rows(obj[PERSON_CLASS_ID], parsed, self, score_min=threshold)
+                return
+
+            if isinstance(obj, (list, tuple)):
+                for v in obj:
+                    consume(v)
+                return
+
+            _parse_person_rows(obj, parsed, self, score_min=threshold)
+
+        consume(outputs)
+        if not parsed:
+            parsed.extend(self._parse_outputs_legacy(outputs, score_min=threshold))
+        return parsed
+
+    def _parse_outputs_legacy(self, outputs: Any, *, score_min: Optional[float] = None) -> List[dict[str, Any]]:
+        threshold = self.conf if score_min is None else score_min
+        """Fallback for non-postprocess tensors (xyxy + optional class column)."""
         candidates: list[np.ndarray] = []
 
         def collect(obj: Any) -> None:
@@ -197,8 +554,6 @@ class HailoYolov8Detector:
         parsed: List[dict[str, Any]] = []
         for arr in candidates:
             arr = np.squeeze(arr)
-            # Common Hailo YOLO NMS can be (classes, detections, 5) or
-            # (batch, classes, detections, 5). Keep COCO class 0 = person.
             if arr.ndim == 4 and arr.shape[-1] >= 5 and arr.shape[1] > PERSON_CLASS_ID:
                 arr = arr[0, PERSON_CLASS_ID, :, :]
             elif arr.ndim == 3 and arr.shape[-1] >= 5 and arr.shape[0] > PERSON_CLASS_ID:
@@ -214,9 +569,14 @@ class HailoYolov8Detector:
                 if len(vals) >= 6 and int(round(vals[5])) != PERSON_CLASS_ID:
                     continue
                 score = vals[4]
-                if not np.isfinite(score) or score < self.conf:
+                if score > 1.0 and score <= 100.0:
+                    score /= 100.0
+                if not np.isfinite(score) or score < threshold:
                     continue
-                box = self._coords_to_box(vals[:4], score)
+                corners = _corners_from_row(vals[:4], self.input_size)
+                if corners is None:
+                    continue
+                box = self._row_to_frame_box(*corners, score)
                 if box is None:
                     continue
                 if box["w"] * self.input_size < self.min_box_px or box["h"] * self.input_size < self.min_box_px:
@@ -250,6 +610,29 @@ class HailoYolov8Detector:
 
 _DETECTOR: Optional[HailoYolov8Detector] = None
 _DETECTOR_LOCK = threading.Lock()
+
+
+def reset_detector_cache() -> None:
+    """Release Hailo handles (call only when live detection workers are stopped)."""
+    global _DETECTOR
+    with _DETECTOR_LOCK:
+        if _DETECTOR is not None:
+            with _DETECTOR._init_lock:
+                _release_vdevice(_DETECTOR._target)
+                _DETECTOR._target = None
+                _DETECTOR._network_group = None
+                _DETECTOR._hef = None
+                _DETECTOR._ready = False
+                _DETECTOR._error = None
+        _DETECTOR = None
+
+
+def warm_up_hailo_backend() -> Optional[str]:
+    """Open Hailo once on the main thread before RTSP workers start."""
+    det = get_detector()
+    if det._init():
+        return None
+    return det.error
 
 
 def get_detector() -> HailoYolov8Detector:

@@ -17,6 +17,7 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
+from .motion_recording import handle_person_detected
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -172,6 +173,7 @@ class _CameraWorker(threading.Thread):
         self._frame_buffer = _DelayedFrameBuffer(self._inference_delay_sec)
         self._person_hold_sec = _person_hold_sec()
         self._held_snapshot: Optional[tuple[float, list[dict[str, Any]], list[dict[str, Any]]]] = None
+        self._prev_person_detected = False
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -289,6 +291,7 @@ class _CameraWorker(threading.Thread):
 
             meta = inference_debug_status()
             last_send = now
+            person_detected = len(people) > 0
             self._hub.broadcast_json(
                 {
                     "type": "detections",
@@ -297,12 +300,20 @@ class _CameraWorker(threading.Thread):
                     "faces": faces,
                     "face_count": len(faces),
                     "person_count": len(people),
-                    "person_detected": len(people) > 0,
+                    "person_detected": person_detected,
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
+                    "person_detection_source": meta.get("person_detection_source"),
                 }
             )
+            if person_detected:
+                handle_person_detected(
+                    cid,
+                    tags=["person"],
+                    person_count=len(people),
+                )
+            self._prev_person_detected = person_detected
 
         if cap is not None:
             cap.release()
@@ -416,6 +427,16 @@ class LiveDetectionService:
         with self._lock:
             self._started = True
         camera_store.add_change_listener(self._on_cameras_changed)
+        try:
+            from .hailo_yolov8_backend import warm_up_hailo_backend
+
+            err = warm_up_hailo_backend()
+            if err:
+                logger.warning("Hailo warm-up failed (workers will retry): %s", err)
+            else:
+                logger.info("Hailo YOLOv8n warm-up OK")
+        except Exception as e:
+            logger.warning("Hailo warm-up skipped: %s", e)
         # MediaMTX needs a moment to accept RTSP reads after restart.
         threading.Timer(0.8, self._restart_workers).start()
         threading.Timer(3.5, self._restart_workers).start()
@@ -430,6 +451,12 @@ class LiveDetectionService:
             for w in self._workers:
                 w.join(timeout=5.0)
             self._workers.clear()
+        try:
+            from .hailo_yolov8_backend import reset_detector_cache
+
+            reset_detector_cache()
+        except Exception:
+            pass
         logger.info("live_detection service stopped")
 
     def _on_cameras_changed(self) -> None:

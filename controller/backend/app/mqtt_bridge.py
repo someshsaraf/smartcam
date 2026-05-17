@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 import paho.mqtt.client as mqtt
 
 from . import camera_store
+from .agent_debug import agent_log
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +147,8 @@ class MqttRecordingBridge:
     def _recording_active_for_camera(
         cam_id: int, status: str, payload: dict[str, Any]
     ) -> bool:
-        """When mode is Off, only manual recordings should light the UI indicator."""
-        if status not in ("Start", "InProgress"):
+        """Red-dot indicator: Start on, Stop off. InProgress is metadata only."""
+        if status != "Start":
             return False
         cam = camera_store.get_camera(cam_id)
         mode = (cam.get("settings") or {}).get("recording_mode", "motion") if cam else "motion"
@@ -171,16 +172,8 @@ class MqttRecordingBridge:
             return
 
         status = str(payload.get("status", "")).strip()
-        recording = self._recording_active_for_camera(cid, status, payload)
-        row = {
-            "recording": recording,
-            "status": status,
-            "recording_id": payload.get("recording_id"),
-            "timestamp": payload.get("timestamp"),
-            "objects_detected": payload.get("objects_detected"),
-            "local_path": payload.get("local_path"),
-        }
         with self._lock:
+            prev = self._state.get(cid, {})
             if status == "Stop":
                 self._state[cid] = {
                     "recording": False,
@@ -190,8 +183,62 @@ class MqttRecordingBridge:
                     "objects_detected": payload.get("objects_detected"),
                     "local_path": payload.get("local_path"),
                 }
+            elif status == "Start":
+                self._state[cid] = {
+                    "recording": self._recording_active_for_camera(cid, status, payload),
+                    "status": status,
+                    "recording_id": payload.get("recording_id"),
+                    "timestamp": payload.get("timestamp"),
+                    "objects_detected": payload.get("objects_detected"),
+                    "local_path": payload.get("local_path"),
+                }
+            elif status == "InProgress":
+                if not prev.get("recording"):
+                    logger.debug(
+                        "mqtt ignore InProgress cam_id=%s rid=%s (not recording)",
+                        cid,
+                        payload.get("recording_id"),
+                    )
+                    return
+                self._state[cid] = {
+                    **prev,
+                    "status": status,
+                    "recording_id": payload.get("recording_id"),
+                    "timestamp": payload.get("timestamp"),
+                    "objects_detected": payload.get("objects_detected"),
+                    "local_path": payload.get("local_path"),
+                    "recording": True,
+                }
             else:
-                self._state[cid] = row
+                self._state[cid] = {
+                    "recording": False,
+                    "status": status,
+                    "recording_id": payload.get("recording_id"),
+                    "timestamp": payload.get("timestamp"),
+                    "objects_detected": payload.get("objects_detected"),
+                    "local_path": payload.get("local_path"),
+                }
+            new_rec = bool(self._state[cid].get("recording"))
+        logger.info(
+            "mqtt recording cam_id=%s status=%s recording=%s rid=%s",
+            cid,
+            status,
+            new_rec,
+            payload.get("recording_id"),
+        )
+        agent_log(
+            "H4",
+            "mqtt_bridge.py:_on_message",
+            "mqtt_recording_state",
+            {
+                "cam_id": cid,
+                "topic_cam": topic_cam,
+                "status": status,
+                "recording": new_rec,
+                "prev_recording": bool(prev.get("recording")),
+                "recording_id": str(payload.get("recording_id") or ""),
+            },
+        )
         self._publish_snapshot()
 
     def _run(self) -> None:
