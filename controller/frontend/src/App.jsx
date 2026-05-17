@@ -1794,7 +1794,6 @@ export default function App() {
           />
         ) : null}
       </div>
-    </div>
 
       {settingsCam && (
         <div
