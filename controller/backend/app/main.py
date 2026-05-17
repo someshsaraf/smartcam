@@ -8,7 +8,7 @@ import os
 import threading
 import re
 import shutil
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -75,6 +75,9 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
 
 _CHUNK = 1024 * 1024
 
+# Long read timeout for MP4 proxy; client must stay open until the stream finishes.
+_RECORDING_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+
 # Headers iOS Safari needs for HTML5 MP4 playback (byte-range requests).
 _RECORDING_PASS_HEADERS = frozenset(
     {
@@ -102,6 +105,25 @@ def _recording_file_headers(filename: str) -> dict[str, str]:
         "Content-Disposition": f'inline; filename="{filename}"',
         "Accept-Ranges": "bytes",
     }
+
+
+async def _stream_edge_recording_body(
+    resp: httpx.Response,
+    client: httpx.AsyncClient,
+):
+    """Proxy edge recording bytes; keep httpx open until done; ignore seek aborts."""
+    try:
+        async for chunk in resp.aiter_bytes(chunk_size=_CHUNK):
+            yield chunk
+    except asyncio.CancelledError:
+        raise
+    except httpx.HTTPError as e:
+        logger.debug("edge recording stream ended early: %s", e)
+    finally:
+        with suppress(Exception):
+            await resp.aclose()
+        with suppress(Exception):
+            await client.aclose()
 
 
 class CameraCreate(BaseModel):
@@ -640,31 +662,41 @@ async def get_recording_file(cam_id: int, filename: str, request: Request):
         range_h = request.headers.get("range")
         if range_h:
             forward_headers["Range"] = range_h
+        client = httpx.AsyncClient(timeout=_RECORDING_HTTP_TIMEOUT)
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                req = client.build_request("GET", url, headers=forward_headers)
-                r = await client.send(req, stream=True)
-                if r.status_code >= 400:
-                    body = await r.aread()
-                    await r.aclose()
-                    detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
-                    raise HTTPException(status_code=r.status_code, detail=detail)
-                pass_headers = {
-                    k: v
-                    for k, v in r.headers.items()
-                    if k.lower() in _RECORDING_PASS_HEADERS
-                }
-                if "accept-ranges" not in {k.lower() for k in pass_headers}:
-                    pass_headers["Accept-Ranges"] = "bytes"
-                return StreamingResponse(
-                    r.aiter_bytes(),
-                    status_code=r.status_code,
-                    headers=pass_headers,
-                    media_type=r.headers.get("content-type", "video/mp4"),
-                )
+            req = client.build_request("GET", url, headers=forward_headers)
+            r = await client.send(req, stream=True)
+            if r.status_code >= 400:
+                body = await r.aread()
+                await r.aclose()
+                await client.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                raise HTTPException(status_code=r.status_code, detail=detail)
+            pass_headers = {
+                k: v
+                for k, v in r.headers.items()
+                if k.lower() in _RECORDING_PASS_HEADERS
+            }
+            if "accept-ranges" not in {k.lower() for k in pass_headers}:
+                pass_headers["Accept-Ranges"] = "bytes"
+            return StreamingResponse(
+                _stream_edge_recording_body(r, client),
+                status_code=r.status_code,
+                headers=pass_headers,
+                media_type=r.headers.get("content-type", "video/mp4"),
+            )
         except HTTPException:
+            with suppress(Exception):
+                await client.aclose()
             raise
+        except httpx.HTTPError as e:
+            with suppress(Exception):
+                await client.aclose()
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
         except Exception as e:
+            with suppress(Exception):
+                await client.aclose()
             logger.warning("edge recording stream failed: %s", e)
             raise HTTPException(status_code=502, detail=str(e)) from e
 
