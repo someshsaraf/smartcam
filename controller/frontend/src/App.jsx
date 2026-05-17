@@ -723,8 +723,8 @@ function countPersonDetections(detections) {
   return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
-/** Always-on debug line for YOLOv8n person test (not tied to recording mode). */
-function formatPersonDebugLine(info, wsOpen) {
+/** Always-on debug line for person test (Hailo or OpenCV SSD fallback). */
+function formatPersonDebugLine(info, wsOpen, system) {
   if (!wsOpen) return "Person test: WS disconnected";
   if (!info?.ts && !info?.error) return "Person test: waiting for frames…";
   if (info.status === "buffering") {
@@ -734,21 +734,27 @@ function formatPersonDebugLine(info, wsOpen) {
     return `Person test: syncing video (${age} / ${need} ms)…`;
   }
   if (info.error) return `Person test: — (${info.error})`;
+
+  const src = info.personDetectionSource || system?.person_detection_source || null;
+  const usingSsd = src === "opencv_ssd";
+  const ssdErr = info.ssdFallbackError || system?.ssd_fallback_error || null;
+  const hailoErr = info.hailoError || system?.hailo_error || null;
+
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
   if (n > 0) {
-    const viaSsd =
-      info.personDetectionSource === "opencv_ssd" && info.hailoError;
-    return viaSsd
-      ? `Person test: YES — ${n} person(s) (SSD fallback; Hailo unavailable)`
+    return usingSsd
+      ? `Person test: YES — ${n} person(s) (OpenCV SSD; Hailo off)`
       : `Person test: YES — ${n} person(s)`;
   }
-  if (info.hailoError) {
-    const hint =
-      info.personDetectionSource === "opencv_ssd"
-        ? "SSD fallback active — no person in frame"
-        : info.hailoError;
-    return `Person test: — (Hailo: ${hint})`;
+  if (usingSsd) {
+    return "Person test: no person in frame (OpenCV SSD; Hailo off)";
+  }
+  if (ssdErr) {
+    return `Person test: — (${ssdErr})`;
+  }
+  if (hailoErr) {
+    return `Person test: — (Hailo: ${hailoErr})`;
   }
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
@@ -777,6 +783,7 @@ function LiveTile({
   personCount,
   detectionInfo,
   detectionWsOpen,
+  detectionSystem,
   motionClipLine,
   overlayDelayMs,
   layout = "default",
@@ -810,7 +817,8 @@ function LiveTile({
     typeof drawPersonCount === "number" ? drawPersonCount : countPersonDetections(drawFaces);
   const personDebugLine = formatPersonDebugLine(
     { ...detectionInfo, faces: rawFaces, personCount: detectionInfo?.personCount ?? drawPersonCount },
-    detectionWsOpen
+    detectionWsOpen,
+    detectionSystem
   );
   const personDebugPositive = persons > 0;
   const [scale, setScale] = useState(1);
@@ -1558,6 +1566,7 @@ export default function App() {
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
                 personDetectionSource: msg.person_detection_source || null,
+                ssdFallbackError: msg.ssd_fallback_error || null,
                 backend: msg.backend || null,
                 status: msg.status || null,
                 bufferAgeMs:
@@ -1883,6 +1892,7 @@ export default function App() {
       personCount={detectionsById[c.id]?.personCount ?? 0}
       detectionInfo={detectionsById[c.id]}
       detectionWsOpen={detectionWsOpen}
+      detectionSystem={detectionSystem}
       overlayDelayMs={
         typeof detectionSystem?.overlay_delay_ms === "number"
           ? detectionSystem.overlay_delay_ms
@@ -1940,9 +1950,20 @@ export default function App() {
             <span className="text-gray-200">
               {detectionSystem?.hailo_ready
                 ? "ready"
-                : detectionSystem?.hailo_error || "not ready"}
+                : detectionSystem?.person_detection_source === "opencv_ssd"
+                  ? "off (using OpenCV SSD)"
+                  : detectionSystem?.hailo_error || "not ready"}
             </span>
           </p>
+          {detectionSystem?.person_detection_source ? (
+            <p className="text-gray-400">
+              Person source:{" "}
+              <span className="text-gray-200">{detectionSystem.person_detection_source}</span>
+            </p>
+          ) : null}
+          {detectionSystem?.ssd_fallback_error ? (
+            <p className="text-amber-400/95">{detectionSystem.ssd_fallback_error}</p>
+          ) : null}
           <p className="text-gray-400">
             Inference workers:{" "}
             <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
@@ -1968,7 +1989,8 @@ export default function App() {
             <div className="border-t border-gray-700 pt-1.5 space-y-0.5">
               {liveCams.map((c) => (
                 <p key={c.id} className="text-gray-400 font-mono leading-snug">
-                  {c.name}: {formatPersonDebugLine(detectionsById[c.id], detectionWsOpen)}
+                  {c.name}:{" "}
+                  {formatPersonDebugLine(detectionsById[c.id], detectionWsOpen, detectionSystem)}
                 </p>
               ))}
             </div>

@@ -305,6 +305,7 @@ class _CameraWorker(threading.Thread):
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
                     "person_detection_source": meta.get("person_detection_source"),
+                    "ssd_fallback_error": meta.get("ssd_fallback_error"),
                 }
             )
             if person_detected and not self._prev_person_detected:

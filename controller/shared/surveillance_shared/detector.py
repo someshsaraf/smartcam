@@ -199,6 +199,10 @@ class Detector:
         self._warned_pipeline_dead = False
         self._ssd_load_failed = False
 
+    def ssd_available(self) -> bool:
+        """True when MobileNet-SSD weights are loaded (used for Hailo fallback)."""
+        return self._ensure_net() is not None
+
     def _ensure_net(self) -> cv2.dnn.Net | None:
         if self._ssd_load_failed:
             return None

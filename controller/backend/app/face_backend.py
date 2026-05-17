@@ -23,6 +23,7 @@ _HAAR: Optional[cv2.CascadeClassifier] = None
 _HAAR_ERROR_LOGGED = False
 _HAILO_FALLBACK_WARNED = False
 _SSD_FALLBACK_ACTIVE = False
+_SSD_FALLBACK_ERROR: Optional[str] = None
 _SSD_DETECTOR: Any = None
 
 
@@ -33,7 +34,17 @@ def _hailo_fallback_ssd_enabled() -> bool:
 
 def _parse_backend() -> str:
     v = os.environ.get("SMARTCAM_FACE_BACKEND", "opencv").strip().lower()
-    aliases = {"opencv": "opencv", "haar": "opencv", "hailo": "hailo_person_face", "hybrid": "hailo_person_face", "hailo_person_face": "hailo_person_face", "person_face": "hailo_person_face"}
+    aliases = {
+        "opencv": "opencv",
+        "haar": "opencv",
+        "hailo": "hailo_person_face",
+        "hybrid": "hailo_person_face",
+        "hailo_person_face": "hailo_person_face",
+        "person_face": "hailo_person_face",
+        "ssd": "ssd_person",
+        "opencv_ssd": "ssd_person",
+        "ssd_person": "ssd_person",
+    }
     if v in aliases:
         return aliases[v]
     logger.warning("SMARTCAM_FACE_BACKEND invalid %r; using opencv", v)
@@ -142,19 +153,39 @@ def _person_roi(frame_shape: tuple[int, ...], p: dict[str, Any]) -> tuple[int, i
     return int((x - mx) * w), int((y - my) * h), int((x + bw + mx) * w), int((y + min(bh, bh * 0.62) + my) * h)
 
 
-def _detect_ssd_people_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE
+def _ensure_ssd_fallback_detector() -> bool:
+    """Load MobileNet-SSD once; set _SSD_FALLBACK_ACTIVE when weights are present."""
+    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE, _SSD_FALLBACK_ERROR
+    if not _hailo_fallback_ssd_enabled():
+        return False
     try:
         from surveillance_shared.detector import Detector
 
         if _SSD_DETECTOR is None:
             _SSD_DETECTOR = Detector()
-        people = _SSD_DETECTOR.detect_people_normalized(frame_bgr)
-        if people:
+        if _SSD_DETECTOR.ssd_available():
             _SSD_FALLBACK_ACTIVE = True
-        return people
+            _SSD_FALLBACK_ERROR = None
+            return True
+        _SSD_FALLBACK_ERROR = (
+            "MobileNet-SSD models missing — run controller/backend/scripts/fetch_ssd_models.sh"
+        )
+        return False
     except Exception as e:
-        logger.warning("OpenCV SSD person fallback failed: %s", e)
+        _SSD_FALLBACK_ERROR = str(e)
+        logger.warning("OpenCV SSD fallback init failed: %s", e)
+        return False
+
+
+def _detect_ssd_people_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
+    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE
+    if not _ensure_ssd_fallback_detector():
+        return []
+    try:
+        assert _SSD_DETECTOR is not None
+        return _SSD_DETECTOR.detect_people_normalized(frame_bgr)
+    except Exception as e:
+        logger.warning("OpenCV SSD person fallback infer failed: %s", e)
         return []
 
 
@@ -216,13 +247,18 @@ def inference_debug_status() -> dict[str, Any]:
         "hailo_ready": False,
         "hailo_error": None,
         "person_detection_source": None,
+        "ssd_fallback_error": None,
     }
+    if backend == "ssd_person":
+        if _ensure_ssd_fallback_detector():
+            out["person_detection_source"] = "opencv_ssd"
+        else:
+            out["ssd_fallback_error"] = _SSD_FALLBACK_ERROR
+        return out
     if backend != "hailo_person_face":
         if backend == "opencv":
             out["person_detection_source"] = "opencv_haar"
         return out
-    if _SSD_FALLBACK_ACTIVE:
-        out["person_detection_source"] = "opencv_ssd"
     try:
         from .hailo_yolov8_backend import get_detector
 
@@ -231,12 +267,22 @@ def inference_debug_status() -> dict[str, Any]:
         out["hailo_ready"] = det.error is None
         if det.error is None:
             out["person_detection_source"] = "hailo_yolov8n"
+            return out
     except Exception as e:
         out["hailo_error"] = str(e)
+
+    if _hailo_fallback_ssd_enabled():
+        if _ensure_ssd_fallback_detector():
+            out["person_detection_source"] = "opencv_ssd"
+        else:
+            out["ssd_fallback_error"] = _SSD_FALLBACK_ERROR
     return out
 
 
 def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    if _parse_backend() == "hailo_person_face":
+    backend = _parse_backend()
+    if backend == "hailo_person_face":
         return _detect_hailo_person_face(frame_bgr)
+    if backend == "ssd_person":
+        return _detect_ssd_people_normalized(frame_bgr)
     return _detect_haar_in_region(frame_bgr)
