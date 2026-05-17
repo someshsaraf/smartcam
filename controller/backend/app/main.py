@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 import re
 import shutil
 from contextlib import asynccontextmanager, suppress
@@ -157,6 +158,9 @@ def _recordings_dir(cam_id: int) -> Path:
     return d
 
 
+_EDGE_SETTINGS_TIMEOUT = httpx.Timeout(5.0, read=45.0)
+
+
 def _push_edge_settings(cam_id: int) -> bool:
     c = camera_store.get_camera(cam_id)
     if not c:
@@ -166,7 +170,11 @@ def _push_edge_settings(cam_id: int) -> bool:
         return False
     settings = c.get("settings", {})
     try:
-        r = httpx.patch(f"{edge}/settings", json=settings, timeout=20.0)
+        r = httpx.patch(
+            f"{edge.rstrip('/')}/settings",
+            json=settings,
+            timeout=_EDGE_SETTINGS_TIMEOUT,
+        )
         r.raise_for_status()
         return True
     except Exception as e:
@@ -174,11 +182,28 @@ def _push_edge_settings(cam_id: int) -> bool:
         return False
 
 
+def _schedule_edge_settings_push(cam_id: int, *, retries: int = 2) -> None:
+    """Push settings to the Pi without blocking the HTTP handler."""
+
+    def _run() -> None:
+        for attempt in range(max(1, retries)):
+            if _push_edge_settings(cam_id):
+                return
+            if attempt + 1 < retries:
+                time.sleep(3.0)
+
+    threading.Thread(
+        target=_run,
+        name=f"edge-settings-push-{cam_id}",
+        daemon=True,
+    ).start()
+
+
 def _push_all_edge_settings() -> None:
     """Sync cameras.json settings to each Pi edge (avoids mode mismatch at startup)."""
     for c in camera_store.list_cameras():
         if camera_store.edge_base_url(c):
-            _push_edge_settings(int(c["id"]))
+            _schedule_edge_settings_push(int(c["id"]))
 
 
 # =========================
@@ -191,7 +216,7 @@ def add_camera_endpoint(cam: CameraCreate):
     try:
         created = camera_store.add_camera(cam.model_dump(exclude_unset=True))
         if camera_store.edge_base_url(created):
-            _push_edge_settings(int(created["id"]))
+            _schedule_edge_settings_push(int(created["id"]))
         return created
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -234,7 +259,7 @@ def patch_camera(cam_id: int, body: CameraPatch):
     try:
         cam = camera_store.update_camera(cam_id, patch)
         if "edge_base_url" in patch:
-            _push_edge_settings(cam_id)
+            _schedule_edge_settings_push(cam_id)
         return cam
     except KeyError:
         raise HTTPException(status_code=404, detail="camera not found") from None
@@ -440,7 +465,7 @@ def patch_camera_settings(cam_id: int, body: CameraSettingsPatch):
         return c.get("settings", {})
     try:
         cam = camera_store.update_camera_settings(cam_id, patch)
-        _push_edge_settings(cam_id)
+        _schedule_edge_settings_push(cam_id)
         bridge = mqtt_bridge.get_bridge()
         if bridge is not None:
             bridge.reconcile_recording_state()
@@ -506,20 +531,19 @@ def camera_manual_record_stop(cam_id: int):
     return _edge_manual_proxy(edge, "stop")
 
 
-@app.post("/cameras/{cam_id}/recordings/person-mock/trigger")
-def camera_person_mock_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
-    c = camera_store.get_camera(cam_id)
-    if not c:
-        raise HTTPException(status_code=404, detail="camera not found")
-    edge = camera_store.edge_base_url(c)
-    if not edge:
-        raise HTTPException(
-            status_code=400,
-            detail="Person mock recording requires a Pi edge camera (edge_base_url).",
-        )
-    url = f"{edge.rstrip('/')}/recordings/person-mock/trigger"
+def _edge_motion_clip_proxy(edge: str, subpath: str, body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    base = edge.rstrip("/")
+    if subpath == "trigger":
+        url = f"{base}/recordings/motion/trigger"
+        method = httpx.post
+    else:
+        url = f"{base}/recordings/motion/status"
+        method = httpx.get
     try:
-        r = httpx.post(url, json=body if isinstance(body, dict) else {}, timeout=30.0)
+        if method is httpx.post:
+            r = method(url, json=body if isinstance(body, dict) else {}, timeout=30.0)
+        else:
+            r = method(url, timeout=15.0)
         if r.status_code >= 400:
             detail: Any = r.text
             try:
@@ -539,23 +563,45 @@ def camera_person_mock_trigger(cam_id: int, body: Optional[dict[str, Any]] = Non
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
-@app.get("/cameras/{cam_id}/recordings/person-mock/status")
-def camera_person_mock_status(cam_id: int):
+@app.post("/cameras/{cam_id}/recordings/motion/trigger")
+def camera_motion_clip_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    st = c.get("settings") or {}
+    if st.get("recording_mode") != "motion":
+        raise HTTPException(
+            status_code=400,
+            detail="Motion clips from person detection require recording mode Motion.",
+        )
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Motion recording on the Pi requires edge_base_url.",
+        )
+    return _edge_motion_clip_proxy(edge, "trigger", body)
+
+
+@app.get("/cameras/{cam_id}/recordings/motion/status")
+def camera_motion_clip_status(cam_id: int):
     c = camera_store.get_camera(cam_id)
     if not c:
         raise HTTPException(status_code=404, detail="camera not found")
     edge = camera_store.edge_base_url(c)
     if not edge:
         return {"active": False, "phase": "idle", "remaining_seconds": 0}
-    try:
-        r = httpx.get(f"{edge.rstrip('/')}/recordings/person-mock/status", timeout=15.0)
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-    return {"active": False, "phase": "idle", "remaining_seconds": 0}
+    return _edge_motion_clip_proxy(edge, "status")
+
+
+@app.post("/cameras/{cam_id}/recordings/person-mock/trigger")
+def camera_person_mock_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
+    return camera_motion_clip_trigger(cam_id, body)
+
+
+@app.get("/cameras/{cam_id}/recordings/person-mock/status")
+def camera_person_mock_status(cam_id: int):
+    return camera_motion_clip_status(cam_id)
 
 
 @app.get("/cameras/{cam_id}/recordings/manual/status")

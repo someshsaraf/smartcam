@@ -17,6 +17,7 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
+from .motion_recording import schedule_motion_clip_trigger
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -172,6 +173,7 @@ class _CameraWorker(threading.Thread):
         self._frame_buffer = _DelayedFrameBuffer(self._inference_delay_sec)
         self._person_hold_sec = _person_hold_sec()
         self._held_snapshot: Optional[tuple[float, list[dict[str, Any]], list[dict[str, Any]]]] = None
+        self._prev_person_detected = False
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -289,6 +291,7 @@ class _CameraWorker(threading.Thread):
 
             meta = inference_debug_status()
             last_send = now
+            person_detected = len(people) > 0
             self._hub.broadcast_json(
                 {
                     "type": "detections",
@@ -297,12 +300,15 @@ class _CameraWorker(threading.Thread):
                     "faces": faces,
                     "face_count": len(faces),
                     "person_count": len(people),
-                    "person_detected": len(people) > 0,
+                    "person_detected": person_detected,
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
                 }
             )
+            if person_detected and not self._prev_person_detected:
+                schedule_motion_clip_trigger(cid, tags=["person"])
+            self._prev_person_detected = person_detected
 
         if cap is not None:
             cap.release()

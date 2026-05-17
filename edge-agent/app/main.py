@@ -365,28 +365,52 @@ def manual_record_status():
     return _recorder.manual_recording_status()
 
 
-@app.post("/recordings/person-mock/trigger")
-def person_mock_trigger(body: Optional[dict[str, Any]] = None):
-    if _recorder is None:
-        raise HTTPException(status_code=503, detail="recorder not running")
+def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
     pre = None
     post = None
+    tags: Optional[list[str]] = None
     if isinstance(body, dict):
         if body.get("pre_record_seconds") is not None:
             pre = int(body["pre_record_seconds"])
         if body.get("post_record_seconds") is not None:
             post = int(body["post_record_seconds"])
+        raw_tags = body.get("objects_detected")
+        if isinstance(raw_tags, list):
+            tags = [str(t) for t in raw_tags if t is not None]
+    return {"pre_seconds": pre, "post_seconds": post, "objects_detected": tags}
+
+
+@app.post("/recordings/motion/trigger")
+def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    parsed = _parse_motion_clip_body(body)
     try:
-        return _recorder.trigger_person_mock(pre_seconds=pre, post_seconds=post)
+        return _recorder.trigger_motion_clip(
+            pre_seconds=parsed["pre_seconds"],
+            post_seconds=parsed["post_seconds"],
+            objects_detected=parsed["objects_detected"],
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@app.get("/recordings/person-mock/status")
-def person_mock_status():
+@app.get("/recordings/motion/status")
+def motion_clip_status():
     if _recorder is None:
         return {"active": False, "phase": "idle", "remaining_seconds": 0}
-    return _recorder.person_mock_status()
+    return _recorder.motion_clip_status()
+
+
+@app.post("/recordings/person-mock/trigger")
+def person_mock_trigger(body: Optional[dict[str, Any]] = None):
+    """Deprecated alias for controller person-detection clips in motion mode."""
+    return motion_clip_trigger(body)
+
+
+@app.get("/recordings/person-mock/status")
+def person_mock_status():
+    return motion_clip_status()
 
 
 @app.get("/settings")

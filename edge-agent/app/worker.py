@@ -119,6 +119,7 @@ class EdgeRecorder:
         self._pm_status: dict[str, Any] = {}
         self._pm_buf: collections.deque[bytes] = collections.deque()
         self._pm_buffer_thread: Optional[threading.Thread] = None
+        self._last_external_clip_trigger = 0.0
         self._clip_busy_lock = threading.Lock()
         self._clip_busy = False
         self._on_settings_changed = on_settings_changed
@@ -180,7 +181,11 @@ class EdgeRecorder:
             self._settings["post_record_seconds"] = int(self._settings["post_record_seconds"])
             out = dict(self._settings)
         if prev.get("recording_mode") == "off" and out.get("recording_mode") != "off":
-            self.stop_manual_recording()
+            threading.Thread(
+                target=self.stop_manual_recording,
+                name="edge-stop-manual-on-mode-change",
+                daemon=True,
+            ).start()
         cb = self._on_settings_changed
         if cb and (
             out.get("flip_180") != prev.get("flip_180")
@@ -285,7 +290,7 @@ class EdgeRecorder:
                 return True
         return False
 
-    def person_mock_status(self) -> dict[str, Any]:
+    def motion_clip_status(self) -> dict[str, Any]:
         with self._pm_lock:
             if not self._pm_active:
                 return {
@@ -296,6 +301,7 @@ class EdgeRecorder:
                     "post_seconds": 0,
                     "recording_id": "",
                     "filename": None,
+                    "objects_detected": [],
                 }
             st = dict(self._pm_status)
             ends = float(st.get("ends_at") or 0.0)
@@ -303,40 +309,67 @@ class EdgeRecorder:
             st["active"] = True
             return st
 
-    def trigger_person_mock(
+    def person_mock_status(self) -> dict[str, Any]:
+        return self.motion_clip_status()
+
+    def trigger_motion_clip(
         self,
         *,
         pre_seconds: Optional[int] = None,
         post_seconds: Optional[int] = None,
+        objects_detected: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         settings = self.snapshot_settings()
+        if settings.get("recording_mode") != "motion":
+            return {
+                "accepted": False,
+                "reason": "recording_mode_not_motion",
+                **self.motion_clip_status(),
+            }
+
         pre_s = int(pre_seconds if pre_seconds is not None else settings.get("pre_record_seconds", 10))
         post_s = int(post_seconds if post_seconds is not None else settings.get("post_record_seconds", 50))
         pre_s = max(1, min(120, pre_s))
         post_s = max(1, min(600, post_s))
 
+        tags: list[str] = []
+        if isinstance(objects_detected, list):
+            for t in objects_detected:
+                if isinstance(t, str) and t.strip():
+                    tags.append(t.strip().lower())
+        if not tags:
+            tags = ["person"]
+
         if self.manual_recording_active():
             return {
                 "accepted": False,
                 "reason": "manual_recording_active",
-                **self.person_mock_status(),
+                **self.motion_clip_status(),
             }
         with self._clip_busy_lock:
             if self._clip_busy:
                 return {
                     "accepted": False,
                     "reason": "recording_in_progress",
-                    **self.person_mock_status(),
+                    **self.motion_clip_status(),
                 }
 
+        now = time.time()
         with self._pm_lock:
+            if now - self._last_external_clip_trigger < COOLDOWN_SEC:
+                return {
+                    "accepted": False,
+                    "reason": "cooldown",
+                    **self.motion_clip_status(),
+                }
             if self._pm_active:
                 return {
                     "accepted": False,
-                    "reason": "person_mock_already_active",
-                    **self.person_mock_status(),
+                    "reason": "motion_clip_already_active",
+                    **self.motion_clip_status(),
                 }
-            rid = f"pmock_{int(time.time() * 1000)}"
+            self._last_external_clip_trigger = now
+            rid = f"evt_{int(time.time() * 1000)}"
             self._pm_active = True
             self._pm_status = {
                 "active": True,
@@ -347,23 +380,43 @@ class EdgeRecorder:
                 "ends_at": time.time() + post_s,
                 "remaining_seconds": post_s,
                 "filename": None,
+                "objects_detected": tags,
             }
 
         with self._pm_buf_lock:
             pre_frames = list(self._pm_buf)
 
         threading.Thread(
-            target=self._run_person_mock_clip,
-            args=(rid, pre_frames, pre_s, post_s),
-            name=f"person-mock-{rid}",
+            target=self._run_external_motion_clip,
+            args=(rid, pre_frames, pre_s, post_s, tags),
+            name=f"motion-clip-{rid}",
             daemon=True,
         ).start()
-        return {"accepted": True, **self.person_mock_status()}
+        return {"accepted": True, **self.motion_clip_status()}
+
+    def trigger_person_mock(
+        self,
+        *,
+        pre_seconds: Optional[int] = None,
+        post_seconds: Optional[int] = None,
+    ) -> dict[str, Any]:
+        return self.trigger_motion_clip(
+            pre_seconds=pre_seconds,
+            post_seconds=post_seconds,
+            objects_detected=["person"],
+        )
 
     def _run_person_mock_buffer(self) -> None:
+        """Ring buffer for pre-roll when controller person detection triggers motion clips."""
         cap: Optional[cv2.VideoCapture] = None
         while not self._stop.is_set():
             st = self.snapshot_settings()
+            if st.get("recording_mode") != "motion":
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                time.sleep(0.5)
+                continue
             pre_s = int(st.get("pre_record_seconds", 10))
             flip = bool(st.get("flip_180", False))
             fps = _fps_for_quality(st.get("quality"))
@@ -404,24 +457,25 @@ class EdgeRecorder:
         if cap is not None:
             cap.release()
 
-    def _run_person_mock_clip(
+    def _run_external_motion_clip(
         self,
         rid: str,
         pre_jpegs: list[bytes],
         pre_seconds: int,
         post_seconds: int,
+        tags: list[str],
     ) -> None:
         ff = shutil.which("ffmpeg")
         out_dir = self._recordings_root
         out_dir.mkdir(parents=True, exist_ok=True)
         tmp = out_dir / f"_tmp_{rid}"
-        out_mp4 = out_dir / f"person_mock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_mp4 = out_dir / f"evt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         flip = bool(self.snapshot_settings().get("flip_180", False))
         read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
 
         try:
             if not ff:
-                print("[edge] person_mock: ffmpeg missing")
+                print("[edge] motion clip: ffmpeg missing")
                 return
 
             tmp.mkdir(parents=True, exist_ok=True)
@@ -433,7 +487,7 @@ class EdgeRecorder:
             self._publish(
                 status="Start",
                 recording_id=rid,
-                objects_detected=["person"],
+                objects_detected=tags,
                 local_path=out_mp4.resolve().as_posix(),
             )
 
@@ -495,14 +549,14 @@ class EdgeRecorder:
                 timeout=600,
             )
             if r.returncode != 0:
-                print("[edge] person_mock ffmpeg failed:", (r.stderr or "")[-400:])
+                print("[edge] motion clip ffmpeg failed:", (r.stderr or "")[-400:])
                 remove_invalid_mp4(out_mp4)
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return
             if not finalize_mp4_for_mobile(out_mp4):
-                print("[edge] person_mock finalize failed:", out_mp4.name)
+                print("[edge] motion clip finalize failed:", out_mp4.name)
             if not mp4_ios_playable(out_mp4):
-                print("[edge] person_mock not playable, removing:", out_mp4.name)
+                print("[edge] motion clip not playable, removing:", out_mp4.name)
                 remove_invalid_mp4(out_mp4)
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return
@@ -513,12 +567,12 @@ class EdgeRecorder:
             self._publish(
                 status="Stop",
                 recording_id=rid,
-                objects_detected=["person"],
+                objects_detected=tags,
                 local_path=out_mp4.resolve().as_posix(),
                 filename=out_mp4.name,
             )
         except Exception as e:
-            print("[edge] person_mock clip failed:", e)
+            print("[edge] motion clip failed:", e)
             self._publish(status="Stop", recording_id=rid, local_path="")
         finally:
             saved_fn: Optional[str] = None
