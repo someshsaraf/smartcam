@@ -921,13 +921,6 @@ export default function App() {
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
-  const anyPersonDetected = liveCams.some((c) => {
-    const d = detectionsById[c.id];
-    if (!d) return false;
-    const n =
-      typeof d.personCount === "number" ? d.personCount : countPersonDetections(d.faces);
-    return n > 0;
-  });
 
   return (
     <div className="flex h-screen bg-[#0b1220] text-white">
@@ -1084,15 +1077,6 @@ export default function App() {
 
         <div className="flex-1 p-3 overflow-auto min-h-0 flex flex-col gap-6">
           <div>
-            {anyPersonDetected ? (
-              <p
-                className="mb-3 rounded-lg border border-blue-500/40 bg-blue-950/50 px-3 py-2 text-sm text-blue-200"
-                role="status"
-                aria-live="polite"
-              >
-                Person detected (YOLOv8n) on one or more live cameras.
-              </p>
-            ) : null}
             {liveCams.length === 0 ? (
               <p className="text-gray-500 text-sm p-4">
                 No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
