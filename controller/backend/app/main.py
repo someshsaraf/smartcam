@@ -15,7 +15,7 @@ from typing import Any, List, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import camera_store, live_detection, mediamtx_manager, mqtt_bridge
@@ -641,7 +641,7 @@ def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
             continue
         if not _SAFE_NAME.match(p.name):
             continue
-        if not mp4_ios_playable(p):
+        if not mp4_probe_ok(p):
             continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
@@ -650,6 +650,7 @@ def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
 
 @app.get("/recordings/{cam_id}/files/{filename}")
 async def get_recording_file(cam_id: int, filename: str, request: Request):
+    """Stream clip bytes (200/206). Never redirect — Safari/iOS breaks on 307 for video."""
     c = camera_store.get_camera(cam_id)
     if not c:
         raise HTTPException(status_code=404, detail="camera not found")
@@ -658,9 +659,48 @@ async def get_recording_file(cam_id: int, filename: str, request: Request):
 
     edge = camera_store.edge_base_url(c)
     if edge:
-        # iOS Safari needs correct byte-range handling; edge FileResponse is more reliable than proxy.
-        target = f"{edge.rstrip('/')}/recordings/files/{filename}"
-        return RedirectResponse(url=target, status_code=307)
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}"
+        forward_headers: dict[str, str] = {}
+        range_h = request.headers.get("range")
+        if range_h:
+            forward_headers["Range"] = range_h
+        client = httpx.AsyncClient(timeout=_RECORDING_HTTP_TIMEOUT)
+        try:
+            req = client.build_request("GET", url, headers=forward_headers)
+            r = await client.send(req, stream=True)
+            if r.status_code >= 400:
+                body = await r.aread()
+                await r.aclose()
+                await client.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                raise HTTPException(status_code=r.status_code, detail=detail)
+            pass_headers = {
+                k: v
+                for k, v in r.headers.items()
+                if k.lower() in _RECORDING_PASS_HEADERS
+            }
+            if "accept-ranges" not in {k.lower() for k in pass_headers}:
+                pass_headers["Accept-Ranges"] = "bytes"
+            return StreamingResponse(
+                _stream_edge_recording_body(r, client),
+                status_code=r.status_code,
+                headers=pass_headers,
+                media_type=r.headers.get("content-type", "video/mp4"),
+            )
+        except HTTPException:
+            with suppress(Exception):
+                await client.aclose()
+            raise
+        except httpx.HTTPError as e:
+            with suppress(Exception):
+                await client.aclose()
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        except Exception as e:
+            with suppress(Exception):
+                await client.aclose()
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():

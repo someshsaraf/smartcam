@@ -184,8 +184,20 @@ function formatTime(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function recordingFileUrl(camId, name) {
-  return `${API}/recordings/${camId}/files/${encodeURIComponent(name)}`;
+function edgeBaseUrlForCamera(cameras, camId) {
+  if (!Array.isArray(cameras) || !isSetCameraId(camId)) return "";
+  const cam = cameras.find((c) => cameraIdsMatch(c.id, camId));
+  return cam?.edge_base_url ? String(cam.edge_base_url).trim() : "";
+}
+
+/** Playback URL: Pi edge direct on LAN (avoids controller 307/proxy); else controller streams the file. */
+function recordingFileUrl(camId, name, edgeBaseUrl, cameras) {
+  const edge =
+    (edgeBaseUrl && String(edgeBaseUrl).trim()) || edgeBaseUrlForCamera(cameras, camId);
+  if (edge) {
+    return `${edge.replace(/\/$/, "")}/recordings/files/${encodeURIComponent(name)}`;
+  }
+  return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}`;
 }
 
 /** First-frame preview from clip metadata (same-origin API). */
@@ -331,18 +343,18 @@ function recordingKey(r) {
   return `${r.camId}-${r.name}`;
 }
 
-/** Clip playback tuned for iOS Safari (byte-range + playsInline). */
+/** Clip player — stable src (no remount loops); user taps play (no autoplay flicker). */
 function ClipPlayer({ url, camId, filename, onRepaired }) {
   const videoRef = useRef(null);
   const autoRepairRef = useRef(false);
-  const iosPrepareRef = useRef(false);
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
-  const [playToken, setPlayToken] = useState(0);
+  const [srcVersion, setSrcVersion] = useState(0);
 
-  const reloadVideo = useCallback(() => {
-    setPlayToken((t) => t + 1);
-  }, []);
+  const videoSrc =
+    url && srcVersion > 0
+      ? `${url}${url.includes("?") ? "&" : "?"}v=${srcVersion}`
+      : url || "";
 
   const repairClip = useCallback(async () => {
     if (!isSetCameraId(camId) || !filename) return false;
@@ -350,7 +362,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
     setError("");
     try {
       const res = await fetch(
-        `${API}/recordings/${camId}/files/${encodeURIComponent(filename)}/finalize-mobile`,
+        `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(filename)}/finalize-mobile`,
         { method: "POST" }
       );
       if (!res.ok) {
@@ -364,7 +376,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
         setError(detail);
         return false;
       }
-      reloadVideo();
+      setSrcVersion((v) => v + 1);
       if (typeof onRepaired === "function") onRepaired();
       return true;
     } catch (e) {
@@ -373,44 +385,17 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
     } finally {
       setRepairing(false);
     }
-  }, [camId, filename, onRepaired, reloadVideo]);
-
-  useEffect(() => {
-    iosPrepareRef.current = false;
-  }, [camId, filename]);
-
-  useEffect(() => {
-    if (!isIosDevice() || !isSetCameraId(camId) || !filename) return undefined;
-    if (iosPrepareRef.current) return undefined;
-    iosPrepareRef.current = true;
-    let cancelled = false;
-    (async () => {
-      setRepairing(true);
-      try {
-        const res = await fetch(
-          `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(filename)}/finalize-mobile`,
-          { method: "POST" }
-        );
-        if (!cancelled && res.ok) {
-          reloadVideo();
-          if (typeof onRepaired === "function") onRepaired();
-        }
-      } catch {
-        /* fall through to normal load + error repair */
-      } finally {
-        if (!cancelled) setRepairing(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [camId, filename, onRepaired, reloadVideo]);
+  }, [camId, filename, onRepaired]);
 
   useEffect(() => {
     autoRepairRef.current = false;
     setError("");
+    setSrcVersion(0);
+  }, [url, camId, filename]);
+
+  useEffect(() => {
     const video = videoRef.current;
-    if (!video) return undefined;
+    if (!video || !videoSrc) return undefined;
 
     const onError = () => {
       if (!autoRepairRef.current && isSetCameraId(camId) && filename) {
@@ -426,31 +411,18 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
       }
     };
 
-    const onCanPlay = () => {
-      video.play().catch(() => {
-        /* User can tap play; autoplay may be blocked */
-      });
-    };
-
     video.addEventListener("error", onError);
-    video.addEventListener("canplay", onCanPlay);
-    video.load();
-
-    return () => {
-      video.removeEventListener("error", onError);
-      video.removeEventListener("canplay", onCanPlay);
-    };
-  }, [url, playToken, camId, filename, repairClip]);
+    return () => video.removeEventListener("error", onError);
+  }, [videoSrc, camId, filename, repairClip]);
 
   return (
     <div>
       <video
         ref={videoRef}
-        key={`${url}-${playToken}`}
-        src={url}
+        src={videoSrc}
         controls
         playsInline
-        preload={isIosDevice() ? "metadata" : "auto"}
+        preload="auto"
         className="w-full rounded bg-black max-h-[75vh]"
       />
       {repairing ? (
@@ -473,6 +445,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
   );
 }
 
+
 function IconDownload({ className = "w-3.5 h-3.5" }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -491,6 +464,7 @@ function IconTrash({ className = "w-3.5 h-3.5" }) {
 
 function RecordingsTimeline({
   recordings,
+  cameras,
   activeCameraName,
   loading,
   hasCameras,
@@ -504,7 +478,15 @@ function RecordingsTimeline({
   const [deleting, setDeleting] = useState(false);
   const isPage = variant === "page";
 
-  const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
+  const clipUrl = (r) =>
+    recordingFileUrl(
+      r.camId,
+      r.name,
+      r.edgeBaseUrl || edgeBaseUrlForCamera(cameras, r.camId),
+      cameras
+    );
+
+  const playUrl = playing ? clipUrl(playing) : "";
 
   return (
     <>
@@ -566,7 +548,7 @@ function RecordingsTimeline({
           ) : (
             <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
               {recordings.map((r) => {
-                const url = recordingFileUrl(r.camId, r.name);
+                const url = clipUrl(r);
                 const key = recordingKey(r);
                 const isPlaying =
                   playing != null &&
@@ -1255,6 +1237,7 @@ export default function App() {
             return files.map((r) => ({
               camId: cam.id,
               camName: cam.name,
+              edgeBaseUrl: cam.edge_base_url || "",
               name: r.name,
               size: r.size ?? 0,
               mtime: r.mtime ?? 0,
@@ -2096,6 +2079,7 @@ export default function App() {
         {(!isMobile || showClipsPanel) && (
         <RecordingsTimeline
           recordings={recordingsForActiveCamera}
+          cameras={cams}
           activeCameraName={activeCamera?.name ?? ""}
           loading={recordingsLoading}
           hasCameras={cams.length > 0}
