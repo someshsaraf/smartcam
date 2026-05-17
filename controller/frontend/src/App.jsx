@@ -1006,6 +1006,7 @@ function RecordingsTimeline({
   cameras,
   activeCameraName,
   loading,
+  listError = "",
   hasCameras,
   onRefresh,
   onDelete,
@@ -1089,10 +1090,14 @@ function RecordingsTimeline({
         >
           {!hasCameras ? (
             <p className="text-xs text-gray-500 py-2">Add a camera to see recordings.</p>
+          ) : listError ? (
+            <p className="text-xs text-amber-400/90 py-2" role="alert">
+              {listError}
+            </p>
           ) : loading && recordings.length === 0 ? (
             <p className="text-xs text-gray-500 py-2">Loading clips…</p>
           ) : recordings.length === 0 ? (
-            <p className="text-xs text-gray-500 py-2">No clips for this camera yet.</p>
+            <p className="text-xs text-gray-500 py-2">No clips for this camera yet. Tap Refresh to sync from cameras.</p>
           ) : (
             <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
               {recordings.map((r) => {
@@ -1723,6 +1728,7 @@ export default function App() {
   /** Flat list: one entry per file, newest first (all cameras). */
   const [allRecordings, setAllRecordings] = useState([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsListError, setRecordingsListError] = useState("");
   const [form, setForm] = useState({
     recording_mode: "motion",
     pre_record_seconds: 10,
@@ -1756,43 +1762,46 @@ export default function App() {
     setCams(data);
   }, []);
 
-  const loadAllRecordings = useCallback(async (cameraList) => {
+  const loadAllRecordings = useCallback(async (cameraList, { sync = false } = {}) => {
     if (!cameraList.length) {
       setAllRecordings([]);
+      setRecordingsListError("");
       return;
     }
     setRecordingsLoading(true);
+    setRecordingsListError("");
     try {
-      const results = await Promise.all(
-        cameraList.map(async (cam) => {
-          if (!isSetCameraId(cam?.id)) return [];
-          try {
-            const res = await fetch(`${API}/recordings/${cam.id}`);
-            if (!res.ok) {
-              console.warn(
-                `[clips] list failed cam=${cam.id} ${cam.name}: ${res.status} ${res.statusText}`
-              );
-              return [];
-            }
-            const files = await res.json();
-            if (!Array.isArray(files)) return [];
-            return files.map((r) => ({
-              camId: cam.id,
-              camName: cam.name,
-              edgeBaseUrl: cam.edge_base_url || "",
-              name: r.name,
-              size: r.size ?? 0,
-              mtime: r.mtime ?? 0,
-            }));
-          } catch (e) {
-            console.warn(`[clips] list error cam=${cam.id}:`, e);
-            return [];
-          }
-        })
-      );
-      const flat = results.flat();
+      if (sync) {
+        try {
+          await fetch(`${API}/recordings/sync`, { method: "POST" });
+        } catch (e) {
+          console.warn("[clips] catalog sync failed:", e);
+        }
+      }
+      const res = await fetch(`${API}/recordings?limit=1000`);
+      if (!res.ok) {
+        const msg = await readApiError(res);
+        setRecordingsListError(msg || "Could not load recordings list.");
+        setAllRecordings([]);
+        return;
+      }
+      const data = await res.json();
+      const rows = Array.isArray(data.recordings) ? data.recordings : [];
+      const flat = rows
+        .filter((r) => r && isSetCameraId(r.camId))
+        .map((r) => ({
+          camId: r.camId,
+          camName: r.camName || "",
+          edgeBaseUrl: r.edgeBaseUrl || "",
+          name: r.name,
+          size: r.size ?? 0,
+          mtime: r.mtime ?? 0,
+        }));
       flat.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
       setAllRecordings(flat);
+    } catch (e) {
+      setRecordingsListError(String(e));
+      setAllRecordings([]);
     } finally {
       setRecordingsLoading(false);
     }
@@ -1872,17 +1881,9 @@ export default function App() {
             const nowActive = motionClipIsActive(st);
             const next = { ...prev, [c.id]: st };
             if (wasActive && !nowActive) {
-              loadAllRecordingsRef.current(camsRef.current);
-              window.setTimeout(
-                () => loadAllRecordingsRef.current(camsRef.current),
-                1500
-              );
-              window.setTimeout(
-                () => loadAllRecordingsRef.current(camsRef.current),
-                5000
-              );
+              loadAllRecordingsRef.current(camsRef.current, { sync: true });
             } else if (st.filename && st.filename !== prevSt?.filename) {
-              loadAllRecordingsRef.current(camsRef.current);
+              loadAllRecordingsRef.current(camsRef.current, { sync: false });
             }
             return next;
           });
@@ -2229,7 +2230,7 @@ export default function App() {
       }
       setActiveCameraId(cam.id);
       setManualRecordingById((prev) => ({ ...prev, [cam.id]: path === "start" }));
-      const refreshClips = () => loadAllRecordings(cams);
+      const refreshClips = () => loadAllRecordings(cams, { sync: path === "stop" });
       await refreshClips();
       if (path === "stop") {
         const body =
@@ -2279,7 +2280,7 @@ export default function App() {
       setAllRecordings((prev) =>
         prev.filter((r) => !(cameraIdsMatch(r.camId, camId) && r.name === name))
       );
-      await loadAllRecordings(cams);
+      await loadAllRecordings(cams, { sync: true });
       return true;
     } catch (e) {
       alert(String(e));
@@ -2327,7 +2328,7 @@ export default function App() {
       setAllRecordings((prev) =>
         prev.filter((r) => !cameraIdsMatch(r.camId, effectiveActiveCameraId))
       );
-      await loadAllRecordings(cams);
+      await loadAllRecordings(cams, { sync: true });
       return true;
     } catch (e) {
       alert(String(e));
@@ -2703,8 +2704,9 @@ export default function App() {
           cameras={cams}
           activeCameraName={activeCamera?.name ?? ""}
           loading={recordingsLoading}
+          listError={recordingsListError}
           hasCameras={cams.length > 0}
-          onRefresh={() => loadAllRecordings(cams)}
+          onRefresh={() => loadAllRecordings(cams, { sync: true })}
           onDelete={deleteRecordingFor}
           onDeleteAll={deleteAllRecordingsForActiveCamera}
           playing={playingClip}
@@ -2741,7 +2743,7 @@ export default function App() {
         playing={playingClip}
         cameras={cams}
         onClose={() => setPlayingClip(null)}
-        onRefresh={() => loadAllRecordings(cams)}
+        onRefresh={() => loadAllRecordings(cams, { sync: true })}
       />
 
       {settingsCam && (

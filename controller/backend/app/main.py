@@ -37,6 +37,19 @@ from .events_store import (
     normalize_ts_param,
     purge_legacy_events,
 )
+from .recordings_store import (
+    count_recordings,
+    delete_all_for_camera as db_delete_all_recordings,
+    delete_recording as db_delete_recording,
+    list_all_recordings,
+)
+from .recordings_sync import (
+    list_recordings_for_api,
+    sync_all_cameras,
+    sync_all_cameras_background,
+    sync_camera_recordings,
+    upsert_from_mqtt_stop,
+)
 from .motion_recording import (
     cache_motion_status,
     fetch_edge_motion_status,
@@ -70,6 +83,7 @@ async def lifespan(app: FastAPI):
         bridge.reconcile_recording_state()
     live_detection.get_service().start(loop)
     threading.Timer(4.0, live_detection.get_service().restart_workers).start()
+    sync_all_cameras_background(RECORDINGS_ROOT)
     yield
     live_detection.get_service().stop()  # releases Hailo before other shutdown
     mediamtx_stop_embedded()
@@ -872,35 +886,80 @@ async def ws_recording(ws: WebSocket):
 # =========================
 
 
+@app.get("/recordings")
+def list_all_recordings_endpoint(
+    limit: int = 500,
+    offset: int = 0,
+    camera_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Fast clip catalog from SQLite (files stay on edge or local disk)."""
+    limit = max(1, min(1000, int(limit)))
+    offset = max(0, int(offset))
+    if camera_id is not None:
+        c = camera_store.get_camera(int(camera_id))
+        if not c:
+            raise HTTPException(status_code=404, detail="camera not found")
+    rows = list_all_recordings(camera_id=camera_id, limit=limit, offset=offset)
+    cams = {int(c["id"]): c for c in camera_store.list_cameras()}
+    recordings: list[dict[str, Any]] = []
+    for r in rows:
+        cid = int(r["camera_id"])
+        cam = cams.get(cid)
+        recordings.append(
+            {
+                "camId": cid,
+                "camName": cam.get("name", "") if cam else "",
+                "edgeBaseUrl": (
+                    str(cam.get("edge_base_url") or "").strip() if cam else ""
+                ),
+                "name": r["name"],
+                "size": r["size"],
+                "mtime": r["mtime"],
+            }
+        )
+    return {
+        "recordings": recordings,
+        "count": len(recordings),
+        "total": count_recordings(camera_id),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.post("/recordings/sync")
+def sync_recordings_catalog(camera_id: Optional[int] = None) -> dict[str, Any]:
+    """Refresh SQLite catalog from edge agents (or local disk)."""
+    if camera_id is not None:
+        cid = int(camera_id)
+        try:
+            return {
+                "results": [
+                    sync_camera_recordings(cid, recordings_dir=_recordings_dir(cid))
+                ]
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+    try:
+        return {"results": sync_all_cameras(recordings_root=RECORDINGS_ROOT)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 @app.get("/recordings/{cam_id}")
-def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
+def list_recordings_endpoint(
+    cam_id: int,
+    limit: int = 200,
+    offset: int = 0,
+) -> List[dict[str, Any]]:
     c = camera_store.get_camera(cam_id)
     if not c:
         raise HTTPException(status_code=404, detail="camera not found")
-    edge = camera_store.edge_base_url(c)
-    if edge:
-        try:
-            r = httpx.get(f"{edge}/recordings", timeout=30.0)
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, list):
-                raise ValueError("edge returned non-list")
-            return data
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"edge list failed: {e}") from e
-
-    d = _recordings_dir(cam_id)
-    out: list[dict[str, Any]] = []
-    for p in sorted(d.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p.name.startswith("_") or p.name.startswith("."):
-            continue
-        if not _SAFE_NAME.match(p.name):
-            continue
-        if not mp4_probe_ok(p):
-            continue
-        st = p.stat()
-        out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
-    return out
+    try:
+        return list_recordings_for_api(int(cam_id), limit=limit, offset=offset)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/recordings/{cam_id}/files/{filename}")
@@ -1084,6 +1143,7 @@ def delete_recording_file(cam_id: int, filename: str):
             if r.status_code == 404:
                 raise HTTPException(status_code=404, detail="not found")
             r.raise_for_status()
+            db_delete_recording(int(cam_id), filename)
             return {"ok": True}
         except HTTPException:
             raise
@@ -1097,6 +1157,7 @@ def delete_recording_file(cam_id: int, filename: str):
         path.unlink()
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    db_delete_recording(int(cam_id), filename)
     return {"ok": True}
 
 
@@ -1129,13 +1190,17 @@ def delete_all_recording_files(cam_id: int):
     edge = camera_store.edge_base_url(c)
     if edge:
         try:
-            return _delete_all_on_edge(edge)
+            result = _delete_all_on_edge(edge)
+            db_delete_all_recordings(int(cam_id))
+            return result
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
 
-    return _delete_all_local(cam_id)
+    result = _delete_all_local(cam_id)
+    db_delete_all_recordings(int(cam_id))
+    return result
 
 
 # =========================

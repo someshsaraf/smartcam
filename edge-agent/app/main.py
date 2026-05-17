@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from surveillance_shared.ffmpeg_mobile import (
     finalize_mp4_for_mobile,
     mp4_ios_playable,
+    mp4_listable_fast,
     mp4_probe_ok,
 )
 
@@ -252,7 +253,7 @@ def list_recordings() -> List[dict[str, Any]]:
             continue
         if not _SAFE_NAME.match(p.name):
             continue
-        if not mp4_probe_ok(p):
+        if not mp4_listable_fast(p):
             continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})

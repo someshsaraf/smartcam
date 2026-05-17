@@ -6,3 +6,4 @@ data/mosquitto.passwd
 data/mosquitto_persistence/
 data/mediamtx.stderr.log
 data/events.db
+data/recordings.db
