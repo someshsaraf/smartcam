@@ -41,6 +41,27 @@ def _overlay_delay_ms() -> int:
     return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 6500, 0, 15000)
 
 
+def _parse_float_env(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(lo, min(hi, v))
+
+
+def _person_hold_sec() -> float:
+    """Keep last person detection visible this long after a miss (reduces flicker)."""
+    return _parse_float_env("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
+
+
+def _people_from_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        f
+        for f in faces
+        if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
+    ]
+
+
 class _DelayedFrameBuffer:
     """Hold recent frames; return the newest frame at least delay_sec old."""
 
@@ -149,6 +170,8 @@ class _CameraWorker(threading.Thread):
         self._min_interval_sec = max(0.05, min_interval_sec)
         self._inference_delay_sec = max(0.0, float(inference_delay_sec))
         self._frame_buffer = _DelayedFrameBuffer(self._inference_delay_sec)
+        self._person_hold_sec = _person_hold_sec()
+        self._held_snapshot: Optional[tuple[float, list[dict[str, Any]], list[dict[str, Any]]]] = None
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -253,11 +276,17 @@ class _CameraWorker(threading.Thread):
                 faces = []
                 infer_error = str(e)
 
-            people = [
-                f
-                for f in faces
-                if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
-            ]
+            people = _people_from_faces(faces)
+            if len(people) > 0:
+                self._held_snapshot = (now, list(faces), people)
+            elif self._held_snapshot is not None:
+                held_at, held_faces, held_people = self._held_snapshot
+                if now - held_at <= self._person_hold_sec:
+                    faces = held_faces
+                    people = held_people
+                else:
+                    self._held_snapshot = None
+
             meta = inference_debug_status()
             last_send = now
             self._hub.broadcast_json(
@@ -306,10 +335,11 @@ class LiveDetectionService:
                 "workers": len(self._workers),
                 "worker_cameras": worker_cameras,
                 "interval_frames": _parse_positive_int(
-                    "SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 5, 1, 120
+                    "SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 2, 1, 120
                 ),
                 "overlay_delay_ms": _overlay_delay_ms(),
                 "inference_delay_ms": _overlay_delay_ms(),
+                "person_hold_sec": _person_hold_sec(),
                 **inference_debug_status(),
             }
 
@@ -348,7 +378,7 @@ class LiveDetectionService:
             self._workers.clear()
 
             max_cams = _parse_positive_int("SMARTCAM_LIVE_DETECTION_MAX_CAMERAS", 6, 1, 16)
-            interval = _parse_positive_int("SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 5, 1, 120)
+            interval = _parse_positive_int("SMARTCAM_FACE_DETECT_INTERVAL_FRAMES", 2, 1, 120)
             min_gap = float(os.environ.get("SMARTCAM_FACE_WS_MIN_INTERVAL_SEC", "0.12"))
             try:
                 min_gap = float(min_gap)
