@@ -56,15 +56,33 @@ def _box_plausible(box: dict[str, Any]) -> bool:
     return 0.12 <= ar <= 6.0
 
 
-def _normalize_model_corners(
-    y0: float, x0: float, y1: float, x1: float, input_size: int
-) -> tuple[float, float, float, float]:
-    """Hailo may return 0..1 or 0..input_size corner coords."""
-    vals = [y0, x0, y1, x1]
+def _hailo_coord_order() -> str:
+    """Corner order in each detection row: yxyx (Hailo postprocess default) or xyxy."""
+    raw = os.environ.get("SMARTCAM_HAILO_COORD_ORDER", "yxyx").strip().lower()
+    return "xyxy" if raw in ("xyxy", "xy", "x") else "yxyx"
+
+
+def _corners_from_row(
+    row: Sequence[float], input_size: int
+) -> Optional[tuple[float, float, float, float]]:
+    """Parse Hailo row to xmin, ymin, xmax, ymax in model-input normalized space."""
+    if len(row) < 4:
+        return None
+    c0, c1, c2, c3 = (float(row[i]) for i in range(4))
+    vals = [c0, c1, c2, c3]
     if max(vals) > 1.5:
         inv = 1.0 / float(input_size)
         vals = [v * inv for v in vals]
-    return float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3])
+        c0, c1, c2, c3 = vals
+    if not all(np.isfinite(v) for v in (c0, c1, c2, c3)):
+        return None
+    if _hailo_coord_order() == "yxyx":
+        ymin, xmin, ymax, xmax = c0, c1, c2, c3
+    else:
+        xmin, ymin, xmax, ymax = c0, c1, c2, c3
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return xmin, ymin, xmax, ymax
 
 
 def _default_hef_path() -> str:
@@ -185,17 +203,15 @@ def _parse_person_rows(
     if arr.ndim != 2 or arr.shape[1] < 5:
         return
     for row in arr:
-        y0, x0, y1, x1, score = (float(row[i]) for i in range(5))
+        score = float(row[4])
         if score > 1.0 and score <= 100.0:
             score /= 100.0
-        if not all(np.isfinite(v) for v in (y0, x0, y1, x1, score)):
+        if not np.isfinite(score) or score <= 0.0 or score < score_min:
             continue
-        if score <= 0.0 or score < score_min:
+        corners = _corners_from_row(row, det.input_size)
+        if corners is None:
             continue
-        y0, x0, y1, x1 = _normalize_model_corners(y0, x0, y1, x1, det.input_size)
-        if y1 <= y0 or x1 <= x0:
-            continue
-        box = det._row_to_frame_box(y0, x0, y1, x1, score)
+        box = det._row_to_frame_box(*corners, score)
         if box is None:
             continue
         if box["w"] * det._lb_src_w < det.min_box_px or box["h"] * det._lb_src_h < det.min_box_px:
@@ -221,7 +237,7 @@ class HailoYolov8Detector:
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
-        self._use_letterbox = _env_bool("SMARTCAM_HAILO_LETTERBOX", True)
+        self._use_letterbox = _env_bool("SMARTCAM_HAILO_LETTERBOX", False)
         self._infer_lock = threading.Lock()
         self._init_lock = threading.Lock()
         self._ready = False
@@ -378,15 +394,15 @@ class HailoYolov8Detector:
         self._lb_src_h = h
         return np.ascontiguousarray(canvas, dtype=np.uint8)
 
-    def _box_from_model_coords(
-        self, y0: float, x0: float, y1: float, x1: float, score: float
+    def _unmap_letterbox_corners(
+        self, xmin: float, ymin: float, xmax: float, ymax: float, score: float
     ) -> Optional[dict[str, Any]]:
-        """Map Hailo norm coords (letterboxed 640) back to source-frame normalized box."""
+        """Map model-input normalized corners (letterboxed 640) to source-frame box."""
         s = float(self.input_size)
-        x1p = (x0 * s - self._lb_pad_x) / self._lb_scale
-        y1p = (y0 * s - self._lb_pad_y) / self._lb_scale
-        x2p = (x1 * s - self._lb_pad_x) / self._lb_scale
-        y2p = (y1 * s - self._lb_pad_y) / self._lb_scale
+        x1p = (xmin * s - self._lb_pad_x) / self._lb_scale
+        y1p = (ymin * s - self._lb_pad_y) / self._lb_scale
+        x2p = (xmax * s - self._lb_pad_x) / self._lb_scale
+        y2p = (ymax * s - self._lb_pad_y) / self._lb_scale
         return self._make_box(
             x1p / float(self._lb_src_w),
             y1p / float(self._lb_src_h),
@@ -396,29 +412,16 @@ class HailoYolov8Detector:
         )
 
     def _row_to_frame_box(
-        self, y0: float, x0: float, y1: float, x1: float, score: float
+        self, xmin: float, ymin: float, xmax: float, ymax: float, score: float
     ) -> Optional[dict[str, Any]]:
-        """Map Hailo row to source-frame box.
-
-        Some HEF builds already emit source-normalized corners; letterbox unmap can
-        then shift boxes onto empty wall/ceiling. Prefer the plausible candidate.
-        """
-        # Baseline mapping (worked with stretch preprocess): xmin, ymin, xmax, ymax.
-        direct = self._make_box(x0, y0, x1, y1, score)
-        if not self._use_letterbox:
-            return direct if _box_plausible(direct) else None
-        unmapped = self._box_from_model_coords(y0, x0, y1, x1, score)
-        direct_ok = direct is not None and _box_plausible(direct)
-        unmapped_ok = unmapped is not None and _box_plausible(unmapped)
-        if direct_ok and unmapped_ok:
-            d_area = float(direct["w"]) * float(direct["h"])
-            u_area = float(unmapped["w"]) * float(unmapped["h"])
-            return direct if d_area <= u_area else unmapped
-        if direct_ok:
-            return direct
-        if unmapped_ok:
-            return unmapped
-        return unmapped if unmapped is not None else direct
+        """Map Hailo row corners to source-frame normalized box."""
+        if self._use_letterbox:
+            box = self._unmap_letterbox_corners(xmin, ymin, xmax, ymax, score)
+        else:
+            box = self._make_box(xmin, ymin, xmax, ymax, score)
+        if box is None or not _box_plausible(box):
+            return None
+        return box
 
     def _infer(self, frame_bgr: np.ndarray) -> Optional[dict[str, Any]]:
         if not self._init():
@@ -556,8 +559,11 @@ class HailoYolov8Detector:
                     score /= 100.0
                 if not np.isfinite(score) or score < threshold:
                     continue
-                box = self._coords_to_box(vals[:4], score)
-                if box is None or not _box_plausible(box):
+                corners = _corners_from_row(vals[:4], self.input_size)
+                if corners is None:
+                    continue
+                box = self._row_to_frame_box(*corners, score)
+                if box is None:
                     continue
                 if box["w"] * self.input_size < self.min_box_px or box["h"] * self.input_size < self.min_box_px:
                     continue
