@@ -34,9 +34,32 @@ from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     mp4_probe_ok,
     remove_invalid_mp4,
 )
+from surveillance_shared.recording_thumbnails import (  # noqa: E402
+    ensure_recording_thumbnail,
+    write_recording_thumbnail_from_jpeg,
+)
 from surveillance_shared.rtsp_env import apply_rtsp_env  # noqa: E402
 
 apply_rtsp_env()
+
+
+def _write_clip_thumbnail(
+    mp4_path: Path,
+    *,
+    detection_jpeg: Optional[bytes] = None,
+    pre_jpegs: Optional[list[bytes]] = None,
+    pre_seconds: int = 10,
+) -> None:
+    if not mp4_ios_playable(mp4_path):
+        return
+    jpeg = detection_jpeg
+    if not jpeg and pre_jpegs:
+        jpeg = pre_jpegs[-1]
+    if jpeg and write_recording_thumbnail_from_jpeg(jpeg, mp4_path):
+        return
+    seek = max(0.1, float(max(1, int(pre_seconds))) - 0.5)
+    if not ensure_recording_thumbnail(mp4_path, seek_seconds=seek):
+        print("[edge] thumbnail failed:", mp4_path.name)
 
 SEGMENT_SECONDS = 600
 # Match LocalPublisher PRESETS (local_publisher.py) so RTSP reads keep up with the
@@ -125,6 +148,8 @@ class EdgeRecorder:
         self._external_clip_cooldown_until = 0.0
         self._clip_busy_lock = threading.Lock()
         self._clip_busy = False
+        self._clip_thumb_by_rid: dict[str, bytes] = {}
+        self._clip_thumb_lock = threading.Lock()
         self._on_settings_changed = on_settings_changed
         if model_dir:
             import os
@@ -338,6 +363,7 @@ class EdgeRecorder:
         pre_seconds: Optional[int] = None,
         post_seconds: Optional[int] = None,
         objects_detected: Optional[list[str]] = None,
+        thumbnail_jpeg: Optional[bytes] = None,
     ) -> dict[str, Any]:
         settings = self.snapshot_settings()
         if settings.get("recording_mode") != "motion":
@@ -403,6 +429,9 @@ class EdgeRecorder:
                 "filename": None,
                 "objects_detected": tags,
             }
+        if thumbnail_jpeg:
+            with self._clip_thumb_lock:
+                self._clip_thumb_by_rid[rid] = bytes(thumbnail_jpeg)
 
         threading.Thread(
             target=self._start_external_motion_clip,
@@ -596,6 +625,16 @@ class EdgeRecorder:
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return
 
+            detection_jpeg: Optional[bytes] = None
+            with self._clip_thumb_lock:
+                detection_jpeg = self._clip_thumb_by_rid.pop(rid, None)
+            _write_clip_thumbnail(
+                out_mp4,
+                detection_jpeg=detection_jpeg,
+                pre_jpegs=pre_jpegs,
+                pre_seconds=pre_seconds,
+            )
+
             with self._pm_lock:
                 self._pm_status["filename"] = out_mp4.name
 
@@ -610,6 +649,8 @@ class EdgeRecorder:
             print("[edge] motion clip failed:", e)
             self._publish(status="Stop", recording_id=rid, local_path="")
         finally:
+            with self._clip_thumb_lock:
+                self._clip_thumb_by_rid.pop(rid, None)
             saved_fn: Optional[str] = None
             with self._pm_lock:
                 saved_fn = self._pm_status.get("filename")
@@ -712,6 +753,8 @@ class EdgeRecorder:
                 ok = finalize_mp4_for_mobile(out_path)
             if ok and mp4_ios_playable(out_path):
                 playable_name = out_path.name
+                pre_s = int(self.snapshot_settings().get("pre_record_seconds", 10))
+                _write_clip_thumbnail(out_path, pre_seconds=pre_s)
             else:
                 print("[edge] manual clip unusable, removing:", out_path.name)
                 remove_invalid_mp4(out_path)
@@ -1063,6 +1106,13 @@ class EdgeRecorder:
                 print("[edge] motion clip not iOS-playable, removing:", out_mp4.name)
                 remove_invalid_mp4(out_mp4)
                 return
+
+            pre_s = int(self.snapshot_settings().get("pre_record_seconds", 10))
+            _write_clip_thumbnail(
+                out_mp4,
+                pre_jpegs=pre_jpegs,
+                pre_seconds=pre_s,
+            )
 
             self._publish(
                 status="Stop",

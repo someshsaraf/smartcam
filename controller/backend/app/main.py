@@ -64,6 +64,11 @@ from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     mp4_ios_playable,
     mp4_probe_ok,
 )
+from surveillance_shared.recording_thumbnails import (  # noqa: E402
+    ensure_recording_thumbnail,
+    recording_thumbnail_path,
+    remove_recording_thumbnail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -915,6 +920,7 @@ def list_all_recordings_endpoint(
                 "name": r["name"],
                 "size": r["size"],
                 "mtime": r["mtime"],
+                "hasThumbnail": bool(r.get("has_thumbnail")),
             }
         )
     return {
@@ -960,6 +966,52 @@ def list_recordings_endpoint(
         return list_recordings_for_api(int(cam_id), limit=limit, offset=offset)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/recordings/{cam_id}/files/{filename}/thumbnail")
+async def get_recording_thumbnail(cam_id: int, filename: str):
+    """JPEG clip preview (edge or local disk; generated on demand if missing)."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}/thumbnail"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(url)
+                if r.status_code >= 400:
+                    detail = r.text[:500] if r.text else r.reason_phrase
+                    raise HTTPException(status_code=r.status_code, detail=detail)
+                return Response(
+                    content=r.content,
+                    media_type=r.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    mp4 = _recordings_dir(cam_id) / filename
+    if not mp4.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(mp4):
+        raise HTTPException(status_code=422, detail="recording incomplete or corrupt")
+    st = c.get("settings") or {}
+    pre_s = int(st.get("pre_record_seconds", 10))
+    seek = max(0.1, float(max(1, pre_s)) - 0.5)
+    if not ensure_recording_thumbnail(mp4, seek_seconds=seek):
+        raise HTTPException(status_code=404, detail="thumbnail unavailable")
+    thumb = recording_thumbnail_path(mp4)
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/recordings/{cam_id}/files/{filename}")
@@ -1154,6 +1206,7 @@ def delete_recording_file(cam_id: int, filename: str):
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     try:
+        remove_recording_thumbnail(path)
         path.unlink()
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1172,6 +1225,7 @@ def _delete_all_local(cam_id: int) -> dict[str, Any]:
             if not _SAFE_NAME.match(p.name):
                 continue
             try:
+                remove_recording_thumbnail(p)
                 p.unlink()
                 deleted += 1
             except OSError:

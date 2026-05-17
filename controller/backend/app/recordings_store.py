@@ -48,11 +48,25 @@ def _connect() -> sqlite3.Connection:
         """
     )
     conn.commit()
+    _migrate_schema(conn)
     _CONN = conn
     return conn
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(recordings)").fetchall()}
+    if "has_thumbnail" not in cols:
+        conn.execute(
+            "ALTER TABLE recordings ADD COLUMN has_thumbnail INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        has_thumb = int(row["has_thumbnail"]) != 0
+    except (IndexError, KeyError):
+        has_thumb = False
     return {
         "camera_id": int(row["camera_id"]),
         "name": str(row["filename"]),
@@ -60,6 +74,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "size": int(row["size"]),
         "mtime": float(row["mtime"]),
         "recording_id": row["recording_id"],
+        "has_thumbnail": has_thumb,
     }
 
 
@@ -70,6 +85,7 @@ def upsert_recording(
     size: int,
     mtime: float,
     recording_id: Optional[str] = None,
+    has_thumbnail: Optional[bool] = None,
 ) -> None:
     if not isinstance(camera_id, int) or camera_id < 0:
         raise ValueError("camera_id must be a non-negative int")
@@ -77,20 +93,40 @@ def upsert_recording(
     if not fn:
         raise ValueError("filename required")
     ts = _utc_iso()
+    thumb_val: Optional[int] = None
+    if has_thumbnail is not None:
+        thumb_val = 1 if has_thumbnail else 0
     with _LOCK:
         conn = _connect()
-        conn.execute(
-            """
-            INSERT INTO recordings (camera_id, filename, size, mtime, recording_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(camera_id, filename) DO UPDATE SET
-                size = excluded.size,
-                mtime = excluded.mtime,
-                recording_id = COALESCE(excluded.recording_id, recordings.recording_id),
-                updated_at = excluded.updated_at
-            """,
-            (int(camera_id), fn, int(size), float(mtime), recording_id, ts),
-        )
+        if thumb_val is None:
+            conn.execute(
+                """
+                INSERT INTO recordings (camera_id, filename, size, mtime, recording_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id, filename) DO UPDATE SET
+                    size = excluded.size,
+                    mtime = excluded.mtime,
+                    recording_id = COALESCE(excluded.recording_id, recordings.recording_id),
+                    updated_at = excluded.updated_at
+                """,
+                (int(camera_id), fn, int(size), float(mtime), recording_id, ts),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO recordings (
+                    camera_id, filename, size, mtime, recording_id, updated_at, has_thumbnail
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id, filename) DO UPDATE SET
+                    size = excluded.size,
+                    mtime = excluded.mtime,
+                    recording_id = COALESCE(excluded.recording_id, recordings.recording_id),
+                    updated_at = excluded.updated_at,
+                    has_thumbnail = excluded.has_thumbnail
+                """,
+                (int(camera_id), fn, int(size), float(mtime), recording_id, ts, thumb_val),
+            )
         conn.commit()
 
 
@@ -137,7 +173,7 @@ def list_recordings(
         conn = _connect()
         rows = conn.execute(
             """
-            SELECT camera_id, filename, size, mtime, recording_id
+            SELECT camera_id, filename, size, mtime, recording_id, has_thumbnail
             FROM recordings
             WHERE camera_id = ?
             ORDER BY mtime DESC, filename DESC
@@ -161,7 +197,7 @@ def list_all_recordings(
         if camera_id is not None:
             rows = conn.execute(
                 """
-                SELECT camera_id, filename, size, mtime, recording_id
+                SELECT camera_id, filename, size, mtime, recording_id, has_thumbnail
                 FROM recordings
                 WHERE camera_id = ?
                 ORDER BY mtime DESC, filename DESC
@@ -172,7 +208,7 @@ def list_all_recordings(
         else:
             rows = conn.execute(
                 """
-                SELECT camera_id, filename, size, mtime, recording_id
+                SELECT camera_id, filename, size, mtime, recording_id, has_thumbnail
                 FROM recordings
                 ORDER BY mtime DESC, filename DESC
                 LIMIT ? OFFSET ?
@@ -212,6 +248,7 @@ def reconcile_camera_from_edge_list(
             continue
         names.add(fn)
         try:
+            has_thumb = item.get("has_thumbnail")
             upsert_recording(
                 camera_id,
                 fn,
@@ -222,6 +259,7 @@ def reconcile_camera_from_edge_list(
                     if item.get("recording_id")
                     else None
                 ),
+                has_thumbnail=bool(has_thumb) if has_thumb is not None else None,
             )
             upserted += 1
         except (TypeError, ValueError) as e:

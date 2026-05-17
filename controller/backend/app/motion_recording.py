@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import threading
 import time
 from typing import Any, Optional
 
+import cv2
 import httpx
+import numpy as np
 
 from . import camera_store
 from .events_store import append_event
@@ -83,6 +86,30 @@ _TRIGGER_COOLDOWN_SEC = 2.0
 _HANDLE_MIN_INTERVAL_SEC = 0.35
 
 
+_THUMB_JPEG_MAX_BYTES = 512_000
+_THUMB_MAX_WIDTH = 480
+
+
+def _encode_detection_thumbnail_b64(frame_bgr: Any) -> Optional[str]:
+    """JPEG base64 of the Hailo inference frame (person-detected moment)."""
+    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        return None
+    if frame_bgr.ndim < 2:
+        return None
+    img = frame_bgr
+    h, w = img.shape[:2]
+    if w > _THUMB_MAX_WIDTH:
+        scale = float(_THUMB_MAX_WIDTH) / float(w)
+        img = cv2.resize(img, (_THUMB_MAX_WIDTH, max(1, int(h * scale))))
+    enc_ok, jpg = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not enc_ok:
+        return None
+    blob = jpg.tobytes()
+    if len(blob) < 64 or len(blob) > _THUMB_JPEG_MAX_BYTES:
+        return None
+    return base64.b64encode(blob).decode("ascii")
+
+
 def _normalize_tags(tags: Optional[list[str]]) -> list[str]:
     if not tags:
         return ["person"]
@@ -100,6 +127,7 @@ def _trigger_motion_clip(
     *,
     tags: list[str],
     source: str,
+    detection_frame: Optional[Any] = None,
 ) -> dict[str, Any]:
     pre = int(settings.get("pre_record_seconds", 10))
     post = int(settings.get("post_record_seconds", 50))
@@ -109,6 +137,9 @@ def _trigger_motion_clip(
         "objects_detected": tags,
         "source": source,
     }
+    thumb_b64 = _encode_detection_thumbnail_b64(detection_frame)
+    if thumb_b64:
+        body["thumbnail_jpeg_b64"] = thumb_b64
     url = f"{edge.rstrip('/')}/recordings/motion/trigger"
     try:
         r = httpx.post(url, json=body, timeout=_MOTION_CLIP_TIMEOUT)
@@ -137,6 +168,7 @@ def handle_person_detected(
     tags: Optional[list[str]] = None,
     person_count: int = 1,
     source: str = "person_detection",
+    detection_frame: Optional[Any] = None,
 ) -> None:
     """
     State machine on each person-positive inference frame:
@@ -176,7 +208,12 @@ def handle_person_detected(
             _last_trigger_by_cam[cam_id] = now
 
         result = _trigger_motion_clip(
-            cam_id, edge, settings, tags=tag_list, source=source
+            cam_id,
+            edge,
+            settings,
+            tags=tag_list,
+            source=source,
+            detection_frame=detection_frame,
         )
         if result.get("accepted"):
             st = fetch_edge_motion_status(edge, cam_id)
@@ -219,4 +256,6 @@ def schedule_motion_clip_trigger(
     source: str = "person_detection",
 ) -> None:
     """Backward-compatible entry: run person state machine."""
-    handle_person_detected(cam_id, tags=tags, source=source, person_count=1)
+    handle_person_detected(
+        cam_id, tags=tags, source=source, person_count=1, detection_frame=None
+    )

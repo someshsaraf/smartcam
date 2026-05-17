@@ -268,12 +268,25 @@ function recordingFileUrl(camId, name, edgeBaseUrl, cameras, opts = {}) {
   return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}`;
 }
 
-/** First-frame preview from clip metadata (same-origin API). */
-function RecordingThumbnail({ src, className = "" }) {
-  const ref = useRef(null);
+function recordingThumbnailUrl(camId, name) {
+  if (!isSetCameraId(camId) || !name) return "";
+  return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}/thumbnail`;
+}
+
+/** JPEG preview from saved thumbnail; falls back to video metadata seek if missing. */
+function RecordingThumbnail({ camId, name, videoFallbackSrc, className = "" }) {
+  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const videoRef = useRef(null);
+  const thumbSrc = recordingThumbnailUrl(camId, name);
+
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    setUseVideoFallback(false);
+  }, [camId, name, thumbSrc]);
+
+  useEffect(() => {
+    if (useVideoFallback) return undefined;
+    const el = videoRef.current;
+    if (!el) return undefined;
     const seek = () => {
       const d = el.duration;
       const t = Number.isFinite(d) && d > 0 ? Math.min(0.5, d * 0.05) : 0.1;
@@ -286,11 +299,29 @@ function RecordingThumbnail({ src, className = "" }) {
     el.addEventListener("loadedmetadata", seek);
     if (el.readyState >= 1) seek();
     return () => el.removeEventListener("loadedmetadata", seek);
-  }, [src]);
+  }, [useVideoFallback, videoFallbackSrc]);
+
+  if (!useVideoFallback && thumbSrc) {
+    return (
+      <img
+        src={thumbSrc}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={() => setUseVideoFallback(true)}
+        className={className}
+      />
+    );
+  }
+
+  if (!videoFallbackSrc) {
+    return <div className={`bg-gray-900 ${className}`} aria-hidden />;
+  }
+
   return (
     <video
-      ref={ref}
-      src={src}
+      ref={videoRef}
+      src={videoFallbackSrc}
       preload="metadata"
       muted
       playsInline
@@ -1167,7 +1198,9 @@ function RecordingsTimeline({
                         title="Play clip"
                       >
                         <RecordingThumbnail
-                          src={url}
+                          camId={r.camId}
+                          name={r.name}
+                          videoFallbackSrc={url}
                           className="w-full h-full object-cover pointer-events-none"
                         />
                       </button>
@@ -1832,6 +1865,7 @@ export default function App() {
           name: r.name,
           size: r.size ?? 0,
           mtime: r.mtime ?? 0,
+          hasThumbnail: Boolean(r.hasThumbnail),
         }));
       flat.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
       setAllRecordings(flat);

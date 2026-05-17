@@ -5,6 +5,8 @@ from __future__ import annotations
 from . import env_loader  # noqa: F401  # loads edge-agent/.env
 
 import asyncio
+import base64
+import binascii
 import logging
 import os
 import re
@@ -23,6 +25,12 @@ from surveillance_shared.ffmpeg_mobile import (
     mp4_ios_playable,
     mp4_listable_fast,
     mp4_probe_ok,
+)
+from surveillance_shared.recording_thumbnails import (
+    ensure_recording_thumbnail,
+    recording_thumbnail_path,
+    remove_recording_thumbnail,
+    thumbnail_exists_for,
 )
 
 from .local_publisher import LocalPublisher
@@ -256,8 +264,44 @@ def list_recordings() -> List[dict[str, Any]]:
         if not mp4_listable_fast(p):
             continue
         st = p.stat()
-        out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
+        out.append(
+            {
+                "name": p.name,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "has_thumbnail": thumbnail_exists_for(p),
+            }
+        )
     return out
+
+
+@app.get("/recordings/files/{filename}/thumbnail")
+def get_recording_thumbnail(filename: str):
+    """JPEG preview for clip list UIs (generated on clip finalize or on first request)."""
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    mp4 = _rec_root / filename
+    if not mp4.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not mp4_listable_fast(mp4):
+        raise HTTPException(status_code=422, detail="recording incomplete or corrupt")
+    pre_s = 10
+    if _recorder is not None:
+        try:
+            pre_s = int(_recorder.snapshot_settings().get("pre_record_seconds", 10))
+        except (TypeError, ValueError):
+            pre_s = 10
+    seek = max(0.1, float(max(1, pre_s)) - 0.5)
+    if not ensure_recording_thumbnail(mp4, seek_seconds=seek):
+        raise HTTPException(status_code=404, detail="thumbnail unavailable")
+    thumb = recording_thumbnail_path(mp4)
+    if not thumb.is_file():
+        raise HTTPException(status_code=404, detail="thumbnail not found")
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/recordings/files/{filename}")
@@ -323,6 +367,7 @@ def delete_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
+    remove_recording_thumbnail(path)
     path.unlink()
     return {"ok": True}
 
@@ -340,6 +385,7 @@ def delete_all_files():
         if not _SAFE_NAME.match(p.name):
             continue
         try:
+            remove_recording_thumbnail(p)
             p.unlink()
             deleted += 1
         except OSError as e:
@@ -374,10 +420,14 @@ def manual_record_status():
     return _recorder.manual_recording_status()
 
 
+_THUMB_B64_MAX_BYTES = 512_000
+
+
 def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
     pre = None
     post = None
     tags: Optional[list[str]] = None
+    thumbnail_jpeg: Optional[bytes] = None
     if isinstance(body, dict):
         if body.get("pre_record_seconds") is not None:
             pre = int(body["pre_record_seconds"])
@@ -386,7 +436,22 @@ def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
         raw_tags = body.get("objects_detected")
         if isinstance(raw_tags, list):
             tags = [str(t) for t in raw_tags if t is not None]
-    return {"pre_seconds": pre, "post_seconds": post, "objects_detected": tags}
+        raw_thumb = body.get("thumbnail_jpeg_b64")
+        if isinstance(raw_thumb, str) and raw_thumb.strip():
+            try:
+                thumb = base64.b64decode(raw_thumb.strip(), validate=True)
+                if len(thumb) > _THUMB_B64_MAX_BYTES:
+                    raise ValueError("thumbnail_jpeg_b64 too large")
+                if len(thumb) >= 64:
+                    thumbnail_jpeg = thumb
+            except (binascii.Error, ValueError) as e:
+                raise ValueError(f"invalid thumbnail_jpeg_b64: {e}") from e
+    return {
+        "pre_seconds": pre,
+        "post_seconds": post,
+        "objects_detected": tags,
+        "thumbnail_jpeg": thumbnail_jpeg,
+    }
 
 
 @app.post("/recordings/motion/trigger")
@@ -400,6 +465,7 @@ async def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
             pre_seconds=parsed["pre_seconds"],
             post_seconds=parsed["post_seconds"],
             objects_detected=parsed["objects_detected"],
+            thumbnail_jpeg=parsed.get("thumbnail_jpeg"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

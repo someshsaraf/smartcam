@@ -312,6 +312,7 @@ class _CameraWorker(threading.Thread):
                     cid,
                     tags=["person"],
                     person_count=len(people),
+                    detection_frame=infer_frame,
                 )
             self._prev_person_detected = person_detected
 

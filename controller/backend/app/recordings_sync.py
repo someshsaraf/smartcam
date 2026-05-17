@@ -21,6 +21,7 @@ from ._shared_path import ensure_shared_on_path
 
 ensure_shared_on_path()
 from surveillance_shared.ffmpeg_mobile import mp4_listable_fast  # noqa: E402
+from surveillance_shared.recording_thumbnails import thumbnail_exists_for  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,14 @@ def _list_local_fast(recordings_dir: Path) -> list[dict[str, Any]]:
             st = p.stat()
         except OSError:
             continue
-        out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
+        out.append(
+            {
+                "name": p.name,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "has_thumbnail": thumbnail_exists_for(p),
+            }
+        )
     out.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
     return out
 
@@ -144,6 +152,7 @@ def list_recordings_for_api(
             "name": r["name"],
             "size": r["size"],
             "mtime": r["mtime"],
+            "has_thumbnail": bool(r.get("has_thumbnail")),
         }
         for r in rows
     ]
