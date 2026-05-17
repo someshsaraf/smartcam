@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from . import env_loader  # noqa: F401  # loads edge-agent/.env
 
+import asyncio
 import logging
 import os
 import re
@@ -15,7 +16,13 @@ from . import _shared_bootstrap  # noqa: F401
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+
+from surveillance_shared.ffmpeg_mobile import (
+    finalize_mp4_for_mobile,
+    mp4_ios_playable,
+    mp4_probe_ok,
+)
 
 from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
@@ -221,6 +228,20 @@ def health():
     }
 
 
+@app.get("/recordings/names")
+def list_all_recording_names() -> List[str]:
+    """All .mp4 basenames on disk (including corrupt/partial); used for bulk delete fallback."""
+    root = _rec_root
+    root.mkdir(parents=True, exist_ok=True)
+    names: list[str] = []
+    for p in root.glob("*.mp4"):
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if _SAFE_NAME.match(p.name):
+            names.append(p.name)
+    return sorted(names, reverse=True)
+
+
 @app.get("/recordings")
 def list_recordings() -> List[dict[str, Any]]:
     root = _rec_root
@@ -228,6 +249,10 @@ def list_recordings() -> List[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in sorted(root.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        if not mp4_probe_ok(p):
             continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
@@ -241,12 +266,46 @@ def get_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
-    return StreamingResponse(
-        _iter_mp4_file(path),
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt",
+        )
+    # Do not auto-finalize on GET (thumbnails fire many range requests). Use POST finalize-mobile.
+    if not mp4_ios_playable(path):
+        raise HTTPException(
+            status_code=422,
+            detail="clip needs conversion for mobile playback",
+        )
+    return FileResponse(
+        path,
         media_type="video/mp4",
-        headers=headers,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Accept-Ranges": "bytes",
+        },
     )
+
+
+@app.post("/recordings/files/{filename}/finalize-mobile")
+def finalize_file_for_mobile(filename: str):
+    """Re-mux/re-encode an existing clip for iOS/Android HTML5 playback."""
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = _rec_root / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt; re-record this clip",
+        )
+    if not finalize_mp4_for_mobile(path):
+        raise HTTPException(
+            status_code=422,
+            detail="could not repair clip for mobile playback",
+        )
+    return {"ok": True, "filename": filename}
 
 
 @app.delete("/recordings/files/{filename}")
@@ -258,6 +317,27 @@ def delete_file(filename: str):
         raise HTTPException(status_code=404, detail="not found")
     path.unlink()
     return {"ok": True}
+
+
+@app.delete("/recordings/all")
+def delete_all_files():
+    """Remove every safe .mp4 clip in the edge recordings directory."""
+    root = _rec_root
+    root.mkdir(parents=True, exist_ok=True)
+    deleted = 0
+    failed: list[str] = []
+    for p in root.glob("*.mp4"):
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        try:
+            p.unlink()
+            deleted += 1
+        except OSError as e:
+            failed.append(p.name)
+            logger.warning("delete_all: could not remove %s: %s", p.name, e)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
 
 
 @app.post("/recordings/manual/start")
@@ -284,6 +364,44 @@ def manual_record_status():
     if _recorder is None:
         return {"active": False, "filename": None}
     return _recorder.manual_recording_status()
+
+
+def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
+    pre = None
+    post = None
+    tags: Optional[list[str]] = None
+    if isinstance(body, dict):
+        if body.get("pre_record_seconds") is not None:
+            pre = int(body["pre_record_seconds"])
+        if body.get("post_record_seconds") is not None:
+            post = int(body["post_record_seconds"])
+        raw_tags = body.get("objects_detected")
+        if isinstance(raw_tags, list):
+            tags = [str(t) for t in raw_tags if t is not None]
+    return {"pre_seconds": pre, "post_seconds": post, "objects_detected": tags}
+
+
+@app.post("/recordings/motion/trigger")
+async def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
+    if _recorder is None:
+        raise HTTPException(status_code=503, detail="recorder not running")
+    parsed = _parse_motion_clip_body(body)
+    try:
+        return await asyncio.to_thread(
+            _recorder.trigger_motion_clip,
+            pre_seconds=parsed["pre_seconds"],
+            post_seconds=parsed["post_seconds"],
+            objects_detected=parsed["objects_detected"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/recordings/motion/status")
+async def motion_clip_status():
+    if _recorder is None:
+        return {"active": False, "phase": "idle", "remaining_seconds": 0}
+    return await asyncio.to_thread(_recorder.motion_clip_status)
 
 
 @app.get("/settings")

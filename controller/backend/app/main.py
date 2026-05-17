@@ -6,16 +6,17 @@ import asyncio
 import logging
 import os
 import threading
+import time
 import re
 import shutil
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, List, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import camera_store, live_detection, mediamtx_manager, mqtt_bridge
@@ -28,8 +29,22 @@ from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
 from .mosquitto_manager import stop_managed_broker
+from ._shared_path import ensure_shared_on_path
+from .events_store import list_events, purge_legacy_events
+from .motion_recording import (
+    cache_motion_status,
+    fetch_edge_motion_status,
+    motion_status_idle,
+)
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
+
+ensure_shared_on_path()
+from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
+    finalize_mp4_for_mobile,
+    mp4_ios_playable,
+    mp4_probe_ok,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +53,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     ensure_broker_started()
+    removed = purge_legacy_events()
+    if removed:
+        logger.info("Purged %d legacy event row(s) from events.db", removed)
     bridge = mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
     mediamtx_start_embedded()
@@ -47,7 +65,7 @@ async def lifespan(app: FastAPI):
     live_detection.get_service().start(loop)
     threading.Timer(4.0, live_detection.get_service().restart_workers).start()
     yield
-    live_detection.get_service().stop()
+    live_detection.get_service().stop()  # releases Hailo before other shutdown
     mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()
@@ -68,15 +86,55 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
 
 _CHUNK = 1024 * 1024
 
+# Long read timeout for MP4 proxy; client must stay open until the stream finishes.
+_RECORDING_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+
+# Headers iOS Safari needs for HTML5 MP4 playback (byte-range requests).
+_RECORDING_PASS_HEADERS = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "content-disposition",
+    }
+)
+
 
 def _iter_mp4_file(path: Path):
-    """Chunked stream without fixed Content-Length (file may still be growing)."""
+    """Chunked stream without fixed Content-Length (legacy; prefer FileResponse)."""
     with path.open("rb") as f:
         while True:
             chunk = f.read(_CHUNK)
             if not chunk:
                 break
             yield chunk
+
+
+def _recording_file_headers(filename: str) -> dict[str, str]:
+    return {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Accept-Ranges": "bytes",
+    }
+
+
+async def _stream_edge_recording_body(
+    resp: httpx.Response,
+    client: httpx.AsyncClient,
+):
+    """Proxy edge recording bytes; keep httpx open until done; ignore seek aborts."""
+    try:
+        async for chunk in resp.aiter_bytes(chunk_size=_CHUNK):
+            yield chunk
+    except asyncio.CancelledError:
+        raise
+    except httpx.HTTPError as e:
+        logger.debug("edge recording stream ended early: %s", e)
+    finally:
+        with suppress(Exception):
+            await resp.aclose()
+        with suppress(Exception):
+            await client.aclose()
 
 
 class CameraCreate(BaseModel):
@@ -109,6 +167,9 @@ def _recordings_dir(cam_id: int) -> Path:
     return d
 
 
+_EDGE_SETTINGS_TIMEOUT = httpx.Timeout(5.0, read=45.0)
+
+
 def _push_edge_settings(cam_id: int) -> bool:
     c = camera_store.get_camera(cam_id)
     if not c:
@@ -118,7 +179,11 @@ def _push_edge_settings(cam_id: int) -> bool:
         return False
     settings = c.get("settings", {})
     try:
-        r = httpx.patch(f"{edge}/settings", json=settings, timeout=20.0)
+        r = httpx.patch(
+            f"{edge.rstrip('/')}/settings",
+            json=settings,
+            timeout=_EDGE_SETTINGS_TIMEOUT,
+        )
         r.raise_for_status()
         return True
     except Exception as e:
@@ -126,11 +191,28 @@ def _push_edge_settings(cam_id: int) -> bool:
         return False
 
 
+def _schedule_edge_settings_push(cam_id: int, *, retries: int = 2) -> None:
+    """Push settings to the Pi without blocking the HTTP handler."""
+
+    def _run() -> None:
+        for attempt in range(max(1, retries)):
+            if _push_edge_settings(cam_id):
+                return
+            if attempt + 1 < retries:
+                time.sleep(3.0)
+
+    threading.Thread(
+        target=_run,
+        name=f"edge-settings-push-{cam_id}",
+        daemon=True,
+    ).start()
+
+
 def _push_all_edge_settings() -> None:
     """Sync cameras.json settings to each Pi edge (avoids mode mismatch at startup)."""
     for c in camera_store.list_cameras():
         if camera_store.edge_base_url(c):
-            _push_edge_settings(int(c["id"]))
+            _schedule_edge_settings_push(int(c["id"]))
 
 
 # =========================
@@ -143,7 +225,7 @@ def add_camera_endpoint(cam: CameraCreate):
     try:
         created = camera_store.add_camera(cam.model_dump(exclude_unset=True))
         if camera_store.edge_base_url(created):
-            _push_edge_settings(int(created["id"]))
+            _schedule_edge_settings_push(int(created["id"]))
         return created
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -186,7 +268,7 @@ def patch_camera(cam_id: int, body: CameraPatch):
     try:
         cam = camera_store.update_camera(cam_id, patch)
         if "edge_base_url" in patch:
-            _push_edge_settings(cam_id)
+            _schedule_edge_settings_push(cam_id)
         return cam
     except KeyError:
         raise HTTPException(status_code=404, detail="camera not found") from None
@@ -392,7 +474,7 @@ def patch_camera_settings(cam_id: int, body: CameraSettingsPatch):
         return c.get("settings", {})
     try:
         cam = camera_store.update_camera_settings(cam_id, patch)
-        _push_edge_settings(cam_id)
+        _schedule_edge_settings_push(cam_id)
         bridge = mqtt_bridge.get_bridge()
         if bridge is not None:
             bridge.reconcile_recording_state()
@@ -458,6 +540,79 @@ def camera_manual_record_stop(cam_id: int):
     return _edge_manual_proxy(edge, "stop")
 
 
+_MOTION_TRIGGER_TIMEOUT = httpx.Timeout(3.0, read=15.0)
+
+
+def _edge_motion_clip_trigger_proxy(
+    edge: str, body: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+    url = f"{edge.rstrip('/')}/recordings/motion/trigger"
+    try:
+        r = httpx.post(
+            url,
+            json=body if isinstance(body, dict) else {},
+            timeout=_MOTION_TRIGGER_TIMEOUT,
+        )
+        if r.status_code >= 400:
+            detail: Any = r.text
+            try:
+                payload = r.json()
+                if isinstance(payload, dict) and payload.get("detail") is not None:
+                    detail = payload["detail"]
+            except Exception:
+                pass
+            raise HTTPException(status_code=r.status_code, detail=str(detail))
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+        return {"accepted": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/cameras/{cam_id}/recordings/motion/trigger")
+def camera_motion_clip_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    st = c.get("settings") or {}
+    if st.get("recording_mode") != "motion":
+        raise HTTPException(
+            status_code=400,
+            detail="Motion clips from person detection require recording mode Motion.",
+        )
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Motion recording on the Pi requires edge_base_url.",
+        )
+    data = _edge_motion_clip_trigger_proxy(edge, body)
+    if isinstance(data, dict) and data.get("accepted"):
+        cache_motion_status(cam_id, data)
+    return data
+
+
+@app.get("/cameras/{cam_id}/recordings/motion/status")
+def camera_motion_clip_status(cam_id: int):
+    """Always HTTP 200 — never 502 when the Pi edge is slow or offline."""
+    try:
+        c = camera_store.get_camera(cam_id)
+        if not c:
+            raise HTTPException(status_code=404, detail="camera not found")
+        edge = camera_store.edge_base_url(c)
+        if not edge:
+            return motion_status_idle()
+        return fetch_edge_motion_status(edge, int(cam_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("motion clip status error cam_id=%s: %s", cam_id, e)
+        return {**motion_status_idle(), "phase": "edge_unreachable"}
+
+
 @app.get("/cameras/{cam_id}/recordings/manual/status")
 def camera_manual_record_status(cam_id: int):
     c = camera_store.get_camera(cam_id)
@@ -475,6 +630,18 @@ def camera_manual_record_status(cam_id: int):
     except Exception:
         pass
     return {"active": False, "filename": None}
+
+
+@app.get("/cameras/{cam_id}/events")
+def camera_events(cam_id: int, limit: int = 200, offset: int = 0):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    try:
+        rows = list_events(int(cam_id), limit=limit, offset=offset)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"camera_id": int(cam_id), "events": rows, "count": len(rows)}
 
 
 # =========================
@@ -591,13 +758,18 @@ def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
     for p in sorted(d.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.name.startswith("_") or p.name.startswith("."):
             continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        if not mp4_probe_ok(p):
+            continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
     return out
 
 
 @app.get("/recordings/{cam_id}/files/{filename}")
-def get_recording_file(cam_id: int, filename: str):
+async def get_recording_file(cam_id: int, filename: str, request: Request):
+    """Stream clip bytes (200/206). Never redirect — Safari/iOS breaks on 307 for video."""
     c = camera_store.get_camera(cam_id)
     if not c:
         raise HTTPException(status_code=404, detail="camera not found")
@@ -606,29 +778,142 @@ def get_recording_file(cam_id: int, filename: str):
 
     edge = camera_store.edge_base_url(c)
     if edge:
-        url = f"{edge}/recordings/files/{filename}"
-
-        def gen():
-            try:
-                with httpx.stream("GET", url, timeout=120.0) as r:
-                    r.raise_for_status()
-                    for chunk in r.iter_bytes():
-                        yield chunk
-            except Exception as e:
-                logger.warning("edge stream failed: %s", e)
-                raise
-
-        return StreamingResponse(gen(), media_type="video/mp4")
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}"
+        forward_headers: dict[str, str] = {}
+        range_h = request.headers.get("range")
+        if range_h:
+            forward_headers["Range"] = range_h
+        client = httpx.AsyncClient(timeout=_RECORDING_HTTP_TIMEOUT)
+        try:
+            req = client.build_request("GET", url, headers=forward_headers)
+            r = await client.send(req, stream=True)
+            if r.status_code >= 400:
+                body = await r.aread()
+                await r.aclose()
+                await client.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                raise HTTPException(status_code=r.status_code, detail=detail)
+            pass_headers = {
+                k: v
+                for k, v in r.headers.items()
+                if k.lower() in _RECORDING_PASS_HEADERS
+            }
+            if "accept-ranges" not in {k.lower() for k in pass_headers}:
+                pass_headers["Accept-Ranges"] = "bytes"
+            return StreamingResponse(
+                _stream_edge_recording_body(r, client),
+                status_code=r.status_code,
+                headers=pass_headers,
+                media_type=r.headers.get("content-type", "video/mp4"),
+            )
+        except HTTPException:
+            with suppress(Exception):
+                await client.aclose()
+            raise
+        except httpx.HTTPError as e:
+            with suppress(Exception):
+                await client.aclose()
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        except Exception as e:
+            with suppress(Exception):
+                await client.aclose()
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
-    return StreamingResponse(
-        _iter_mp4_file(path),
+    return FileResponse(
+        path,
         media_type="video/mp4",
-        headers=headers,
+        headers=_recording_file_headers(filename),
     )
+
+
+@app.post("/recordings/{cam_id}/files/{filename}/finalize-mobile")
+async def finalize_recording_for_mobile(cam_id: int, filename: str):
+    """Re-mux/re-encode a clip so iOS/Android browsers can play it in <video>."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        url = f"{edge}/recordings/files/{filename}/finalize-mobile"
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                r = await client.post(url)
+                if r.status_code >= 400:
+                    detail = r.text
+                    try:
+                        body = r.json()
+                        if isinstance(body, dict) and body.get("detail") is not None:
+                            detail = str(body["detail"])
+                    except Exception:
+                        pass
+                    raise HTTPException(status_code=r.status_code, detail=detail)
+                return r.json()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    path = _recordings_dir(cam_id) / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt; re-record this clip",
+        )
+    if not finalize_mp4_for_mobile(path):
+        raise HTTPException(status_code=422, detail="could not repair clip for mobile playback")
+    if not mp4_ios_playable(path):
+        raise HTTPException(status_code=422, detail="clip is not in iOS-compatible MP4 layout")
+    return {"ok": True, "filename": filename}
+
+
+def _delete_all_on_edge(edge: str) -> dict[str, Any]:
+    """Bulk delete on edge; fall back to per-file DELETE if /recordings/all is missing."""
+    r = httpx.delete(f"{edge}/recordings/all", timeout=120.0)
+    if r.status_code not in (404, 405):
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        if isinstance(data, dict):
+            return data
+        return {"ok": True, "deleted": 0}
+
+    # Older edge agents: delete each known clip, then any remaining .mp4 on disk.
+    names: set[str] = set()
+    lr = httpx.get(f"{edge}/recordings", timeout=60.0)
+    lr.raise_for_status()
+    raw = lr.json()
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("name"):
+                names.add(str(item["name"]))
+    nr = httpx.get(f"{edge}/recordings/names", timeout=60.0)
+    if nr.status_code == 200:
+        extra = nr.json()
+        if isinstance(extra, list):
+            for name in extra:
+                if isinstance(name, str) and _SAFE_NAME.match(name):
+                    names.add(name)
+
+    deleted = 0
+    failed: list[str] = []
+    for name in sorted(names):
+        dr = httpx.delete(f"{edge}/recordings/files/{name}", timeout=30.0)
+        if dr.status_code in (200, 204):
+            deleted += 1
+        elif dr.status_code == 404:
+            continue
+        else:
+            failed.append(name)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
 
 
 @app.delete("/recordings/{cam_id}/files/{filename}")
@@ -660,6 +945,44 @@ def delete_recording_file(cam_id: int, filename: str):
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return {"ok": True}
+
+
+def _delete_all_local(cam_id: int) -> dict[str, Any]:
+    d = _recordings_dir(cam_id)
+    deleted = 0
+    failed: list[str] = []
+    if d.is_dir():
+        for p in d.glob("*.mp4"):
+            if p.name.startswith("_") or p.name.startswith("."):
+                continue
+            if not _SAFE_NAME.match(p.name):
+                continue
+            try:
+                p.unlink()
+                deleted += 1
+            except OSError:
+                failed.append(p.name)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
+
+
+@app.delete("/recordings/{cam_id}/all")
+@app.delete("/recordings/{cam_id}/files")
+def delete_all_recording_files(cam_id: int):
+    """Delete every clip for this camera (edge proxy or local recordings dir)."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        try:
+            return _delete_all_on_edge(edge)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return _delete_all_local(cam_id)
 
 
 # =========================

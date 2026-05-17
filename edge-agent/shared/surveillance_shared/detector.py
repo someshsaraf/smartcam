@@ -199,6 +199,10 @@ class Detector:
         self._warned_pipeline_dead = False
         self._ssd_load_failed = False
 
+    def ssd_available(self) -> bool:
+        """True when MobileNet-SSD weights are loaded (used for Hailo fallback)."""
+        return self._ensure_net() is not None
+
     def _ensure_net(self) -> cv2.dnn.Net | None:
         if self._ssd_load_failed:
             return None
@@ -297,6 +301,53 @@ class Detector:
             )
             self._warned_pipeline_dead = True
         return False
+
+    def detect_people_normalized(self, frame_bgr: np.ndarray) -> List[Dict[str, Any]]:
+        """Person boxes in normalized 0–1 coords for live overlays (MobileNet-SSD)."""
+        if frame_bgr is None or frame_bgr.size == 0:
+            return []
+        h, w = frame_bgr.shape[:2]
+        if w < 2 or h < 2:
+            return []
+        net = self._ensure_net()
+        if net is None:
+            return []
+        blob = cv2.dnn.blobFromImage(
+            cv2.resize(frame_bgr, (300, 300)),
+            0.007843,
+            (300, 300),
+            127.5,
+        )
+        net.setInput(blob)
+        detections = net.forward()
+        out: List[Dict[str, Any]] = []
+        for i in range(detections.shape[2]):
+            conf = float(detections[0, 0, i, 2])
+            if conf < self._confidence_threshold:
+                continue
+            cls_id = int(detections[0, 0, i, 1])
+            if cls_id != _PERSON:
+                continue
+            x1 = int(detections[0, 0, i, 3] * w)
+            y1 = int(detections[0, 0, i, 4] * h)
+            x2 = int(detections[0, 0, i, 5] * w)
+            y2 = int(detections[0, 0, i, 6] * h)
+            box_w = max(0, x2 - x1)
+            box_h = max(0, y2 - y1)
+            if box_w * box_h < (w * h) * self._min_box_fraction:
+                continue
+            out.append(
+                {
+                    "x": round(x1 / float(w), 6),
+                    "y": round(y1 / float(h), 6),
+                    "w": round(box_w / float(w), 6),
+                    "h": round(box_h / float(h), 6),
+                    "score": round(conf, 4),
+                    "label": "person",
+                    "source": "opencv_ssd",
+                }
+            )
+        return out
 
     def detect_interesting_with_tags(self, frame_bgr: np.ndarray) -> tuple[bool, List[str]]:
         """Interesting VOC classes or ``motion`` when MOG2 fallback fires."""
