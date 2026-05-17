@@ -151,10 +151,31 @@ def _edge_recording_cache_key(edge: str, filename: str) -> str:
     return f"{edge.rstrip('/')}\0{filename}"
 
 
+def _edge_http_error(edge: str, exc: Exception) -> HTTPException:
+    """Map httpx connectivity failures to a client-visible 502/504."""
+    base = str(edge or "").strip().rstrip("/") or "(no edge URL)"
+    if isinstance(exc, httpx.ConnectError):
+        return HTTPException(
+            status_code=502,
+            detail=(
+                f"Cannot reach edge camera at {base}. "
+                "Check that the Pi edge agent is running and edge_base_url in camera settings is correct."
+            ),
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(
+            status_code=504,
+            detail=f"Edge camera at {base} timed out.",
+        )
+    if isinstance(exc, httpx.HTTPError):
+        return HTTPException(status_code=502, detail=f"Edge request failed ({base}): {exc}")
+    return HTTPException(status_code=502, detail=str(exc))
+
+
 async def _ensure_edge_recording_mobile_playable(edge: str, filename: str) -> None:
     """
     Ensure edge MP4 is iOS/Android-safe before proxying (edge GET returns 422 otherwise).
-  """
+    """
     key = _edge_recording_cache_key(edge, filename)
     with _EDGE_MOBILE_READY_LOCK:
         if key in _EDGE_MOBILE_READY:
@@ -166,42 +187,47 @@ async def _ensure_edge_recording_mobile_playable(edge: str, filename: str) -> No
     probe_timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
     finalize_timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 
-    async with httpx.AsyncClient(timeout=probe_timeout) as client:
-        r = await client.get(file_url, headers={"Range": "bytes=0-1"})
-        if r.status_code in (200, 206):
-            await r.aclose()
-            with _EDGE_MOBILE_READY_LOCK:
-                _EDGE_MOBILE_READY.add(key)
-            return
-        if r.status_code != 422:
-            body = await r.aread()
-            await r.aclose()
-            detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
-            raise HTTPException(status_code=r.status_code, detail=detail)
+    try:
+        async with httpx.AsyncClient(timeout=probe_timeout) as client:
+            r = await client.get(file_url, headers={"Range": "bytes=0-1"})
+            if r.status_code in (200, 206):
+                await r.aclose()
+                with _EDGE_MOBILE_READY_LOCK:
+                    _EDGE_MOBILE_READY.add(key)
+                return
+            if r.status_code != 422:
+                body = await r.aread()
+                await r.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                raise HTTPException(status_code=r.status_code, detail=detail)
 
-    async with httpx.AsyncClient(timeout=finalize_timeout) as client:
-        fr = await client.post(finalize_url)
-        if fr.status_code >= 400:
-            detail = fr.text
-            try:
-                body = fr.json()
-                if isinstance(body, dict) and body.get("detail") is not None:
-                    detail = str(body["detail"])
-            except Exception:
-                pass
-            raise HTTPException(status_code=fr.status_code, detail=detail)
+        async with httpx.AsyncClient(timeout=finalize_timeout) as client:
+            fr = await client.post(finalize_url)
+            if fr.status_code >= 400:
+                detail = fr.text
+                try:
+                    body = fr.json()
+                    if isinstance(body, dict) and body.get("detail") is not None:
+                        detail = str(body["detail"])
+                except Exception:
+                    pass
+                raise HTTPException(status_code=fr.status_code, detail=detail)
 
-    async with httpx.AsyncClient(timeout=probe_timeout) as client:
-        r2 = await client.get(file_url, headers={"Range": "bytes=0-1"})
-        if r2.status_code not in (200, 206):
-            body = await r2.aread()
+        async with httpx.AsyncClient(timeout=probe_timeout) as client:
+            r2 = await client.get(file_url, headers={"Range": "bytes=0-1"})
+            if r2.status_code not in (200, 206):
+                body = await r2.aread()
+                await r2.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r2.reason_phrase
+                raise HTTPException(status_code=r2.status_code, detail=detail)
             await r2.aclose()
-            detail = body.decode(errors="replace")[:500] if body else r2.reason_phrase
-            raise HTTPException(status_code=r2.status_code, detail=detail)
-        await r2.aclose()
 
-    with _EDGE_MOBILE_READY_LOCK:
-        _EDGE_MOBILE_READY.add(key)
+        with _EDGE_MOBILE_READY_LOCK:
+            _EDGE_MOBILE_READY.add(key)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _edge_http_error(edge, e) from e
 
 
 async def _stream_edge_recording_body(
@@ -994,7 +1020,7 @@ async def get_recording_thumbnail(cam_id: int, filename: str):
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
+            raise _edge_http_error(edge, e) from e
 
     mp4 = _recordings_dir(cam_id) / filename
     if not mp4.is_file():
@@ -1025,8 +1051,13 @@ async def get_recording_file(cam_id: int, filename: str, request: Request):
 
     edge = camera_store.edge_base_url(c)
     if edge:
-        await _ensure_edge_recording_mobile_playable(edge, filename)
-        url = f"{edge.rstrip('/')}/recordings/files/{filename}"
+        try:
+            await _ensure_edge_recording_mobile_playable(edge, filename)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _edge_http_error(edge, e) from e
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}?playback=1"
         forward_headers: dict[str, str] = {}
         range_h = request.headers.get("range")
         if range_h:

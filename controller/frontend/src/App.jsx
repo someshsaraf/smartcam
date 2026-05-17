@@ -308,7 +308,9 @@ function RecordingThumbnail({ camId, name, videoFallbackSrc, className = "" }) {
         alt=""
         loading="lazy"
         decoding="async"
-        onError={() => setUseVideoFallback(true)}
+        onError={() => {
+          if (!preferNativeHlsPlayback()) setUseVideoFallback(true);
+        }}
         className={className}
       />
     );
