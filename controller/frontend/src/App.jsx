@@ -723,7 +723,7 @@ function countPersonDetections(detections) {
   return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
-/** Always-on debug line for person test (Hailo or OpenCV SSD fallback). */
+/** Always-on debug line for Hailo YOLOv8n person test (yolov8n.hef only). */
 function formatPersonDebugLine(info, wsOpen, system) {
   if (!wsOpen) return "Person test: WS disconnected";
   if (!info?.ts && !info?.error) return "Person test: waiting for frames…";
@@ -735,27 +735,11 @@ function formatPersonDebugLine(info, wsOpen, system) {
   }
   if (info.error) return `Person test: — (${info.error})`;
 
-  const src = info.personDetectionSource || system?.person_detection_source || null;
-  const usingSsd = src === "opencv_ssd";
-  const ssdErr = info.ssdFallbackError || system?.ssd_fallback_error || null;
   const hailoErr = info.hailoError || system?.hailo_error || null;
-
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) {
-    return usingSsd
-      ? `Person test: YES — ${n} person(s) (OpenCV SSD; Hailo off)`
-      : `Person test: YES — ${n} person(s)`;
-  }
-  if (usingSsd) {
-    return "Person test: no person in frame (OpenCV SSD; Hailo off)";
-  }
-  if (ssdErr) {
-    return `Person test: — (${ssdErr})`;
-  }
-  if (hailoErr) {
-    return `Person test: — (Hailo: ${hailoErr})`;
-  }
+  if (n > 0) return `Person test: YES — ${n} person(s)`;
+  if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
   return "Person test: no person in frame";
@@ -1098,7 +1082,7 @@ function LiveTile({
                 ? "text-amber-400/90"
                 : "text-gray-500"
           }`}
-          title="Person detection (triggers motion clip when mode is Motion)"
+          title="Hailo YOLOv8n person detection (yolov8n.hef; triggers motion clip when mode is Motion)"
         >
           {personDebugLine}
         </p>
@@ -1566,7 +1550,6 @@ export default function App() {
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
                 personDetectionSource: msg.person_detection_source || null,
-                ssdFallbackError: msg.ssd_fallback_error || null,
                 backend: msg.backend || null,
                 status: msg.status || null,
                 bufferAgeMs:
@@ -1946,24 +1929,19 @@ export default function App() {
             Backend: <span className="text-gray-200">{detectionSystem?.backend || "—"}</span>
           </p>
           <p className="text-gray-400">
-            Hailo:{" "}
+            Hailo YOLOv8n:{" "}
             <span className="text-gray-200">
               {detectionSystem?.hailo_ready
                 ? "ready"
-                : detectionSystem?.person_detection_source === "opencv_ssd"
-                  ? "off (using OpenCV SSD)"
-                  : detectionSystem?.hailo_error || "not ready"}
+                : detectionSystem?.hailo_error || "not ready"}
             </span>
           </p>
-          {detectionSystem?.person_detection_source ? (
-            <p className="text-gray-400">
-              Person source:{" "}
-              <span className="text-gray-200">{detectionSystem.person_detection_source}</span>
-            </p>
-          ) : null}
-          {detectionSystem?.ssd_fallback_error ? (
-            <p className="text-amber-400/95">{detectionSystem.ssd_fallback_error}</p>
-          ) : null}
+          <p className="text-gray-400">
+            HEF:{" "}
+            <span className="text-gray-200 font-mono">
+              {detectionSystem?.hef_model || "yolov8n.hef"}
+            </span>
+          </p>
           <p className="text-gray-400">
             Inference workers:{" "}
             <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>

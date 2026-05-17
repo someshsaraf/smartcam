@@ -1,12 +1,10 @@
 """Detection backend for controller live preview overlays.
 
-Backends:
-- opencv: original Haar frontal face detector over the full frame.
-- hailo / hailo_person_face / hybrid: Hailo YOLOv8n person detection plus
-  optional OpenCV face detection inside person boxes.
+Person detection uses **Hailo YOLOv8n only** (``models/yolov8n.hef``). No OpenCV SSD or
+other models are used for the person test line or motion-clip triggers.
 
-The function name remains detect_faces_normalized for backwards compatibility.
-Returned boxes may be labelled "person" or "face".
+Optional OpenCV Haar runs inside person boxes only when
+``SMARTCAM_HAILO_FACE_SECOND_STAGE`` is enabled (default: off).
 """
 from __future__ import annotations
 
@@ -21,19 +19,11 @@ logger = logging.getLogger(__name__)
 _MAX_FACES = 32
 _HAAR: Optional[cv2.CascadeClassifier] = None
 _HAAR_ERROR_LOGGED = False
-_HAILO_FALLBACK_WARNED = False
-_SSD_FALLBACK_ACTIVE = False
-_SSD_FALLBACK_ERROR: Optional[str] = None
-_SSD_DETECTOR: Any = None
-
-
-def _hailo_fallback_ssd_enabled() -> bool:
-    v = os.environ.get("SMARTCAM_HAILO_FALLBACK_SSD", "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
+_HAILO_ERROR_LOGGED = False
 
 
 def _parse_backend() -> str:
-    v = os.environ.get("SMARTCAM_FACE_BACKEND", "opencv").strip().lower()
+    v = os.environ.get("SMARTCAM_FACE_BACKEND", "hailo_person_face").strip().lower()
     aliases = {
         "opencv": "opencv",
         "haar": "opencv",
@@ -41,14 +31,20 @@ def _parse_backend() -> str:
         "hybrid": "hailo_person_face",
         "hailo_person_face": "hailo_person_face",
         "person_face": "hailo_person_face",
-        "ssd": "ssd_person",
-        "opencv_ssd": "ssd_person",
-        "ssd_person": "ssd_person",
+        "hailo_yolov8n": "hailo_person_face",
+        "yolov8n": "hailo_person_face",
     }
+    if v in ("ssd", "opencv_ssd", "ssd_person"):
+        logger.error(
+            "SMARTCAM_FACE_BACKEND=%r is not supported; person detection requires "
+            "Hailo YOLOv8n (yolov8n.hef). Using hailo_person_face.",
+            v,
+        )
+        return "hailo_person_face"
     if v in aliases:
         return aliases[v]
-    logger.warning("SMARTCAM_FACE_BACKEND invalid %r; using opencv", v)
-    return "opencv"
+    logger.warning("SMARTCAM_FACE_BACKEND invalid %r; using hailo_person_face", v)
+    return "hailo_person_face"
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
@@ -87,7 +83,12 @@ def _load_haar() -> Optional[cv2.CascadeClassifier]:
     return _HAAR
 
 
-def _detect_haar_in_region(frame_bgr: np.ndarray, *, roi: Optional[tuple[int, int, int, int]] = None, max_faces: int = _MAX_FACES) -> List[dict[str, Any]]:
+def _detect_haar_in_region(
+    frame_bgr: np.ndarray,
+    *,
+    roi: Optional[tuple[int, int, int, int]] = None,
+    max_faces: int = _MAX_FACES,
+) -> List[dict[str, Any]]:
     if frame_bgr is None or frame_bgr.size == 0:
         return []
     h, w = frame_bgr.shape[:2]
@@ -114,7 +115,13 @@ def _detect_haar_in_region(frame_bgr: np.ndarray, *, roi: Optional[tuple[int, in
     weights: list[float] = []
     if hasattr(cascade, "detectMultiScale3"):
         try:
-            detected = cascade.detectMultiScale3(gray, scaleFactor=scale, minNeighbors=min_neighbors, minSize=(min_face_px, min_face_px), outputRejectLevels=True)
+            detected = cascade.detectMultiScale3(
+                gray,
+                scaleFactor=scale,
+                minNeighbors=min_neighbors,
+                minSize=(min_face_px, min_face_px),
+                outputRejectLevels=True,
+            )
             if isinstance(detected, tuple) and len(detected) >= 3:
                 rects = detected[0]
                 level_weights = detected[2]
@@ -123,7 +130,12 @@ def _detect_haar_in_region(frame_bgr: np.ndarray, *, roi: Optional[tuple[int, in
         except cv2.error:
             rects = []
     if len(rects) == 0:
-        rects = cascade.detectMultiScale(gray, scaleFactor=scale, minNeighbors=min_neighbors, minSize=(min_face_px, min_face_px))
+        rects = cascade.detectMultiScale(
+            gray,
+            scaleFactor=scale,
+            minNeighbors=min_neighbors,
+            minSize=(min_face_px, min_face_px),
+        )
     max_weight = max(weights) if weights else 0.0
     min_aspect = _env_float("SMARTCAM_FACE_MIN_ASPECT", 0.70, 0.1, 3.0)
     max_aspect = _env_float("SMARTCAM_FACE_MAX_ASPECT", 1.45, 0.2, 5.0)
@@ -141,93 +153,70 @@ def _detect_haar_in_region(frame_bgr: np.ndarray, *, roi: Optional[tuple[int, in
         bw, bh = ax2 - ax1, ay2 - ay1
         if bw < min_face_px or bh < min_face_px:
             continue
-        score = max(0.0, min(1.0, weights[i] / max_weight)) if i < len(weights) and max_weight > 0 else 1.0
-        out.append({"x": round(ax1 / float(w), 6), "y": round(ay1 / float(h), 6), "w": round(bw / float(w), 6), "h": round(bh / float(h), 6), "score": round(score, 4), "label": "face", "source": "opencv_haar"})
+        score = (
+            max(0.0, min(1.0, weights[i] / max_weight))
+            if i < len(weights) and max_weight > 0
+            else 1.0
+        )
+        out.append(
+            {
+                "x": round(ax1 / float(w), 6),
+                "y": round(ay1 / float(h), 6),
+                "w": round(bw / float(w), 6),
+                "h": round(bh / float(h), 6),
+                "score": round(score, 4),
+                "label": "face",
+                "source": "opencv_haar",
+            }
+        )
     return out
 
 
 def _person_roi(frame_shape: tuple[int, ...], p: dict[str, Any]) -> tuple[int, int, int, int]:
     h, w = frame_shape[:2]
-    x, y, bw, bh = float(p.get("x", 0.0)), float(p.get("y", 0.0)), float(p.get("w", 0.0)), float(p.get("h", 0.0))
+    x, y, bw, bh = (
+        float(p.get("x", 0.0)),
+        float(p.get("y", 0.0)),
+        float(p.get("w", 0.0)),
+        float(p.get("h", 0.0)),
+    )
     mx, my = 0.08 * bw, 0.08 * bh
-    return int((x - mx) * w), int((y - my) * h), int((x + bw + mx) * w), int((y + min(bh, bh * 0.62) + my) * h)
-
-
-def _ensure_ssd_fallback_detector() -> bool:
-    """Load MobileNet-SSD once; set _SSD_FALLBACK_ACTIVE when weights are present."""
-    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE, _SSD_FALLBACK_ERROR
-    if not _hailo_fallback_ssd_enabled():
-        return False
-    try:
-        from surveillance_shared.detector import Detector
-
-        if _SSD_DETECTOR is None:
-            _SSD_DETECTOR = Detector()
-        if _SSD_DETECTOR.ssd_available():
-            _SSD_FALLBACK_ACTIVE = True
-            _SSD_FALLBACK_ERROR = None
-            return True
-        _SSD_FALLBACK_ERROR = (
-            "MobileNet-SSD models missing — run controller/backend/scripts/fetch_ssd_models.sh"
-        )
-        return False
-    except Exception as e:
-        _SSD_FALLBACK_ERROR = str(e)
-        logger.warning("OpenCV SSD fallback init failed: %s", e)
-        return False
-
-
-def _detect_ssd_people_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE
-    if not _ensure_ssd_fallback_detector():
-        return []
-    try:
-        assert _SSD_DETECTOR is not None
-        return _SSD_DETECTOR.detect_people_normalized(frame_bgr)
-    except Exception as e:
-        logger.warning("OpenCV SSD person fallback infer failed: %s", e)
-        return []
+    return (
+        int((x - mx) * w),
+        int((y - my) * h),
+        int((x + bw + mx) * w),
+        int((y + min(bh, bh * 0.62) + my) * h),
+    )
 
 
 def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    global _HAILO_FALLBACK_WARNED, _SSD_FALLBACK_ACTIVE
+    global _HAILO_ERROR_LOGGED
     try:
         from .hailo_yolov8_backend import detect_people_normalized, get_detector
 
         detector = get_detector()
         if detector.error:
-            if _hailo_fallback_ssd_enabled():
-                if not _HAILO_FALLBACK_WARNED:
-                    logger.warning(
-                        "Hailo unavailable (%s); using OpenCV MobileNet-SSD for person detection",
-                        detector.error,
-                    )
-                    _HAILO_FALLBACK_WARNED = True
-                return _detect_ssd_people_normalized(frame_bgr)
-            if not _HAILO_FALLBACK_WARNED:
+            if not _HAILO_ERROR_LOGGED:
                 logger.warning(
-                    "Hailo backend unavailable (%s); person detection disabled",
+                    "Hailo YOLOv8n unavailable (%s); person detection disabled until fixed",
                     detector.error,
                 )
-                _HAILO_FALLBACK_WARNED = True
+                _HAILO_ERROR_LOGGED = True
             return []
         people = detect_people_normalized(frame_bgr)
     except Exception as e:
-        if _hailo_fallback_ssd_enabled():
-            if not _HAILO_FALLBACK_WARNED:
-                logger.warning(
-                    "Hailo backend failed (%s); using OpenCV MobileNet-SSD for person detection",
-                    e,
-                )
-                _HAILO_FALLBACK_WARNED = True
-            return _detect_ssd_people_normalized(frame_bgr)
-        if not _HAILO_FALLBACK_WARNED:
-            logger.exception("Hailo backend failed; person detection disabled: %s", e)
-            _HAILO_FALLBACK_WARNED = True
+        if not _HAILO_ERROR_LOGGED:
+            logger.exception("Hailo YOLOv8n failed; person detection disabled: %s", e)
+            _HAILO_ERROR_LOGGED = True
         return []
 
     out: List[dict[str, Any]] = []
-    include_people = os.environ.get("SMARTCAM_SHOW_PERSON_BOXES", "1").strip().lower() not in ("0", "false", "no", "off")
+    include_people = os.environ.get("SMARTCAM_SHOW_PERSON_BOXES", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     if include_people:
         out.extend(people)
     face_stage = os.environ.get("SMARTCAM_HAILO_FACE_SECOND_STAGE", "none").strip().lower()
@@ -235,7 +224,13 @@ def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
         return out
     max_faces_per_person = _env_int("SMARTCAM_FACE_MAX_PER_PERSON", 3, 0, 16)
     for p in people:
-        out.extend(_detect_haar_in_region(frame_bgr, roi=_person_roi(frame_bgr.shape, p), max_faces=max_faces_per_person))
+        out.extend(
+            _detect_haar_in_region(
+                frame_bgr,
+                roi=_person_roi(frame_bgr.shape, p),
+                max_faces=max_faces_per_person,
+            )
+        )
     return out
 
 
@@ -247,42 +242,27 @@ def inference_debug_status() -> dict[str, Any]:
         "hailo_ready": False,
         "hailo_error": None,
         "person_detection_source": None,
-        "ssd_fallback_error": None,
+        "hef_model": "yolov8n.hef",
     }
-    if backend == "ssd_person":
-        if _ensure_ssd_fallback_detector():
-            out["person_detection_source"] = "opencv_ssd"
-        else:
-            out["ssd_fallback_error"] = _SSD_FALLBACK_ERROR
+    if backend == "opencv":
+        out["person_detection_source"] = "opencv_haar"
         return out
     if backend != "hailo_person_face":
-        if backend == "opencv":
-            out["person_detection_source"] = "opencv_haar"
         return out
+    out["person_detection_source"] = "hailo_yolov8n"
     try:
         from .hailo_yolov8_backend import get_detector
 
         det = get_detector()
         out["hailo_error"] = det.error
         out["hailo_ready"] = det.error is None
-        if det.error is None:
-            out["person_detection_source"] = "hailo_yolov8n"
-            return out
+        out["hef_path"] = det.hef_path
     except Exception as e:
         out["hailo_error"] = str(e)
-
-    if _hailo_fallback_ssd_enabled():
-        if _ensure_ssd_fallback_detector():
-            out["person_detection_source"] = "opencv_ssd"
-        else:
-            out["ssd_fallback_error"] = _SSD_FALLBACK_ERROR
     return out
 
 
 def detect_faces_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    backend = _parse_backend()
-    if backend == "hailo_person_face":
+    if _parse_backend() == "hailo_person_face":
         return _detect_hailo_person_face(frame_bgr)
-    if backend == "ssd_person":
-        return _detect_ssd_people_normalized(frame_bgr)
     return _detect_haar_in_region(frame_bgr)

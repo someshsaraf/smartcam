@@ -16,6 +16,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 PERSON_CLASS_ID = 0
+REQUIRED_HEF_BASENAME = "yolov8n.hef"
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
@@ -36,7 +37,26 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
 
 def _default_hef_path() -> str:
     here = Path(__file__).resolve()
-    return str(here.parents[1] / "models" / "yolov8n.hef")
+    return str((here.parents[1] / "models" / REQUIRED_HEF_BASENAME).resolve())
+
+
+def _resolve_hef_path(raw: str) -> tuple[str, Optional[str]]:
+    """Return (absolute path, error). Only yolov8n.hef is permitted."""
+    p = Path(raw.strip()).expanduser()
+    if not p.is_absolute():
+        backend_root = Path(__file__).resolve().parents[1]
+        p = (backend_root / p).resolve()
+    if p.name != REQUIRED_HEF_BASENAME:
+        return (
+            str(p),
+            f"SMARTCAM_HAILO_HEF_PATH must be {REQUIRED_HEF_BASENAME} (YOLOv8n on Hailo), not {p.name}",
+        )
+    if not p.is_file():
+        return (
+            str(p),
+            f"{REQUIRED_HEF_BASENAME} not found at {p} — copy compiled HEF to controller/backend/models/",
+        )
+    return str(p), None
 
 
 def _clip01(v: float) -> float:
@@ -68,7 +88,8 @@ def _nms(boxes: List[dict[str, Any]], iou_thr: float) -> List[dict[str, Any]]:
 
 class HailoYolov8Detector:
     def __init__(self) -> None:
-        self.hef_path = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+        raw_hef = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+        self.hef_path, hef_err = _resolve_hef_path(raw_hef)
         self.input_size = _env_int("SMARTCAM_HAILO_INPUT_SIZE", 640, 64, 2048)
         self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
@@ -76,7 +97,7 @@ class HailoYolov8Detector:
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
         self._lock = threading.Lock()
         self._ready = False
-        self._error: Optional[str] = None
+        self._error: Optional[str] = hef_err
         self._hef = None
         self._target = None
         self._network_group = None
@@ -84,6 +105,8 @@ class HailoYolov8Detector:
         self._output_vstreams_params = None
         self._input_name: Optional[str] = None
         self._InferVStreams = None
+        if hef_err:
+            logger.error(hef_err)
 
     @property
     def error(self) -> Optional[str]:
@@ -93,6 +116,13 @@ class HailoYolov8Detector:
         if self._ready:
             return True
         if self._error:
+            return False
+        self.hef_path, hef_err = _resolve_hef_path(
+            os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+        )
+        if hef_err:
+            self._error = hef_err
+            logger.error(self._error)
             return False
         with self._lock:
             if self._ready:
@@ -109,11 +139,6 @@ class HailoYolov8Detector:
                 )
             except Exception as e:
                 self._error = f"HailoRT Python bindings missing: {e}"
-                logger.error(self._error)
-                return False
-
-            if not os.path.isfile(self.hef_path):
-                self._error = f"HEF not found: {self.hef_path}"
                 logger.error(self._error)
                 return False
 
