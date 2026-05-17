@@ -43,22 +43,9 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _recording_confidence() -> float:
-    """Minimum score to start recording and log person_detected (default 90%)."""
-    return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
-
-
-def _overlay_confidence() -> float:
-    """Minimum score to draw a person box (profile/side pose often scores 0.72–0.88)."""
-    raw = os.environ.get("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE")
-    if raw is not None and str(raw).strip() != "":
-        return _env_float("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE", 0.72, 0.01, 0.99)
-    return _env_float("SMARTCAM_PERSON_PRESENCE_CONFIDENCE", 0.72, 0.01, 0.99)
-
-
 def _person_confidence() -> float:
-    """Alias for recording threshold (diagnostics)."""
-    return _recording_confidence()
+    """One threshold for overlay, recording, and events — person class only (default 90%)."""
+    return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
 
 
 def _box_plausible(box: dict[str, Any]) -> bool:
@@ -67,7 +54,7 @@ def _box_plausible(box: dict[str, Any]) -> bool:
     if w <= 0.0 or h <= 0.0:
         return False
     area = w * h
-    min_area = _env_float("SMARTCAM_PERSON_MIN_BOX_AREA", 0.012, 0.001, 0.5)
+    min_area = _env_float("SMARTCAM_PERSON_MIN_BOX_AREA", 0.018, 0.001, 0.5)
     max_area = _env_float("SMARTCAM_PERSON_MAX_BOX_AREA", 0.42, 0.05, 0.95)
     if area < min_area or area > max_area:
         return False
@@ -79,7 +66,7 @@ def _box_plausible(box: dict[str, Any]) -> bool:
     min_w = _env_float("SMARTCAM_PERSON_MIN_BOX_WIDTH", 0.08, 0.02, 0.95)
     if w < min_w:
         return False
-    min_h = _env_float("SMARTCAM_PERSON_MIN_BOX_HEIGHT", 0.10, 0.02, 0.95)
+    min_h = _env_float("SMARTCAM_PERSON_MIN_BOX_HEIGHT", 0.12, 0.02, 0.95)
     if h < min_h:
         return False
     return True
@@ -472,37 +459,30 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
-        recording_conf = _recording_confidence()
-        overlay_conf = _overlay_confidence()
-        self.conf = recording_conf
-        parse_conf = min(overlay_conf, recording_conf)
-        hold_conf = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.65, 0.01, 0.99)
-        hold_conf = min(hold_conf, parse_conf - 0.01)
-        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 3.0, 0.0, 30.0)
+        conf = _person_confidence()
+        self.conf = conf
+        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
         boxes = [
             b
-            for b in _nms(self._parse_outputs(outputs, score_min=parse_conf), self.nms_iou)
-            if _box_plausible(b)
+            for b in _nms(self._parse_outputs(outputs, score_min=conf), self.nms_iou)
+            if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
         ]
         now = time.monotonic()
         if boxes:
-            self._hold_boxes = boxes
+            self._hold_boxes = list(boxes)
             self._hold_until = now + hold_sec
         elif self._hold_boxes and now <= self._hold_until:
-            loose = [
+            boxes = [
                 b
-                for b in _nms(self._parse_outputs(outputs, score_min=hold_conf), self.nms_iou)
-                if _box_plausible(b)
+                for b in self._hold_boxes
+                if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
             ]
-            held = [b for b in self._hold_boxes if _box_plausible(b)]
-            boxes = loose if loose else held
         else:
             self._hold_boxes = []
             self._hold_until = 0.0
-        boxes = [b for b in boxes if float(b.get("score", 0.0)) >= overlay_conf]
         if (
             not boxes
             and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
