@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     live_detection.get_service().start(loop)
     threading.Timer(4.0, live_detection.get_service().restart_workers).start()
     yield
-    live_detection.get_service().stop()
+    live_detection.get_service().stop()  # releases Hailo before other shutdown
     mediamtx_stop_embedded()
     recording_manager.stop()
     mqtt_bridge.shutdown_bridge()

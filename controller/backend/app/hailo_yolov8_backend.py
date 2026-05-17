@@ -115,7 +115,8 @@ class HailoYolov8Detector:
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
-        self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
+        self._init_lock = threading.Lock()
         self._ready = False
         self._error: Optional[str] = hef_err
         self._hef = None
@@ -132,21 +133,25 @@ class HailoYolov8Detector:
     def error(self) -> Optional[str]:
         return self._error
 
+    @property
+    def ready(self) -> bool:
+        return self._ready
+
     def _init(self) -> bool:
         if self._ready:
             return True
-        if self._error:
-            return False
-        self.hef_path, hef_err = _resolve_hef_path(
-            os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
-        )
-        if hef_err:
-            self._error = hef_err
-            logger.error(self._error)
-            return False
-        with self._lock:
+        with self._init_lock:
             if self._ready:
                 return True
+            if self._error:
+                return False
+            self.hef_path, hef_err = _resolve_hef_path(
+                os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
+            )
+            if hef_err:
+                self._error = hef_err
+                logger.error(self._error)
+                return False
             try:
                 from hailo_platform import (  # type: ignore
                     ConfigureParams,
@@ -212,6 +217,12 @@ class HailoYolov8Detector:
                         "Stop other Hailo apps, run: hailortcli fw-control identify, "
                         "then set SMARTCAM_HAILO_DEVICE_ID to that PCIe id (e.g. 0001:01:00.0)."
                     )
+                elif "73" in err or "HAILO_DEVICE_IN_USE" in err:
+                    self._error = (
+                        f"Failed to open Hailo device: {e}. "
+                        "Only one process may use the NPU. Stop other hailort/uvicorn instances, "
+                        "do not run check_hailo.sh while the backend is running, then restart uvicorn."
+                    )
                 else:
                     self._error = f"Failed to initialize Hailo backend: {e}"
                 logger.exception(self._error)
@@ -231,7 +242,7 @@ class HailoYolov8Detector:
         assert self._output_vstreams_params is not None
         assert self._input_name is not None
         input_data = {self._input_name: np.expand_dims(self._preprocess(frame_bgr), axis=0)}
-        with self._lock:
+        with self._infer_lock:
             with self._network_group.activate():
                 with self._InferVStreams(self._network_group, self._input_vstreams_params, self._output_vstreams_params) as pipe:
                     return pipe.infer(input_data)
@@ -329,14 +340,26 @@ _DETECTOR_LOCK = threading.Lock()
 
 
 def reset_detector_cache() -> None:
-    """Release Hailo handles so the next request can re-open the device (e.g. after error 74)."""
+    """Release Hailo handles (call only when live detection workers are stopped)."""
     global _DETECTOR
     with _DETECTOR_LOCK:
         if _DETECTOR is not None:
-            _release_vdevice(_DETECTOR._target)
-            _DETECTOR._target = None
-            _DETECTOR._ready = False
+            with _DETECTOR._init_lock:
+                _release_vdevice(_DETECTOR._target)
+                _DETECTOR._target = None
+                _DETECTOR._network_group = None
+                _DETECTOR._hef = None
+                _DETECTOR._ready = False
+                _DETECTOR._error = None
         _DETECTOR = None
+
+
+def warm_up_hailo_backend() -> Optional[str]:
+    """Open Hailo once on the main thread before RTSP workers start."""
+    det = get_detector()
+    if det._init():
+        return None
+    return det.error
 
 
 def get_detector() -> HailoYolov8Detector:

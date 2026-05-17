@@ -423,6 +423,16 @@ class LiveDetectionService:
         with self._lock:
             self._started = True
         camera_store.add_change_listener(self._on_cameras_changed)
+        try:
+            from .hailo_yolov8_backend import warm_up_hailo_backend
+
+            err = warm_up_hailo_backend()
+            if err:
+                logger.warning("Hailo warm-up failed (workers will retry): %s", err)
+            else:
+                logger.info("Hailo YOLOv8n warm-up OK")
+        except Exception as e:
+            logger.warning("Hailo warm-up skipped: %s", e)
         # MediaMTX needs a moment to accept RTSP reads after restart.
         threading.Timer(0.8, self._restart_workers).start()
         threading.Timer(3.5, self._restart_workers).start()
@@ -437,6 +447,12 @@ class LiveDetectionService:
             for w in self._workers:
                 w.join(timeout=5.0)
             self._workers.clear()
+        try:
+            from .hailo_yolov8_backend import reset_detector_cache
+
+            reset_detector_cache()
+        except Exception:
+            pass
         logger.info("live_detection service stopped")
 
     def _on_cameras_changed(self) -> None:

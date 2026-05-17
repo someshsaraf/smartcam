@@ -67,7 +67,10 @@ else
   echo "Backend not reachable on :8000 (start uvicorn to test live_detection status)"
 fi
 
-if [[ "$HAILO_PY" == ok ]]; then
+if curl -sf http://127.0.0.1:8000/system/live_detection >/dev/null 2>&1; then
+  echo ""
+  echo "SKIP: Backend is running on :8000 — stop uvicorn before VDevice test (avoids error 73 DEVICE_IN_USE)"
+elif [[ "$HAILO_PY" == ok ]]; then
   echo ""
   echo "=== Device.scan + VDevice open (Python) ==="
   if ! $PY - <<'PY' 2>&1; then
