@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import collections
 import json
+import os
 import signal
 import shutil
 import subprocess
@@ -220,8 +221,8 @@ class EdgeRecorder:
         self._thread.start()
         if self._pm_buffer_thread is None or not self._pm_buffer_thread.is_alive():
             self._pm_buffer_thread = threading.Thread(
-                target=self._run_person_mock_buffer,
-                name="edge-person-mock-buffer",
+                target=self._run_motion_clip_buffer,
+                name="edge-motion-clip-buffer",
                 daemon=True,
             )
             self._pm_buffer_thread.start()
@@ -277,7 +278,7 @@ class EdgeRecorder:
             fn = path.name if path is not None and active else None
         return {"active": active, "filename": fn}
 
-    def person_mock_busy(self) -> bool:
+    def motion_clip_busy(self) -> bool:
         with self._pm_lock:
             if self._pm_active:
                 return True
@@ -308,9 +309,6 @@ class EdgeRecorder:
             st["remaining_seconds"] = max(0, int(ends - time.time()))
             st["active"] = True
             return st
-
-    def person_mock_status(self) -> dict[str, Any]:
-        return self.motion_clip_status()
 
     def trigger_motion_clip(
         self,
@@ -371,14 +369,15 @@ class EdgeRecorder:
             self._last_external_clip_trigger = now
             rid = f"evt_{int(time.time() * 1000)}"
             self._pm_active = True
+            clip_end = now + float(pre_s) + float(post_s)
             self._pm_status = {
                 "active": True,
                 "recording_id": rid,
                 "phase": "starting",
                 "pre_seconds": pre_s,
                 "post_seconds": post_s,
-                "ends_at": 0.0,
-                "remaining_seconds": post_s,
+                "ends_at": clip_end,
+                "remaining_seconds": max(0, int(clip_end - now)),
                 "filename": None,
                 "objects_detected": tags,
             }
@@ -403,19 +402,7 @@ class EdgeRecorder:
             pre_frames = list(self._pm_buf)
         self._run_external_motion_clip(rid, pre_frames, pre_seconds, post_seconds, tags)
 
-    def trigger_person_mock(
-        self,
-        *,
-        pre_seconds: Optional[int] = None,
-        post_seconds: Optional[int] = None,
-    ) -> dict[str, Any]:
-        return self.trigger_motion_clip(
-            pre_seconds=pre_seconds,
-            post_seconds=post_seconds,
-            objects_detected=["person"],
-        )
-
-    def _run_person_mock_buffer(self) -> None:
+    def _run_motion_clip_buffer(self) -> None:
         """Ring buffer for pre-roll when controller person detection triggers motion clips."""
         cap: Optional[cv2.VideoCapture] = None
         while not self._stop.is_set():
@@ -533,9 +520,12 @@ class EdgeRecorder:
             with self._pm_lock:
                 self._pm_status["phase"] = "materializing"
                 self._pm_status["remaining_seconds"] = 0
+                self._pm_status["ends_at"] = time.time()
+                self._pm_active = False
+
+            self._publish(status="Stop", recording_id=rid, local_path="")
 
             if idx == 0:
-                self._publish(status="Stop", recording_id=rid, local_path="")
                 return
 
             cmd = [
@@ -589,7 +579,6 @@ class EdgeRecorder:
             saved_fn: Optional[str] = None
             with self._pm_lock:
                 saved_fn = self._pm_status.get("filename")
-                self._pm_active = False
                 self._pm_status = {
                     "active": False,
                     "phase": "idle",
@@ -919,7 +908,7 @@ class EdgeRecorder:
         flip: bool,
         tags: list[str],
     ) -> None:
-        if self.person_mock_busy():
+        if self.motion_clip_busy():
             return
         with self._clip_busy_lock:
             if self._clip_busy:
@@ -949,6 +938,12 @@ class EdgeRecorder:
             end = time.time() + post_seconds
             post_i = 0
             last_tick = 0.0
+            extend_post = os.environ.get("EDGE_MOTION_EXTEND_POST_ROLL", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
             while time.time() < end and not self._stop.is_set():
                 cur = self.snapshot_settings()
                 if cur.get("recording_mode") != "motion":
@@ -968,7 +963,7 @@ class EdgeRecorder:
                         local_path=out_mp4.resolve().as_posix(),
                     )
                     last_tick = now
-                if post_i % DETECT_EVERY_N_FRAMES == 0:
+                if extend_post and post_i % DETECT_EVERY_N_FRAMES == 0:
                     hit, _ = detector.detect_interesting_with_tags(frame)
                     if hit:
                         end = time.time() + post_seconds
@@ -984,8 +979,9 @@ class EdgeRecorder:
                 elapsed = time.perf_counter() - loop_t0
                 time.sleep(max(0.0, read_period - elapsed))
 
+            self._publish(status="Stop", recording_id=rid, local_path="")
+
             if idx == 0:
-                self._publish(status="Stop", recording_id=rid, local_path="")
                 return
 
             cmd = [
@@ -1012,14 +1008,12 @@ class EdgeRecorder:
             if r.returncode != 0:
                 print("[edge] ffmpeg clip failed:", (r.stderr or "")[-400:])
                 remove_invalid_mp4(out_mp4)
-                self._publish(status="Stop", recording_id=rid, local_path="")
                 return
             if not finalize_mp4_for_mobile(out_mp4):
                 print("[edge] motion clip finalize failed:", out_mp4.name)
             if not mp4_ios_playable(out_mp4):
                 print("[edge] motion clip not iOS-playable, removing:", out_mp4.name)
                 remove_invalid_mp4(out_mp4)
-                self._publish(status="Stop", recording_id=rid, local_path="")
                 return
 
             self._publish(

@@ -609,16 +609,6 @@ def camera_motion_clip_status(cam_id: int):
         return {**motion_status_idle(), "phase": "edge_unreachable"}
 
 
-@app.post("/cameras/{cam_id}/recordings/person-mock/trigger")
-def camera_person_mock_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
-    return camera_motion_clip_trigger(cam_id, body)
-
-
-@app.get("/cameras/{cam_id}/recordings/person-mock/status")
-def camera_person_mock_status(cam_id: int):
-    return camera_motion_clip_status(cam_id)
-
-
 @app.get("/cameras/{cam_id}/recordings/manual/status")
 def camera_manual_record_status(cam_id: int):
     c = camera_store.get_camera(cam_id)

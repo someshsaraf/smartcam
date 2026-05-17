@@ -404,17 +404,6 @@ async def motion_clip_status():
     return await asyncio.to_thread(_recorder.motion_clip_status)
 
 
-@app.post("/recordings/person-mock/trigger")
-async def person_mock_trigger(body: Optional[dict[str, Any]] = None):
-    """Deprecated alias for controller person-detection clips in motion mode."""
-    return await motion_clip_trigger(body)
-
-
-@app.get("/recordings/person-mock/status")
-async def person_mock_status():
-    return await motion_clip_status()
-
-
 @app.get("/settings")
 def get_settings():
     if _recorder is None:

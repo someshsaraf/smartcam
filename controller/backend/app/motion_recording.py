@@ -39,22 +39,17 @@ def cache_motion_status(cam_id: int, data: dict[str, Any]) -> None:
 def fetch_edge_motion_status(edge: str, cam_id: int) -> dict[str, Any]:
     """GET Pi motion/status; never raises — caller always returns HTTP 200."""
     base = edge.rstrip("/")
-    paths = ("/recordings/motion/status", "/recordings/person-mock/status")
+    url = f"{base}/recordings/motion/status"
     last_err: Optional[Exception] = None
-    for path in paths:
-        url = f"{base}{path}"
-        try:
-            r = httpx.get(url, timeout=_MOTION_STATUS_TIMEOUT)
-            if r.status_code == 404 and path != paths[-1]:
-                continue
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, dict):
-                cache_motion_status(cam_id, data)
-                return data
-        except Exception as e:
-            last_err = e
-            continue
+    try:
+        r = httpx.get(url, timeout=_MOTION_STATUS_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            cache_motion_status(cam_id, data)
+            return data
+    except Exception as e:
+        last_err = e
     if last_err is not None:
         logger.info(
             "edge motion status unavailable cam_id=%s (%s): %s",
