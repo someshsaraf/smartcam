@@ -97,6 +97,69 @@ def _release_vdevice(target: Any) -> None:
         pass
 
 
+def _looks_like_per_class_detections(obj: list | tuple) -> bool:
+    n = len(obj)
+    if n < 1 or n > 120:
+        return False
+    for i in range(min(n, 4)):
+        if not isinstance(obj[i], (list, tuple, np.ndarray)):
+            return False
+    return True
+
+
+def _summarize_hailo_output(outputs: Any) -> str:
+    parts: list[str] = []
+
+    def walk(obj: Any, depth: int = 0) -> None:
+        if depth > 4 or len(parts) > 12:
+            return
+        if isinstance(obj, dict):
+            parts.append(f"dict(keys={list(obj.keys())[:4]})")
+            for v in list(obj.values())[:2]:
+                walk(v, depth + 1)
+        elif isinstance(obj, (list, tuple)):
+            parts.append(f"list(len={len(obj)})")
+            if len(obj) > PERSON_CLASS_ID:
+                walk(obj[PERSON_CLASS_ID], depth + 1)
+        else:
+            try:
+                arr = np.asarray(obj)
+                if arr.size:
+                    parts.append(f"ndarray{arr.shape} dtype={arr.dtype}")
+            except Exception:
+                parts.append(type(obj).__name__)
+
+    walk(outputs)
+    return "; ".join(parts) or "empty"
+
+
+def _parse_person_rows(obj: Any, parsed: List[dict[str, Any]], det: "HailoYolov8Detector") -> None:
+    try:
+        arr = np.squeeze(np.asarray(obj, dtype=np.float32))
+    except Exception:
+        return
+    if arr.size == 0:
+        return
+    if arr.ndim == 3 and arr.shape[-1] >= 5 and arr.shape[0] > PERSON_CLASS_ID:
+        arr = arr[PERSON_CLASS_ID]
+    if arr.ndim == 1 and arr.shape[0] >= 5:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2 or arr.shape[1] < 5:
+        return
+    for row in arr:
+        y0, x0, y1, x1, score = (float(row[i]) for i in range(5))
+        if not all(np.isfinite(v) for v in (y0, x0, y1, x1, score)):
+            continue
+        if score < det.conf:
+            continue
+        box = det._make_box(x0, y0, x1, y1, score)
+        if box is None:
+            continue
+        if box["w"] * det.input_size < det.min_box_px or box["h"] * det.input_size < det.min_box_px:
+            continue
+        parsed.append(box)
+
+
 def _nms(boxes: List[dict[str, Any]], iou_thr: float) -> List[dict[str, Any]]:
     boxes = sorted(boxes, key=lambda d: float(d.get("score", 0.0)), reverse=True)
     kept: List[dict[str, Any]] = []
@@ -111,7 +174,7 @@ class HailoYolov8Detector:
         raw_hef = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
         self.hef_path, hef_err = _resolve_hef_path(raw_hef)
         self.input_size = _env_int("SMARTCAM_HAILO_INPUT_SIZE", 640, 64, 2048)
-        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.80, 0.01, 0.99)
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
@@ -253,13 +316,56 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
+        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.80, 0.01, 0.99)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
         boxes = _nms(self._parse_outputs(outputs), self.nms_iou)
+        if (
+            not boxes
+            and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        ):
+            logger.info("Hailo parse: 0 boxes; output summary=%s", _summarize_hailo_output(outputs))
         return boxes[: self.max_detections]
 
     def _parse_outputs(self, outputs: Any) -> List[dict[str, Any]]:
+        """Parse HailoRT-postprocess YOLO (y0,x0,y1,x1,score per class) and legacy tensor layouts."""
+        parsed: List[dict[str, Any]] = []
+        visited: set[int] = set()
+
+        def consume(obj: Any) -> None:
+            if obj is None:
+                return
+            oid = id(obj)
+            if oid in visited:
+                return
+            visited.add(oid)
+
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    consume(v)
+                return
+
+            if isinstance(obj, (list, tuple)) and _looks_like_per_class_detections(obj):
+                if len(obj) > PERSON_CLASS_ID:
+                    _parse_person_rows(obj[PERSON_CLASS_ID], parsed, self)
+                return
+
+            if isinstance(obj, (list, tuple)):
+                for v in obj:
+                    consume(v)
+                return
+
+            _parse_person_rows(obj, parsed, self)
+
+        consume(outputs)
+        if not parsed:
+            parsed.extend(self._parse_outputs_legacy(outputs))
+        return parsed
+
+    def _parse_outputs_legacy(self, outputs: Any) -> List[dict[str, Any]]:
+        """Fallback for non-postprocess tensors (xyxy + optional class column)."""
         candidates: list[np.ndarray] = []
 
         def collect(obj: Any) -> None:
@@ -284,8 +390,6 @@ class HailoYolov8Detector:
         parsed: List[dict[str, Any]] = []
         for arr in candidates:
             arr = np.squeeze(arr)
-            # Common Hailo YOLO NMS can be (classes, detections, 5) or
-            # (batch, classes, detections, 5). Keep COCO class 0 = person.
             if arr.ndim == 4 and arr.shape[-1] >= 5 and arr.shape[1] > PERSON_CLASS_ID:
                 arr = arr[0, PERSON_CLASS_ID, :, :]
             elif arr.ndim == 3 and arr.shape[-1] >= 5 and arr.shape[0] > PERSON_CLASS_ID:

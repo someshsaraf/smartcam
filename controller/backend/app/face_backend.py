@@ -194,8 +194,9 @@ def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
     try:
         from .hailo_yolov8_backend import detect_people_normalized, get_detector
 
+        people = detect_people_normalized(frame_bgr)
         detector = get_detector()
-        if detector.error:
+        if not people and detector.error and not detector.ready:
             if not _HAILO_ERROR_LOGGED:
                 logger.warning(
                     "Hailo YOLOv8n unavailable (%s); person detection disabled until fixed",
@@ -203,7 +204,6 @@ def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
                 )
                 _HAILO_ERROR_LOGGED = True
             return []
-        people = detect_people_normalized(frame_bgr)
     except Exception as e:
         if not _HAILO_ERROR_LOGGED:
             logger.exception("Hailo YOLOv8n failed; person detection disabled: %s", e)
@@ -254,8 +254,11 @@ def inference_debug_status() -> dict[str, Any]:
         from .hailo_yolov8_backend import get_detector
 
         det = get_detector()
+        if not det.ready and det.error is None:
+            det._init()
         out["hailo_error"] = det.error
         out["hailo_ready"] = det.ready
+        out["person_confidence_min"] = det.conf
         out["hef_path"] = det.hef_path
         try:
             from hailo_platform import Device  # type: ignore
