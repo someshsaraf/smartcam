@@ -268,6 +268,13 @@ def inference_debug_status() -> dict[str, Any]:
             out["person_display_confidence"] = _person_display_confidence()
             out["person_record_confidence"] = _person_record_confidence()
             out["person_confidence_min"] = out["person_display_confidence"]
+            from .hailo_yolov8_backend import _clahe_clip_limit, _clahe_tile_size
+
+            out["clahe_clip_limit"] = _clahe_clip_limit()
+            out["clahe_tile_size"] = _clahe_tile_size()
+            out["low_light_boost"] = os.environ.get(
+                "SMARTCAM_LOW_LIGHT_BOOST", "1"
+            ).strip().lower() in ("1", "true", "yes", "on")
         except Exception:
             pass
         out["hef_path"] = det.hef_path

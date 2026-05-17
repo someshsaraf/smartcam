@@ -68,6 +68,16 @@ def _person_hold_confidence() -> float:
     return min(hold, _person_display_confidence())
 
 
+def _clahe_clip_limit() -> float:
+    """CLAHE contrast limit; higher = stronger lift in shadows (typical 2–4)."""
+    return _env_float("SMARTCAM_CLAHE_CLIP_LIMIT", 2.0, 1.0, 8.0)
+
+
+def _clahe_tile_size() -> int:
+    """CLAHE tile side length in pixels (smaller = more local, can add noise)."""
+    return _env_int("SMARTCAM_CLAHE_TILE_SIZE", 8, 4, 32)
+
+
 def person_record_confidence() -> float:
     """Public accessor for live_detection recording gate."""
     return _person_record_confidence()
@@ -411,9 +421,13 @@ class HailoYolov8Detector:
         if frame_bgr is None or frame_bgr.size == 0 or frame_bgr.ndim != 3:
             return frame_bgr
         try:
+            tile = _clahe_tile_size()
             lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
             l_ch, a_ch, b_ch = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(
+                clipLimit=_clahe_clip_limit(),
+                tileGridSize=(tile, tile),
+            )
             l_ch = clahe.apply(l_ch)
             return cv2.cvtColor(cv2.merge((l_ch, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
         except Exception:
