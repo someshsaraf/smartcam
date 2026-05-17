@@ -260,7 +260,7 @@ def list_recordings() -> List[dict[str, Any]]:
 
 
 @app.get("/recordings/files/{filename}")
-def get_file(filename: str):
+def get_file(filename: str, playback: bool = False):
     if not _SAFE_NAME.match(filename):
         raise HTTPException(status_code=400, detail="invalid filename")
     path = _rec_root / filename
@@ -271,12 +271,19 @@ def get_file(filename: str):
             status_code=422,
             detail="recording incomplete or corrupt",
         )
-    # Do not auto-finalize on GET (thumbnails fire many range requests). Use POST finalize-mobile.
+    # Thumbnails use bare GET; full-screen playback passes playback=1 to convert once.
     if not mp4_ios_playable(path):
-        raise HTTPException(
-            status_code=422,
-            detail="clip needs conversion for mobile playback",
-        )
+        if playback:
+            if not finalize_mp4_for_mobile(path):
+                raise HTTPException(
+                    status_code=422,
+                    detail="could not repair clip for mobile playback",
+                )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="clip needs conversion for mobile playback",
+            )
     return FileResponse(
         path,
         media_type="video/mp4",

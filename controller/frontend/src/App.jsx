@@ -248,12 +248,21 @@ function edgeBaseUrlForCamera(cameras, camId) {
   return cam?.edge_base_url ? String(cam.edge_base_url).trim() : "";
 }
 
-/** Playback URL: Pi edge direct on LAN (avoids controller 307/proxy); else controller streams the file. */
-function recordingFileUrl(camId, name, edgeBaseUrl, cameras) {
-  const edge =
-    (edgeBaseUrl && String(edgeBaseUrl).trim()) || edgeBaseUrlForCamera(cameras, camId);
-  if (edge) {
-    return `${edge.replace(/\/$/, "")}/recordings/files/${encodeURIComponent(name)}`;
+/**
+ * Clip URL for <video>. Mobile/iOS uses controller proxy (auto-finalize + byte-range).
+ * Desktop may use edge direct; append playback=1 so edge converts fMP4 if needed.
+ */
+function recordingFileUrl(camId, name, edgeBaseUrl, cameras, opts = {}) {
+  const viaController =
+    opts.viaController === true ||
+    (opts.viaController !== false && preferNativeHlsPlayback());
+  if (!viaController) {
+    const edge =
+      (edgeBaseUrl && String(edgeBaseUrl).trim()) || edgeBaseUrlForCamera(cameras, camId);
+    if (edge) {
+      const base = `${edge.replace(/\/$/, "")}/recordings/files/${encodeURIComponent(name)}`;
+      return opts.forPlayback ? `${base}?playback=1` : base;
+    }
   }
   return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}`;
 }
@@ -371,9 +380,86 @@ function formatEventTime(ts) {
   }
 }
 
-function EventsPanel({ cameraId, cameraName, className = "" }) {
+/** Match a person_detected event to a motion clip row (filename or time proximity). */
+function resolveRecordingForEvent(ev, recordings, cameraId) {
+  if (!ev || !isSetCameraId(cameraId) || !Array.isArray(recordings)) return null;
+  const camRecordings = recordings.filter((r) => cameraIdsMatch(r.camId, cameraId));
+  const fn = String(ev.filename || "").trim();
+  if (fn) {
+    const byName = camRecordings.find((r) => r.name === fn);
+    if (byName) return byName;
+  }
+  const evtMs = Date.parse(ev.ts);
+  if (!Number.isFinite(evtMs)) return null;
+  const motionClips = camRecordings.filter((r) => String(r.name || "").startsWith("evt_"));
+  let best = null;
+  let bestDelta = Infinity;
+  for (const r of motionClips) {
+    const clipMs = (r.mtime || 0) * 1000;
+    if (clipMs < evtMs - 15000) continue;
+    const delta = Math.abs(clipMs - evtMs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = r;
+    }
+  }
+  return bestDelta <= 120000 ? best : null;
+}
+
+/** Local date (YYYY-MM-DD) + optional time (HH:MM) → UTC ISO for API filters. */
+function localDateTimeToIso(dateStr, timeStr, endOfDay = false) {
+  const d = String(dateStr || "").trim();
+  if (!d) return null;
+  const tRaw = String(timeStr || "").trim();
+  const t =
+    tRaw && /^\d{1,2}:\d{2}(:\d{2})?$/.test(tRaw)
+      ? tRaw.length === 5
+        ? `${tRaw}:00`
+        : tRaw
+      : endOfDay
+        ? "23:59:59"
+        : "00:00:00";
+  const dt = new Date(`${d}T${t}`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
+function buildEventFilterRange(fromDate, fromTime, toDate, toTime) {
+  const fromIso = localDateTimeToIso(fromDate, fromTime, false);
+  const toIso = localDateTimeToIso(toDate, toTime, true);
+  if (fromIso && toIso && fromIso > toIso) {
+    return { error: "From date/time must be before To date/time." };
+  }
+  if (!fromIso && !toIso) return { fromIso: null, toIso: null };
+  return { fromIso, toIso };
+}
+
+function eventsApiQuery(appliedFilter) {
+  const params = new URLSearchParams({ limit: "200" });
+  if (appliedFilter?.fromIso) params.set("from_ts", appliedFilter.fromIso);
+  if (appliedFilter?.toIso) params.set("to_ts", appliedFilter.toIso);
+  return params.toString();
+}
+
+function EventsPanel({
+  cameraId,
+  cameraName,
+  recordings = [],
+  cameras = [],
+  playingClip,
+  onPlayClip,
+  onClearPlay,
+  className = "",
+}) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterFromTime, setFilterFromTime] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
+  const [filterToTime, setFilterToTime] = useState("");
+  const [appliedFilter, setAppliedFilter] = useState(null);
+  const [filterError, setFilterError] = useState("");
 
   const load = useCallback(async () => {
     if (!isSetCameraId(cameraId)) {
@@ -382,7 +468,10 @@ function EventsPanel({ cameraId, cameraName, className = "" }) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API}/cameras/${encodeURIComponent(String(cameraId))}/events?limit=150`);
+      const q = eventsApiQuery(appliedFilter);
+      const res = await fetch(
+        `${API}/cameras/${encodeURIComponent(String(cameraId))}/events?${q}`
+      );
       if (!res.ok) return;
       const data = await res.json();
       const rows = Array.isArray(data.events) ? data.events : [];
@@ -392,13 +481,107 @@ function EventsPanel({ cameraId, cameraName, className = "" }) {
     } finally {
       setLoading(false);
     }
-  }, [cameraId]);
+  }, [cameraId, appliedFilter]);
 
   useEffect(() => {
     load();
     const iv = window.setInterval(load, 3000);
     return () => window.clearInterval(iv);
   }, [load]);
+
+  const applyFilter = () => {
+    const built = buildEventFilterRange(
+      filterFromDate,
+      filterFromTime,
+      filterToDate,
+      filterToTime
+    );
+    if (built.error) {
+      setFilterError(built.error);
+      return;
+    }
+    setFilterError("");
+    if (!built.fromIso && !built.toIso) {
+      setAppliedFilter(null);
+      return;
+    }
+    setAppliedFilter({ fromIso: built.fromIso, toIso: built.toIso });
+  };
+
+  const clearFilter = () => {
+    setFilterFromDate("");
+    setFilterFromTime("");
+    setFilterToDate("");
+    setFilterToTime("");
+    setFilterError("");
+    setAppliedFilter(null);
+  };
+
+  const deleteEvent = async (ev) => {
+    if (!isSetCameraId(cameraId) || !ev?.id) return;
+    const clip = resolveRecordingForEvent(ev, recordings, cameraId);
+    if (
+      !window.confirm(
+        `Delete this person detected event from ${formatEventTime(ev.ts)}?`
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `${API}/cameras/${encodeURIComponent(String(cameraId))}/events/${encodeURIComponent(String(ev.id))}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        alert(await readApiError(res));
+        return;
+      }
+      if (
+        playingClip &&
+        clip &&
+        cameraIdsMatch(playingClip.camId, clip.camId) &&
+        playingClip.name === clip.name &&
+        typeof onClearPlay === "function"
+      ) {
+        onClearPlay();
+      }
+      await load();
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const deleteAllEvents = async () => {
+    if (!isSetCameraId(cameraId)) return;
+    const filtered = Boolean(appliedFilter?.fromIso || appliedFilter?.toIso);
+    const msg = filtered
+      ? `Delete all ${events.length} event(s) matching the current date/time filter?`
+      : `Delete all events for ${cameraName || "this camera"}?`;
+    if (!window.confirm(msg)) return;
+    setDeleting(true);
+    try {
+      const q = eventsApiQuery(appliedFilter);
+      const res = await fetch(
+        `${API}/cameras/${encodeURIComponent(String(cameraId))}/events?${q}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        alert(await readApiError(res));
+        return;
+      }
+      if (typeof onClearPlay === "function") onClearPlay();
+      await load();
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const filterActive = Boolean(appliedFilter?.fromIso || appliedFilter?.toIso);
 
   if (!isSetCameraId(cameraId)) {
     return (
@@ -412,41 +595,160 @@ function EventsPanel({ cameraId, cameraName, className = "" }) {
     <div
       className={`rounded-xl border border-gray-800 bg-[#070c16] flex flex-col min-h-0 ${className}`}
     >
-      <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-800">
-        <div>
-          <h2 className="text-sm font-semibold text-gray-100">Events</h2>
-          <p className="text-[10px] text-gray-500">{cameraName || `Camera ${cameraId}`}</p>
+      <div className="shrink-0 px-3 py-2 border-b border-gray-800 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-gray-100">Events</h2>
+            <p className="text-[10px] text-gray-500 truncate">
+              {cameraName || `Camera ${cameraId}`}
+              {filterActive ? " · filtered" : ""}
+            </p>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {events.length > 0 ? (
+              <button
+                type="button"
+                onClick={deleteAllEvents}
+                disabled={loading || deleting}
+                className="text-[10px] px-2 py-1 rounded border border-red-900/60 text-red-300 hover:bg-red-950/40 disabled:opacity-40"
+              >
+                Clear all
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading || deleting}
+              className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50"
+            >
+              {loading ? "…" : "Refresh"}
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50"
-        >
-          {loading ? "…" : "Refresh"}
-        </button>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
+          <label className="text-gray-500 col-span-2">From</label>
+          <input
+            type="date"
+            value={filterFromDate}
+            onChange={(e) => setFilterFromDate(e.target.value)}
+            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+          />
+          <input
+            type="time"
+            value={filterFromTime}
+            onChange={(e) => setFilterFromTime(e.target.value)}
+            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+          />
+          <label className="text-gray-500 col-span-2">To</label>
+          <input
+            type="date"
+            value={filterToDate}
+            onChange={(e) => setFilterToDate(e.target.value)}
+            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+          />
+          <input
+            type="time"
+            value={filterToTime}
+            onChange={(e) => setFilterToTime(e.target.value)}
+            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={applyFilter}
+            disabled={loading || deleting}
+            className="text-[10px] px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white disabled:opacity-50"
+          >
+            Apply filter
+          </button>
+          <button
+            type="button"
+            onClick={clearFilter}
+            disabled={
+              loading ||
+              deleting ||
+              (!filterActive && !filterFromDate && !filterToDate)
+            }
+            className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-40"
+          >
+            Clear filter
+          </button>
+        </div>
+        {filterError ? <p className="text-[10px] text-red-400">{filterError}</p> : null}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
         {events.length === 0 ? (
-          <p className="text-xs text-gray-500 p-2">No events yet for this camera.</p>
+          <p className="text-xs text-gray-500 p-2">
+            {filterActive ? "No events in this date/time range." : "No events yet for this camera."}
+          </p>
         ) : (
-          events.map((ev) => (
-            <div
-              key={ev.id}
-              className="rounded-lg bg-[#111827] border border-gray-800/80 px-2 py-1.5 text-[11px]"
-            >
-              <div className="flex justify-between gap-2 items-start">
-                <span className="font-medium text-indigo-300">{formatEventType(ev.event_type)}</span>
-                <span className="text-gray-500 shrink-0">{formatEventTime(ev.ts)}</span>
+          events.map((ev) => {
+            const clip = resolveRecordingForEvent(ev, recordings, cameraId);
+            const canPlay = Boolean(clip && typeof onPlayClip === "function");
+            const isActive =
+              canPlay &&
+              playingClip &&
+              cameraIdsMatch(playingClip.camId, clip.camId) &&
+              playingClip.name === clip.name;
+            return (
+              <div
+                key={ev.id}
+                className={`flex gap-1 rounded-lg border text-[11px] ${
+                  isActive
+                    ? "border-blue-500/70 bg-[#1e293b]"
+                    : "border-gray-800/80 bg-[#111827]"
+                }`}
+              >
+                <button
+                  type="button"
+                  disabled={!canPlay || deleting}
+                  onClick={() => {
+                    if (!clip) return;
+                    onPlayClip({
+                      ...clip,
+                      camName: cameraName || clip.camName || "",
+                    });
+                  }}
+                  className={`flex-1 min-w-0 text-left px-2 py-1.5 transition-colors ${
+                    canPlay && !deleting
+                      ? "hover:bg-[#1a2332] cursor-pointer"
+                      : "opacity-70 cursor-default"
+                  }`}
+                  title={
+                    canPlay
+                      ? "Play recording"
+                      : ev.recording_id
+                        ? "Recording not ready yet"
+                        : "No linked recording"
+                  }
+                >
+                  <div className="flex justify-between gap-2 items-start">
+                    <span className="font-medium text-indigo-300">{formatEventType(ev.event_type)}</span>
+                    <span className="text-gray-500 shrink-0">{formatEventTime(ev.ts)}</span>
+                  </div>
+                  {clip ? (
+                    <p className="text-gray-400 font-mono text-[10px] mt-0.5 truncate">{clip.name}</p>
+                  ) : ev.recording_id ? (
+                    <p className="text-gray-500 text-[10px] mt-0.5">Recording in progress…</p>
+                  ) : null}
+                  {typeof ev.person_count === "number" ? (
+                    <p className="text-gray-500 text-[10px]">Person count: {ev.person_count}</p>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => deleteEvent(ev)}
+                  className="shrink-0 px-2 text-red-400 hover:text-red-300 hover:bg-red-950/30 disabled:opacity-40 self-stretch rounded-r-lg"
+                  title="Delete event"
+                  aria-label="Delete event"
+                >
+                  <IconTrash className="w-3.5 h-3.5" />
+                </button>
               </div>
-              {ev.recording_id ? (
-                <p className="text-gray-500 font-mono text-[10px] mt-0.5 truncate">{ev.recording_id}</p>
-              ) : null}
-              {typeof ev.person_count === "number" ? (
-                <p className="text-gray-500 text-[10px]">Person count: {ev.person_count}</p>
-              ) : null}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -508,6 +810,7 @@ function recordingKey(r) {
 function ClipPlayer({ url, camId, filename, onRepaired }) {
   const videoRef = useRef(null);
   const autoRepairRef = useRef(false);
+  const mobilePrepareRef = useRef(false);
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [srcVersion, setSrcVersion] = useState(0);
@@ -549,6 +852,37 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
   }, [camId, filename, onRepaired]);
 
   useEffect(() => {
+    mobilePrepareRef.current = false;
+  }, [camId, filename]);
+
+  useEffect(() => {
+    if (!preferNativeHlsPlayback() || !isSetCameraId(camId) || !filename) return undefined;
+    if (mobilePrepareRef.current) return undefined;
+    mobilePrepareRef.current = true;
+    let cancelled = false;
+    (async () => {
+      setRepairing(true);
+      try {
+        const res = await fetch(
+          `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(filename)}/finalize-mobile`,
+          { method: "POST" }
+        );
+        if (!cancelled && res.ok) {
+          setSrcVersion((v) => Math.max(1, v + 1));
+          if (typeof onRepaired === "function") onRepaired();
+        }
+      } catch {
+        /* fall through to normal load + error repair */
+      } finally {
+        if (!cancelled) setRepairing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [camId, filename, onRepaired]);
+
+  useEffect(() => {
     autoRepairRef.current = false;
     setError("");
     setSrcVersion(0);
@@ -583,7 +917,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
         src={videoSrc}
         controls
         playsInline
-        preload="auto"
+        preload={preferNativeHlsPlayback() ? "metadata" : "auto"}
         className="w-full rounded bg-black max-h-[75vh]"
       />
       {repairing ? (
@@ -606,6 +940,50 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
   );
 }
 
+function RecordingPlayModal({ playing, cameras, onClose, onRefresh }) {
+  if (!playing) return null;
+  const url = recordingFileUrl(
+    playing.camId,
+    playing.name,
+    playing.edgeBaseUrl || edgeBaseUrlForCamera(cameras, playing.camId),
+    cameras,
+    { forPlayback: true, viaController: true }
+  );
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="max-w-4xl w-full bg-[#111827] rounded-xl border border-gray-700 p-3 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-between items-start gap-2 mb-2 text-xs">
+          <div className="min-w-0">
+            <p className="font-medium text-gray-200 truncate">{playing.camName || "Clip"}</p>
+            <p className="font-mono text-gray-500 truncate">{playing.name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white px-2 shrink-0"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <ClipPlayer
+          url={url}
+          camId={playing.camId}
+          filename={playing.name}
+          onRepaired={onRefresh}
+        />
+      </div>
+    </div>
+  );
+}
 
 function IconDownload({ className = "w-3.5 h-3.5" }) {
   return (
@@ -632,26 +1010,35 @@ function RecordingsTimeline({
   onRefresh,
   onDelete,
   onDeleteAll,
+  playing,
+  onPlayingChange,
   variant = "dock",
   className = "",
 }) {
-  const [playing, setPlaying] = useState(null);
+  const [playingLocal, setPlayingLocal] = useState(null);
+  const clipPlaying = playing !== undefined ? playing : playingLocal;
+  const setPlaying =
+    typeof onPlayingChange === "function" ? onPlayingChange : setPlayingLocal;
   const [deleting, setDeleting] = useState(false);
   const isPage = variant === "page";
 
-  const clipUrl = (r) =>
+  const clipUrl = (r, { forPlayback = false, viaController } = {}) =>
     recordingFileUrl(
       r.camId,
       r.name,
       r.edgeBaseUrl || edgeBaseUrlForCamera(cameras, r.camId),
-      cameras
+      cameras,
+      {
+        forPlayback,
+        viaController:
+          viaController !== undefined
+            ? viaController
+            : forPlayback || preferNativeHlsPlayback(),
+      }
     );
 
-  const playUrl = playing ? clipUrl(playing) : "";
-
   return (
-    <>
-      <section
+    <section
         className={`bg-[#070c16] flex flex-col ${
           isPage
             ? "flex-1 min-h-0 border-t border-gray-800"
@@ -709,12 +1096,13 @@ function RecordingsTimeline({
           ) : (
             <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
               {recordings.map((r) => {
-                const url = clipUrl(r);
+                const url = clipUrl(r, { forPlayback: true });
+                const downloadUrl = clipUrl(r, { forPlayback: false, viaController: false });
                 const key = recordingKey(r);
                 const isPlaying =
-                  playing != null &&
-                  cameraIdsMatch(playing.camId, r.camId) &&
-                  playing.name === r.name;
+                  clipPlaying != null &&
+                  cameraIdsMatch(clipPlaying.camId, r.camId) &&
+                  clipPlaying.name === r.name;
                 return (
                   <li
                     key={key}
@@ -729,7 +1117,12 @@ function RecordingsTimeline({
                     <div className="relative w-full aspect-video rounded overflow-hidden bg-black border border-gray-700">
                       <button
                         type="button"
-                        onClick={() => setPlaying(r)}
+                        onClick={() =>
+                          setPlaying({
+                            ...r,
+                            camName: activeCameraName || r.camName || "",
+                          })
+                        }
                         className="absolute inset-0 w-full h-full"
                         title="Play clip"
                       >
@@ -740,7 +1133,7 @@ function RecordingsTimeline({
                       </button>
                       <div className="absolute top-1 right-1 flex gap-1 z-10">
                         <a
-                          href={url}
+                          href={downloadUrl}
                           download={r.name}
                           onClick={(e) => e.stopPropagation()}
                           className="p-1 rounded bg-black/75 text-gray-100 hover:bg-black/90 hover:text-white border border-gray-600/80"
@@ -785,42 +1178,6 @@ function RecordingsTimeline({
           )}
         </div>
       </section>
-
-      {playing ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setPlaying(null)}
-        >
-          <div
-            className="max-w-4xl w-full bg-[#111827] rounded-xl border border-gray-700 p-3 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-start gap-2 mb-2 text-xs">
-              <div className="min-w-0">
-                <p className="font-medium text-gray-200 truncate">{playing.camName}</p>
-                <p className="font-mono text-gray-500 truncate">{playing.name}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPlaying(null)}
-                className="text-gray-400 hover:text-white px-2 shrink-0"
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-            <ClipPlayer
-              url={playUrl}
-              camId={playing.camId}
-              filename={playing.name}
-              onRepaired={() => onRefresh()}
-            />
-          </div>
-        </div>
-      ) : null}
-    </>
   );
 }
 
@@ -1391,6 +1748,7 @@ export default function App() {
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState("live");
   const [mobileManageOpen, setMobileManageOpen] = useState(false);
+  const [playingClip, setPlayingClip] = useState(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -2349,6 +2707,8 @@ export default function App() {
           onRefresh={() => loadAllRecordings(cams)}
           onDelete={deleteRecordingFor}
           onDeleteAll={deleteAllRecordingsForActiveCamera}
+          playing={playingClip}
+          onPlayingChange={setPlayingClip}
           variant={isMobile ? "page" : "dock"}
         />
         )}
@@ -2357,8 +2717,13 @@ export default function App() {
           <EventsPanel
             cameraId={activeCameraId}
             cameraName={activeCamera?.name ?? ""}
+            recordings={recordingsForActiveCamera}
+            cameras={cams}
+            playingClip={playingClip}
+            onPlayClip={setPlayingClip}
+            onClearPlay={() => setPlayingClip(null)}
             className={
-              isMobile ? "flex-1 min-h-0 m-2" : "shrink-0 h-44 mx-2 mb-2"
+              isMobile ? "flex-1 min-h-0 m-2" : "shrink-0 h-64 mx-2 mb-2"
             }
           />
         )}
@@ -2371,6 +2736,13 @@ export default function App() {
           />
         ) : null}
       </div>
+
+      <RecordingPlayModal
+        playing={playingClip}
+        cameras={cams}
+        onClose={() => setPlayingClip(null)}
+        onRefresh={() => loadAllRecordings(cams)}
+      />
 
       {settingsCam && (
         <div

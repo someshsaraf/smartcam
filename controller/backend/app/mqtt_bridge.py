@@ -12,6 +12,7 @@ import paho.mqtt.client as mqtt
 
 from . import camera_store
 from .agent_debug import agent_log
+from .events_store import attach_recording_filename
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,26 @@ class MqttRecordingBridge:
                     "local_path": payload.get("local_path"),
                 }
             new_rec = bool(self._state[cid].get("recording"))
+        if status == "Stop":
+            fn = str(payload.get("filename") or "").strip()
+            rid = str(payload.get("recording_id") or "").strip()
+            if fn and rid:
+                try:
+                    n = attach_recording_filename(cid, rid, fn)
+                    if n:
+                        logger.info(
+                            "linked person_detected event cam_id=%s rid=%s filename=%s",
+                            cid,
+                            rid,
+                            fn,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "failed to link event filename cam_id=%s rid=%s: %s",
+                        cid,
+                        rid,
+                        e,
+                    )
         logger.info(
             "mqtt recording cam_id=%s status=%s recording=%s rid=%s",
             cid,
