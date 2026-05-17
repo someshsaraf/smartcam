@@ -380,40 +380,61 @@ async function readApiError(res) {
   }
 }
 
-function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb }) {
+function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb, mobile = false }) {
   const others = cameras.filter((c) => !cameraIdsMatch(c.id, activeId));
   if (others.length === 0) return null;
   return (
-    <div
-      className="flex gap-2 overflow-x-auto pb-1 shrink-0 snap-x snap-mandatory"
-      aria-label="Other camera feeds"
-    >
-      {others.map((c) => (
-        <div
-          key={c.id}
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(c.id)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onSelect(c.id);
-            }
-          }}
-          className="shrink-0 w-[7.5rem] snap-start cursor-pointer group"
-          title={`Switch to ${c.name}`}
-        >
-          <div className="rounded-lg overflow-hidden ring-1 ring-gray-700 group-hover:ring-indigo-500/70 aspect-video bg-black pointer-events-none">
-            {renderThumb(c)}
+    <div className={`shrink-0 ${mobile ? "px-1" : ""}`} aria-label="Other camera feeds">
+      {mobile ? (
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 px-1 mb-2">
+          Other cameras
+        </p>
+      ) : null}
+      <div
+        className={`flex gap-2.5 mobile-scroll-x snap-x snap-mandatory ${mobile ? "pb-2" : "pb-1"}`}
+      >
+        {others.map((c) => (
+          <div
+            key={c.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(c.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(c.id);
+              }
+            }}
+            className={`shrink-0 snap-start cursor-pointer group active:scale-[0.98] transition-transform ${
+              mobile ? "w-[8.5rem]" : "w-[7.5rem]"
+            }`}
+            title={`Switch to ${c.name}`}
+          >
+            <div
+              className={`overflow-hidden aspect-video bg-black pointer-events-none ${
+                mobile
+                  ? "rounded-xl ring-1 ring-white/10 shadow-lg"
+                  : "rounded-lg ring-1 ring-gray-700 group-hover:ring-indigo-500/70"
+              }`}
+            >
+              {renderThumb(c)}
+            </div>
+            <p
+              className={`truncate mt-1.5 px-0.5 font-medium ${
+                mobile
+                  ? "text-xs text-gray-300"
+                  : "text-[10px] text-gray-400 group-hover:text-gray-200"
+              }`}
+            >
+              {c.name}
+            </p>
           </div>
-          <p className="text-[10px] text-gray-400 truncate mt-1 px-0.5 group-hover:text-gray-200">
-            {c.name}
-          </p>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
+
 
 const EVENT_TYPE_LABELS = {
   person_detected: "Person detected",
@@ -508,7 +529,9 @@ function EventsPanel({
   className = "",
 }) {
   const isSidebar = variant === "sidebar";
+  const isPage = variant === "page";
   const [events, setEvents] = useState([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [filterFromDate, setFilterFromDate] = useState("");
@@ -653,25 +676,45 @@ function EventsPanel({
       className={`flex flex-col min-h-0 ${
         isSidebar
           ? "bg-transparent"
-          : "rounded-xl border border-gray-800 bg-[#070c16]"
+          : isPage
+            ? "rounded-none bg-[#0b1220]"
+            : "rounded-xl border border-gray-800 bg-[#070c16]"
       } ${className}`}
     >
       <div
         className={`shrink-0 space-y-2 ${
-          isSidebar ? "px-0 py-2 border-b border-gray-800" : "px-3 py-2 border-b border-gray-800"
+          isSidebar
+            ? "px-0 py-2 border-b border-gray-800"
+            : isPage
+              ? "px-4 py-3 border-b border-white/5 mobile-glass"
+              : "px-3 py-2 border-b border-gray-800"
         }`}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className={`font-semibold text-gray-100 ${isSidebar ? "text-xs" : "text-sm"}`}>
+            <h2
+              className={`font-semibold text-gray-100 ${
+                isSidebar ? "text-xs" : isPage ? "text-base" : "text-sm"
+              }`}
+            >
               Events
             </h2>
-            <p className="text-[10px] text-gray-500 truncate">
+            <p className={`text-gray-500 truncate ${isPage ? "text-xs mt-0.5" : "text-[10px]"}`}>
               {cameraName || `Camera ${cameraId}`}
+              {events.length > 0 ? ` · ${events.length}` : ""}
               {filterActive ? " · filtered" : ""}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {isPage ? (
+              <button
+                type="button"
+                onClick={() => setFiltersOpen((v) => !v)}
+                className="text-[10px] px-2.5 py-1.5 rounded-full border border-white/10 text-gray-300"
+              >
+                {filtersOpen ? "Hide" : "Filter"}
+              </button>
+            ) : null}
             {events.length > 0 ? (
               <button
                 type="button"
@@ -692,6 +735,8 @@ function EventsPanel({
             </button>
           </div>
         </div>
+        {isPage && !filtersOpen ? null : (
+        <>
         <div
           className={`text-[10px] ${isSidebar ? "flex flex-col gap-1.5" : "grid grid-cols-2 gap-x-2 gap-y-1"}`}
         >
@@ -753,10 +798,12 @@ function EventsPanel({
           </button>
         </div>
         {filterError ? <p className="text-[10px] text-red-400">{filterError}</p> : null}
+        </>
+        )}
       </div>
       <div
-        className={`flex-1 min-h-0 overflow-y-auto space-y-1 ${
-          isSidebar ? "px-0 py-2" : "p-2"
+        className={`flex-1 min-h-0 overflow-y-auto space-y-2 ${
+          isSidebar ? "px-0 py-2" : isPage ? "px-3 py-3" : "p-2"
         }`}
       >
         {events.length === 0 ? (
@@ -775,10 +822,18 @@ function EventsPanel({
             return (
               <div
                 key={ev.id}
-                className={`flex gap-1 rounded-lg border text-[11px] ${
-                  isActive
-                    ? "border-blue-500/70 bg-[#1e293b]"
-                    : "border-gray-800/80 bg-[#111827]"
+                className={`flex gap-1 text-[11px] ${
+                  isPage
+                    ? `rounded-2xl border shadow-md ${
+                        isActive
+                          ? "border-indigo-500/60 bg-[#1a2332]"
+                          : "border-white/10 bg-gradient-to-r from-[#141c2e] to-[#0c111c]"
+                      }`
+                    : `rounded-lg border ${
+                        isActive
+                          ? "border-blue-500/70 bg-[#1e293b]"
+                          : "border-gray-800/80 bg-[#111827]"
+                      }`
                 }`}
               >
                 <button
@@ -846,29 +901,43 @@ function EventsPanel({
 
 function MobileBottomNav({ tab, onTab, clipCount, eventCount }) {
   const tabs = [
-    { id: "live", label: "Live" },
-    { id: "clips", label: clipCount > 0 ? `Clips (${clipCount})` : "Clips" },
-    { id: "events", label: eventCount > 0 ? `Events (${eventCount})` : "Events" },
+    { id: "live", label: "Live", Icon: IconLive, badge: 0 },
+    { id: "clips", label: "Clips", Icon: IconClips, badge: clipCount },
+    { id: "events", label: "Events", Icon: IconEvents, badge: eventCount },
   ];
   return (
     <nav
-      className="md:hidden shrink-0 border-t border-gray-800 bg-[#070c16] flex pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+      className="md:hidden shrink-0 mobile-glass border-t border-white/5 flex justify-around px-2 pt-2 pb-[max(0.65rem,env(safe-area-inset-bottom))]"
       aria-label="Main navigation"
     >
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => onTab(t.id)}
-          className={`flex-1 py-3 text-xs font-medium transition-colors ${
-            tab === t.id
-              ? "text-indigo-300 border-t-2 border-indigo-500 bg-indigo-500/10"
-              : "text-gray-400 border-t-2 border-transparent"
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+      {tabs.map((t) => {
+        const active = tab === t.id;
+        const Icon = t.Icon;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onTab(t.id)}
+            className={`relative flex flex-col items-center justify-center gap-1 min-w-[4.5rem] py-2 px-3 rounded-2xl transition-all active:scale-95 ${
+              active
+                ? "text-indigo-200 bg-indigo-500/20 shadow-[0_0_20px_rgba(99,102,241,0.25)]"
+                : "text-gray-500"
+            }`}
+          >
+            <span className="relative">
+              <Icon className={active ? "w-6 h-6" : "w-5 h-5"} />
+              {t.badge > 0 ? (
+                <span className="absolute -top-1.5 -right-2 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-indigo-500 text-[9px] font-bold text-white">
+                  {t.badge > 99 ? "99+" : t.badge}
+                </span>
+              ) : null}
+            </span>
+            <span className={`text-[10px] font-semibold ${active ? "text-indigo-100" : ""}`}>
+              {t.label}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -1090,6 +1159,147 @@ function IconTrash({ className = "w-3.5 h-3.5" }) {
   );
 }
 
+function IconLive({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <rect x="3" y="5" width="14" height="12" rx="2" />
+      <path d="M17 9l4-2v10l-4-2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconClips({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function IconEvents({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <path d="M6 8h12M6 12h8M6 16h10" strokeLinecap="round" />
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+    </svg>
+  );
+}
+
+function IconSettings({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <circle cx="12" cy="12" r="3" />
+      <path
+        d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconPlay({ className = "w-8 h-8" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M9 6.5v11l9-5.5-9-5.5z" />
+    </svg>
+  );
+}
+
+/** Compact status derived from person debug line (mobile overlay). */
+function mobileStatusFromDebugLine(line) {
+  const s = String(line || "");
+  if (s.includes("YES")) return { tone: "person", text: s.replace(/^Person test:\s*/i, "") };
+  if (s.includes("disconnected") || s.includes("waiting") || s.includes("—"))
+    return { tone: "warn", text: s.replace(/^Person test:\s*/i, "") };
+  if (s.includes("no person")) return { tone: "idle", text: "Scanning…" };
+  return { tone: "idle", text: s.replace(/^Person test:\s*/i, "") || "Live" };
+}
+
+function MobileAppHeader({
+  cameraName,
+  streamLabel,
+  personLine,
+  recording,
+  onManage,
+  onDetect,
+  detecting,
+}) {
+  const status = mobileStatusFromDebugLine(personLine);
+  return (
+    <header className="md:hidden shrink-0 mobile-glass border-b border-white/5 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 pb-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-indigo-300/90">
+            Vigilance
+          </p>
+          <h1 className="text-lg font-semibold text-white truncate leading-tight">
+            {cameraName || "Live view"}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            disabled={detecting}
+            onClick={onDetect}
+            className="text-xs font-medium px-3 py-2 rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-50"
+          >
+            {detecting ? "…" : "Find"}
+          </button>
+          <button
+            type="button"
+            onClick={onManage}
+            className="p-2.5 rounded-full border border-white/10 text-gray-200 active:bg-white/10"
+            aria-label="Manage cameras"
+          >
+            <IconSettings className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 mt-2.5">
+        <span
+          className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border ${
+            streamLabel === "NO SIGNAL"
+              ? "border-red-500/40 text-red-300 bg-red-500/10"
+              : streamLabel === "LIVE"
+                ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+                : "border-amber-500/40 text-amber-300 bg-amber-500/10"
+          }`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              streamLabel === "NO SIGNAL"
+                ? "bg-red-400"
+                : streamLabel === "LIVE"
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-amber-400"
+            }`}
+          />
+          {streamLabel || "LIVE"}
+        </span>
+        {recording ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border border-red-500/50 text-red-200 bg-red-500/15">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+            Recording
+          </span>
+        ) : null}
+        <span
+          className={`text-[11px] font-medium px-2.5 py-1 rounded-full border truncate max-w-[55vw] ${
+            status.tone === "person"
+              ? "border-blue-500/40 text-blue-200 bg-blue-500/10"
+              : status.tone === "warn"
+                ? "border-amber-500/40 text-amber-200 bg-amber-500/10"
+                : "border-gray-600/50 text-gray-400 bg-gray-800/40"
+          }`}
+          title={personLine}
+        >
+          {status.text}
+        </span>
+      </div>
+    </header>
+  );
+}
+
 function RecordingsTimeline({
   recordings,
   cameras,
@@ -1129,18 +1339,28 @@ function RecordingsTimeline({
 
   return (
     <section
-        className={`bg-[#070c16] flex flex-col ${
+        className={`flex flex-col ${
           isPage
-            ? "flex-1 min-h-0 border-t border-gray-800"
-            : "shrink-0 border-t border-gray-800 max-h-[200px] min-h-[120px]"
+            ? "flex-1 min-h-0 bg-[#0b1220]"
+            : "shrink-0 border-t border-gray-800 bg-[#070c16] max-h-[200px] min-h-[120px]"
         } ${className}`}
         aria-label="Recordings timeline"
       >
-        <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
+        <div
+          className={`shrink-0 flex items-center justify-between gap-2 border-b border-white/5 ${
+            isPage ? "px-4 py-3 mobile-glass" : "px-3 py-2 border-gray-800"
+          }`}
+        >
           <div className="min-w-0">
-            <h2 className="text-xs font-semibold text-gray-200">Clips</h2>
-            <p className="text-[10px] text-gray-500 truncate" title={activeCameraName || ""}>
+            <h2 className={`font-semibold text-gray-100 ${isPage ? "text-base" : "text-xs"}`}>
+              Clips
+            </h2>
+            <p
+              className={`text-gray-500 truncate ${isPage ? "text-xs mt-0.5" : "text-[10px]"}`}
+              title={activeCameraName || ""}
+            >
               {activeCameraName || "No camera selected"}
+              {recordings.length > 0 ? ` · ${recordings.length}` : ""}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -1188,7 +1408,13 @@ function RecordingsTimeline({
           ) : recordings.length === 0 ? (
             <p className="text-xs text-gray-500 py-2">No clips for this camera yet. Tap Refresh to sync from cameras.</p>
           ) : (
-            <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
+            <ul
+              className={
+                isPage
+                  ? "grid grid-cols-2 gap-3 pb-6 sm:grid-cols-2"
+                  : "flex gap-3 pb-1"
+              }
+            >
               {recordings.map((r) => {
                 const url = clipUrl(r, { forPlayback: true });
                 const downloadUrl = clipUrl(r, { forPlayback: false, viaController: false });
@@ -1200,15 +1426,25 @@ function RecordingsTimeline({
                 return (
                   <li
                     key={key}
-                    className={`rounded-lg border p-1.5 flex flex-col gap-1 ${
-                      isPage ? "w-full max-w-xl" : "shrink-0 w-[10.5rem]"
+                    className={`flex flex-col overflow-hidden ${
+                      isPage
+                        ? "rounded-2xl border border-white/10 bg-gradient-to-b from-[#151d2e] to-[#0c111c] shadow-lg"
+                        : "rounded-lg border p-1.5 gap-1 shrink-0 w-[10.5rem]"
                     } ${
                       isPlaying
-                        ? "border-blue-500/70 bg-[#111827]"
-                        : "border-gray-800 bg-[#111827]/60"
+                        ? isPage
+                          ? "ring-2 ring-indigo-500/80 border-indigo-500/50"
+                          : "border-blue-500/70 bg-[#111827]"
+                        : isPage
+                          ? ""
+                          : "border-gray-800 bg-[#111827]/60"
                     }`}
                   >
-                    <div className="relative w-full aspect-video rounded overflow-hidden bg-black border border-gray-700">
+                    <div
+                      className={`relative w-full aspect-video overflow-hidden bg-black ${
+                        isPage ? "" : "rounded border border-gray-700"
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={() =>
@@ -1217,7 +1453,7 @@ function RecordingsTimeline({
                             camName: activeCameraName || r.camName || "",
                           })
                         }
-                        className="absolute inset-0 w-full h-full"
+                        className="absolute inset-0 w-full h-full group"
                         title="Play clip"
                       >
                         <RecordingThumbnail
@@ -1226,8 +1462,19 @@ function RecordingsTimeline({
                           videoFallbackSrc={url}
                           className="w-full h-full object-cover pointer-events-none"
                         />
+                        {isPage ? (
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/25 group-active:bg-black/45 transition-colors">
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-[#0b1220] shadow-lg">
+                              <IconPlay className="w-5 h-5 ml-0.5" />
+                            </span>
+                          </span>
+                        ) : null}
                       </button>
-                      <div className="absolute top-1 right-1 flex gap-1 z-10">
+                      <div
+                        className={`absolute flex gap-1 z-10 ${
+                          isPage ? "top-2 right-2" : "top-1 right-1"
+                        }`}
+                      >
                         <a
                           href={downloadUrl}
                           download={r.name}
@@ -1260,12 +1507,18 @@ function RecordingsTimeline({
                         </button>
                       </div>
                     </div>
-                    <div className="min-w-0 text-[10px] px-0.5">
-                      <p className="text-gray-500 truncate">{formatTime(r.mtime)}</p>
-                      <p className="text-gray-600">{formatBytes(r.size)}</p>
-                      <p className="font-mono text-gray-600 truncate" title={r.name}>
-                        {r.name}
+                    <div className={`min-w-0 ${isPage ? "p-2.5 space-y-0.5" : "text-[10px] px-0.5"}`}>
+                      <p className={isPage ? "text-xs text-gray-200 font-medium" : "text-gray-500 truncate"}>
+                        {formatTime(r.mtime)}
                       </p>
+                      <p className={isPage ? "text-[10px] text-gray-500" : "text-gray-600"}>
+                        {formatBytes(r.size)}
+                      </p>
+                      {!isPage ? (
+                        <p className="font-mono text-gray-600 truncate" title={r.name}>
+                          {r.name}
+                        </p>
+                      ) : null}
                     </div>
                   </li>
                 );
@@ -1638,14 +1891,19 @@ function LiveTile({
 
   const isHero = layout === "hero";
   const isThumb = layout === "thumb";
+  const mobileHero = isMobile && isHero && !isThumb;
 
   return (
     <div
-      className={`bg-[#111827] flex flex-col min-h-0 h-full ${
-        isThumb ? "rounded-none p-0" : "rounded-xl p-2"
+      className={`flex flex-col min-h-0 h-full ${
+        isThumb
+          ? "rounded-none p-0 bg-transparent"
+          : mobileHero
+            ? "rounded-2xl p-0 bg-[#0a0f18] ring-1 ring-white/5 shadow-2xl overflow-hidden"
+            : "rounded-xl p-2 bg-[#111827]"
       }`}
     >
-      {!isThumb ? (
+      {!isThumb && !mobileHero ? (
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -1659,7 +1917,7 @@ function LiveTile({
         </div>
       </div>
       ) : null}
-      {!isThumb ? (
+      {!isThumb && !mobileHero ? (
       <div className="mb-1 space-y-0.5">
         <p
           className={`text-[10px] font-mono leading-snug ${
@@ -1687,7 +1945,7 @@ function LiveTile({
         ) : null}
       </div>
       ) : null}
-      {!isThumb && edgeHint ? (
+      {!isThumb && !mobileHero && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
           {cam.url ? (
@@ -1703,17 +1961,30 @@ function LiveTile({
         className={`relative flex-1 bg-black overflow-hidden touch-none ${
           isThumb
             ? "rounded-none min-h-0 h-full"
-            : `rounded-lg ${
-                isHero
-                  ? isMobile
-                    ? "min-h-[42dvh] max-h-[68dvh]"
-                    : "min-h-[200px] max-h-none"
-                  : isMobile
-                    ? "min-h-[28dvh] max-h-[40dvh]"
-                    : "min-h-[100px] max-h-[200px]"
-              }`
+            : mobileHero
+              ? "min-h-0 flex-1 rounded-none"
+              : `rounded-lg ${
+                  isHero
+                    ? isMobile
+                      ? "min-h-[42dvh] max-h-[68dvh]"
+                      : "min-h-[200px] max-h-none"
+                    : isMobile
+                      ? "min-h-[28dvh] max-h-[40dvh]"
+                      : "min-h-[100px] max-h-[200px]"
+                }`
         }`}
       >
+        {mobileHero ? (
+          <>
+            <div className="absolute inset-x-0 top-0 h-14 mobile-video-gradient-top pointer-events-none z-[5]" />
+            <div className="absolute inset-x-0 bottom-0 h-24 mobile-video-gradient-bottom pointer-events-none z-[5]" />
+          </>
+        ) : null}
+        {mobileHero && motionClipLine ? (
+          <div className="absolute top-3 left-3 right-3 z-[15] rounded-lg bg-rose-950/85 border border-rose-500/40 px-2.5 py-1.5 text-[11px] font-medium text-rose-100 text-center">
+            {motionClipLine}
+          </div>
+        ) : null}
         {recording ? (
           <div
             className="absolute top-2 right-2 z-20 h-5 w-5 rounded-full bg-red-600 shadow-lg ring-2 ring-white/90"
@@ -1763,53 +2034,69 @@ function LiveTile({
           )}
         </div>
         {!isThumb ? (
-        <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto items-center">
+        <div
+          className={`absolute z-10 pointer-events-auto flex items-center gap-1 ${
+            mobileHero
+              ? "bottom-3 left-1/2 -translate-x-1/2 mobile-glass rounded-full border border-white/10 px-2 py-1.5 shadow-lg"
+              : "bottom-1 left-1 right-1 flex-wrap"
+          }`}
+        >
           {showManual ? (
             <button
               type="button"
               onClick={onManualToggle}
-              className={`rounded px-2 py-0.5 text-[10px] font-medium shrink-0 ${
+              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold shrink-0 ${
                 manualRecording
-                  ? "bg-red-600 text-white ring-1 ring-white/80 hover:bg-red-500"
-                  : "bg-gray-700 text-gray-100 hover:bg-gray-600"
+                  ? "bg-red-600 text-white"
+                  : mobileHero
+                    ? "bg-white/10 text-gray-100"
+                    : "bg-gray-700 text-gray-100 hover:bg-gray-600"
               }`}
               title={manualRecording ? "Stop manual recording" : "Start manual recording"}
             >
-              {manualRecording ? "■ Stop" : "● Rec"}
+              {manualRecording ? "Stop" : "Rec"}
             </button>
           ) : null}
           <button
             type="button"
             onClick={zoomOut}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              mobileHero ? "w-8 h-8 text-sm" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             −
           </button>
           <button
             type="button"
             onClick={zoomIn}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              mobileHero ? "w-8 h-8 text-sm" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             +
           </button>
           <button
             type="button"
             onClick={() => setScale(1)}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              mobileHero ? "w-8 h-8 text-[10px] font-medium" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             1×
           </button>
           <button
             type="button"
             onClick={goFs}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              mobileHero ? "w-8 h-8 text-[10px] font-medium" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
-            Fullscreen
+            ⛶
           </button>
         </div>
         ) : null}
       </div>
-      {!isThumb ? (
+      {!isThumb && !mobileHero ? (
       <p
         className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
         title={useWebRtc ? "WebRTC reader (low latency)" : "HLS playlist for video + synced overlay"}
@@ -2473,6 +2760,19 @@ export default function App() {
     }
   };
   const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
+  const mobilePersonLine = mobileLiveCam
+    ? formatPersonDebugLine(
+        detectionsById[mobileLiveCam.id],
+        detectionWsOpen,
+        detectionSystem
+      )
+    : "";
+  const mobileRecording =
+    mobileLiveCam &&
+    ((mobileLiveCam.settings?.recording_mode || "motion") === "off"
+      ? manualRecordingById[mobileLiveCam.id] === true
+      : recordingActiveForCam(recordingById, mobileLiveCam.id) ||
+        motionClipIsActive(motionClipById[mobileLiveCam.id]));
   useMotionClipCountdownTicker(motionClipById);
   const showLivePanel = !isMobile || mobileTab === "live";
   const showClipsPanel = isMobile && mobileTab === "clips";
@@ -2520,7 +2820,7 @@ export default function App() {
         className={`bg-[#070c16] p-3 flex flex-col gap-3 border-r border-gray-800 min-h-0 ${
           isMobile
             ? mobileManageOpen
-              ? "flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto"
+              ? "flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-[#070c16]"
               : "hidden"
             : "hidden md:flex w-60 lg:w-72 shrink-0 overflow-hidden"
         }`}
@@ -2529,9 +2829,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setMobileManageOpen(false)}
-            className="text-sm text-indigo-300 hover:text-indigo-100 text-left mb-1"
+            className="flex items-center gap-2 text-sm font-medium text-indigo-200 mb-3 py-2 active:opacity-70"
           >
-            ← Back to live
+            <span className="text-lg leading-none">←</span>
+            Back to live
           </button>
         ) : null}
         <div
@@ -2681,10 +2982,14 @@ export default function App() {
                   setActiveCameraId(c.id);
                 }
               }}
-              className={`bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1 cursor-pointer border ${
-                cameraIdsMatch(activeCameraId, c.id)
-                  ? "border-indigo-500 ring-1 ring-indigo-500/40"
-                  : "border-transparent hover:border-gray-600"
+              className={`p-3 rounded-xl mb-2 text-sm flex justify-between items-center gap-2 cursor-pointer border active:scale-[0.99] transition-transform ${
+                isMobile
+                  ? cameraIdsMatch(activeCameraId, c.id)
+                    ? "border-indigo-500/60 bg-indigo-500/10 ring-1 ring-indigo-500/30"
+                    : "border-white/10 bg-[#111827]/80"
+                  : cameraIdsMatch(activeCameraId, c.id)
+                    ? "bg-[#111827] border-indigo-500 ring-1 ring-indigo-500/40"
+                    : "bg-[#111827] border-transparent hover:border-gray-600"
               }`}
               title="Show this camera's clips in the timeline"
             >
@@ -2741,25 +3046,17 @@ export default function App() {
         {showLivePanel ? (
         <>
         {isMobile ? (
-          <div className="flex gap-2 px-3 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
-            <button
-              type="button"
-              disabled={detecting}
-              onClick={detectCameras}
-              className="flex-1 text-xs py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
-            >
-              {detecting ? "Detecting…" : "Detect cameras"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileManageOpen(true)}
-              className="flex-1 text-xs py-2 rounded border border-gray-600 text-gray-200 hover:bg-gray-800"
-            >
-              Manage
-            </button>
-          </div>
+          <MobileAppHeader
+            cameraName={mobileLiveCam?.name}
+            streamLabel={liveCams.length > 0 ? "LIVE" : "—"}
+            personLine={mobilePersonLine}
+            recording={Boolean(mobileRecording)}
+            onManage={() => setMobileManageOpen(true)}
+            onDetect={detectCameras}
+            detecting={detecting}
+          />
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
+        <div className="hidden md:flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
           <span className="text-xs font-medium text-gray-200">
             {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
           </span>
@@ -2801,16 +3098,22 @@ export default function App() {
           </span>
         </div>
 
-        <div className="flex-1 p-2 md:p-3 min-h-0 overflow-hidden flex flex-col">
+        <div
+          className={`flex-1 min-h-0 overflow-hidden flex flex-col ${
+            isMobile && showLivePanel ? "px-3 pt-2 pb-1" : "p-2 md:p-3"
+          }`}
+        >
           {liveCams.length === 0 ? (
-            <p className="text-gray-500 text-sm p-4">
-              No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
-              backend restarts until removed.
-            </p>
+            <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
+              <p className="text-gray-300 text-sm font-medium mb-1">No cameras yet</p>
+              <p className="text-gray-500 text-xs max-w-[16rem]">
+                Tap Find to discover Pi edge cameras on your network.
+              </p>
+            </div>
           ) : isMobile ? (
-            <div className="flex flex-col flex-1 min-h-0 gap-2">
+            <div className="flex flex-col flex-1 min-h-0 gap-3">
               {mobileLiveCam ? (
-                <div className="flex-1 min-h-0 rounded-xl ring-1 ring-gray-800">
+                <div className="flex-1 min-h-0 flex flex-col">
                   {renderLiveTile(mobileLiveCam, "hero")}
                 </div>
               ) : null}
@@ -2819,6 +3122,7 @@ export default function App() {
                 activeId={effectiveActiveCameraId}
                 onSelect={setActiveCameraId}
                 renderThumb={(c) => renderLiveTile(c, "thumb")}
+                mobile
               />
             </div>
           ) : (
@@ -2881,6 +3185,7 @@ export default function App() {
 
         {isMobile && showEventsPanel ? (
           <EventsPanel
+            variant="page"
             cameraId={activeCameraId}
             cameraName={activeCamera?.name ?? ""}
             recordings={recordingsForActiveCamera}
@@ -2888,7 +3193,7 @@ export default function App() {
             playingClip={playingClip}
             onPlayClip={setPlayingClip}
             onClearPlay={() => setPlayingClip(null)}
-            className="flex-1 min-h-0 m-2"
+            className="flex-1 min-h-0"
           />
         ) : null}
 
