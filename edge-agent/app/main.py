@@ -17,6 +17,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
+from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile
+
 from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
 from .zeroconf_publish import EdgeZeroconfPublisher
@@ -249,6 +251,19 @@ def get_file(filename: str):
             "Accept-Ranges": "bytes",
         },
     )
+
+
+@app.post("/recordings/files/{filename}/finalize-mobile")
+def finalize_file_for_mobile(filename: str):
+    """Re-mux/re-encode an existing clip for iOS/Android HTML5 playback."""
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = _rec_root / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not finalize_mp4_for_mobile(path):
+        raise HTTPException(status_code=500, detail="finalize failed")
+    return {"ok": True, "filename": filename}
 
 
 @app.delete("/recordings/files/{filename}")

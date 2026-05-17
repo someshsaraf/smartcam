@@ -21,8 +21,16 @@ apply_rtsp_env()
 
 import cv2
 
+from ._shared_path import ensure_shared_on_path
 from .camera_store import add_change_listener, list_cameras, remove_change_listener
 from .detector import Detector
+
+ensure_shared_on_path()
+from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
+    finalize_mp4_for_mobile,
+    h264_mobile_output_args,
+    h264_mobile_video_args,
+)
 
 RECORDINGS_ROOT = Path(__file__).resolve().parent.parent / "data" / "recordings"
 SEGMENT_SECONDS = 600
@@ -135,8 +143,7 @@ class _CameraWorker:
             "tcp",
             "-i",
             url,
-            "-c",
-            "copy",
+            *h264_mobile_video_args(preset="veryfast"),
             "-f",
             "segment",
             "-segment_time",
@@ -147,6 +154,7 @@ class _CameraWorker:
             "1",
             pattern,
         ]
+        finalized_segments: set[str] = set()
         try:
             self._ffmpeg_proc = subprocess.Popen(
                 cmd,
@@ -170,9 +178,29 @@ class _CameraWorker:
             st = cur.get("settings", {})
             if st.get("recording_mode") != "continuous" or cur.get("url") != url:
                 break
+            mp4s = sorted(
+                [
+                    p
+                    for p in out_dir.glob("*.mp4")
+                    if not p.name.startswith("_") and not p.name.startswith(".")
+                ],
+                key=lambda p: p.stat().st_mtime,
+            )
+            for seg in mp4s[:-1]:
+                if seg.name in finalized_segments:
+                    continue
+                if finalize_mp4_for_mobile(seg):
+                    finalized_segments.add(seg.name)
             time.sleep(0.8)
 
         self._terminate_ffmpeg()
+        for seg in out_dir.glob("*.mp4"):
+            if seg.name.startswith("_") or seg.name.startswith("."):
+                continue
+            if seg.name in finalized_segments:
+                continue
+            if finalize_mp4_for_mobile(seg):
+                finalized_segments.add(seg.name)
 
     def _run_motion_session(self, cam: dict[str, Any]) -> None:
         self._terminate_ffmpeg()
@@ -333,12 +361,7 @@ class _CameraWorker:
                 str(int(BUFFER_FPS)),
                 "-i",
                 str(tmp / "%05d.jpg"),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
+                *h264_mobile_output_args(preset="veryfast"),
                 str(out_mp4),
             ]
             r = subprocess.run(
@@ -351,6 +374,8 @@ class _CameraWorker:
             )
             if r.returncode != 0:
                 print("[recording] ffmpeg clip failed:", (r.stderr or "")[-500:])
+            elif not finalize_mp4_for_mobile(out_mp4):
+                print("[recording] clip finalize failed:", out_mp4.name)
         except Exception as e:
             print("[recording] event failed:", e)
         finally:

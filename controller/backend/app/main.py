@@ -28,8 +28,12 @@ from .mediamtx_manager import stop_embedded as mediamtx_stop_embedded
 from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
 from .mosquitto_manager import stop_managed_broker
+from ._shared_path import ensure_shared_on_path
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
+
+ensure_shared_on_path()
+from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -665,6 +669,44 @@ async def get_recording_file(cam_id: int, filename: str, request: Request):
         media_type="video/mp4",
         headers=_recording_file_headers(filename),
     )
+
+
+@app.post("/recordings/{cam_id}/files/{filename}/finalize-mobile")
+async def finalize_recording_for_mobile(cam_id: int, filename: str):
+    """Re-mux/re-encode a clip so iOS/Android browsers can play it in <video>."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        url = f"{edge}/recordings/files/{filename}/finalize-mobile"
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                r = await client.post(url)
+                if r.status_code >= 400:
+                    detail = r.text
+                    try:
+                        body = r.json()
+                        if isinstance(body, dict) and body.get("detail") is not None:
+                            detail = str(body["detail"])
+                    except Exception:
+                        pass
+                    raise HTTPException(status_code=r.status_code, detail=detail)
+                return r.json()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    path = _recordings_dir(cam_id) / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not finalize_mp4_for_mobile(path):
+        raise HTTPException(status_code=500, detail="finalize failed")
+    return {"ok": True, "filename": filename}
 
 
 @app.delete("/recordings/{cam_id}/files/{filename}")

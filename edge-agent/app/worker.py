@@ -23,6 +23,12 @@ from . import _shared_bootstrap  # noqa: F401 — sys.path for surveillance_shar
 import cv2
 
 from surveillance_shared.detector import Detector  # noqa: E402
+from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
+    finalize_mp4_for_mobile,
+    h264_mobile_live_mux_flags,
+    h264_mobile_output_args,
+    h264_mobile_video_args,
+)
 from surveillance_shared.rtsp_env import apply_rtsp_env  # noqa: E402
 
 apply_rtsp_env()
@@ -271,20 +277,8 @@ class EdgeRecorder:
             ]
             if st.get("flip_180"):
                 cmd.extend(["-vf", "vflip,hflip"])
-            cmd.extend(
-                [
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-an",
-                    "-movflags",
-                    "+faststart",
-                    str(out_path),
-                ]
-            )
+            cmd.extend(h264_mobile_live_mux_flags())
+            cmd.append(str(out_path))
             try:
                 proc = subprocess.Popen(
                     cmd,
@@ -329,6 +323,9 @@ class EdgeRecorder:
                     proc.kill()
                 except Exception:
                     pass
+        if out_path is not None and out_path.is_file():
+            if not finalize_mp4_for_mobile(out_path):
+                print("[edge] manual clip finalize failed:", out_path.name)
         self._publish(
             status="Stop",
             recording_id=rid or "manual",
@@ -365,12 +362,9 @@ class EdgeRecorder:
         ]
         if st.get("flip_180"):
             cmd.extend(["-vf", "vflip,hflip"])
-        cmd.extend([
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-an",
+        cmd.extend(h264_mobile_video_args(preset="veryfast"))
+        cmd.extend(
+            [
             "-f",
             "segment",
             "-segment_time",
@@ -386,7 +380,8 @@ class EdgeRecorder:
             "-strftime",
             "1",
             pattern,
-        ])
+            ]
+        )
         try:
             self._ffmpeg_proc = subprocess.Popen(
                 cmd,
@@ -431,6 +426,10 @@ class EdgeRecorder:
                         seg_path = (out_dir / raw).resolve()
                     else:
                         seg_path = seg_path.resolve()
+                    if last_filename and last_filename != seg_path.name:
+                        prev = out_dir / last_filename
+                        if prev.is_file():
+                            finalize_mp4_for_mobile(prev)
                     last_filename = seg_path.name
                     self._publish(
                         status="InProgress",
@@ -441,6 +440,10 @@ class EdgeRecorder:
             time.sleep(0.2)
 
         self._terminate_ffmpeg()
+        if last_filename:
+            last_seg = out_dir / last_filename
+            if last_seg.is_file():
+                finalize_mp4_for_mobile(last_seg)
         self._publish(
             status="Stop",
             recording_id=rid,
@@ -617,12 +620,7 @@ class EdgeRecorder:
                 str(max(1, int(round(read_fps)))),
                 "-i",
                 str(tmp / "%05d.jpg"),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
+                *h264_mobile_output_args(preset="veryfast"),
                 str(out_mp4),
             ]
             r = subprocess.run(
@@ -637,6 +635,8 @@ class EdgeRecorder:
                 print("[edge] ffmpeg clip failed:", (r.stderr or "")[-400:])
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return
+            if not finalize_mp4_for_mobile(out_mp4):
+                print("[edge] motion clip finalize failed:", out_mp4.name)
 
             self._publish(
                 status="Stop",

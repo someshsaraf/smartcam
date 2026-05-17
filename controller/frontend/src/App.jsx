@@ -279,9 +279,15 @@ function recordingKey(r) {
 }
 
 /** Clip playback tuned for iOS Safari (byte-range + playsInline). */
-function ClipPlayer({ url }) {
+function ClipPlayer({ url, camId, filename, onRepaired }) {
   const videoRef = useRef(null);
   const [error, setError] = useState("");
+  const [repairing, setRepairing] = useState(false);
+  const [playToken, setPlayToken] = useState(0);
+
+  const reloadVideo = useCallback(() => {
+    setPlayToken((t) => t + 1);
+  }, []);
 
   useEffect(() => {
     setError("");
@@ -293,7 +299,7 @@ function ClipPlayer({ url }) {
       if (code === 4) {
         setError("This clip format is not supported on this device.");
       } else {
-        setError("Could not play clip. Try Refresh, then open again.");
+        setError("Could not play clip.");
       }
     };
 
@@ -311,20 +317,55 @@ function ClipPlayer({ url }) {
       video.removeEventListener("error", onError);
       video.removeEventListener("canplay", onCanPlay);
     };
-  }, [url]);
+  }, [url, playToken]);
+
+  const repairClip = async () => {
+    if (!isSetCameraId(camId) || !filename) return;
+    setRepairing(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `${API}/recordings/${camId}/files/${encodeURIComponent(filename)}/finalize-mobile`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(typeof body.detail === "string" ? body.detail : "Repair failed");
+        return;
+      }
+      reloadVideo();
+      if (typeof onRepaired === "function") onRepaired();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRepairing(false);
+    }
+  };
 
   return (
     <div>
       <video
         ref={videoRef}
-        key={url}
+        key={`${url}-${playToken}`}
         src={url}
         controls
         playsInline
         preload="auto"
         className="w-full rounded bg-black max-h-[75vh]"
       />
-      {error ? <p className="text-xs text-red-400 mt-2">{error}</p> : null}
+      {error ? (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs text-red-400">{error}</p>
+          <button
+            type="button"
+            disabled={repairing}
+            onClick={repairClip}
+            className="text-xs px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white"
+          >
+            {repairing ? "Converting for mobile…" : "Convert for iOS/Android"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -495,7 +536,12 @@ function RecordingsTimeline({
                 ✕
               </button>
             </div>
-            <ClipPlayer url={playUrl} />
+            <ClipPlayer
+              url={playUrl}
+              camId={playing.camId}
+              filename={playing.name}
+              onRepaired={() => onRefresh()}
+            />
           </div>
         </div>
       ) : null}
