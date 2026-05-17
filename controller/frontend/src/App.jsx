@@ -353,11 +353,6 @@ function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb }) {
 
 const EVENT_TYPE_LABELS = {
   person_detected: "Person detected",
-  recording_started: "Recording started",
-  recording_completed: "Clip saved",
-  recording_start_declined: "Recording declined",
-  recording_stopped: "Recording stopped",
-  mqtt_recording_start: "MQTT start",
 };
 
 function formatEventType(eventType) {

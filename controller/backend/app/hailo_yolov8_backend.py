@@ -43,17 +43,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _presence_confidence() -> float:
-    """Floor for person-in-frame (profile / dim light). Side poses often score < 0.90."""
-    return _env_float("SMARTCAM_PERSON_PRESENCE_CONFIDENCE", 0.62, 0.01, 0.99)
+def _person_confidence() -> float:
+    """Minimum score for person overlay, events, and recording (default 90%)."""
+    return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
 
 
 def _overlay_min_confidence() -> float:
-    """Draw boxes at or above this score (defaults to presence, not 0.90)."""
+    """Draw boxes at or above this score (defaults to PERSON_CONFIDENCE)."""
     raw = os.environ.get("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE")
     if raw is not None and str(raw).strip() != "":
-        return _env_float("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE", 0.62, 0.01, 0.99)
-    return _presence_confidence()
+        return _env_float("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE", 0.90, 0.01, 0.99)
+    return _person_confidence()
 
 
 def _box_plausible(box: dict[str, Any]) -> bool:
@@ -62,11 +62,19 @@ def _box_plausible(box: dict[str, Any]) -> bool:
     if w <= 0.0 or h <= 0.0:
         return False
     area = w * h
+    min_area = _env_float("SMARTCAM_PERSON_MIN_BOX_AREA", 0.012, 0.001, 0.5)
     max_area = _env_float("SMARTCAM_PERSON_MAX_BOX_AREA", 0.42, 0.05, 0.95)
-    if area < 1e-5 or area > max_area:
+    if area < min_area or area > max_area:
         return False
     ar = h / max(1e-6, w)
-    return 0.12 <= ar <= 6.0
+    min_ar = _env_float("SMARTCAM_PERSON_MIN_ASPECT", 0.35, 0.1, 8.0)
+    max_ar = _env_float("SMARTCAM_PERSON_MAX_ASPECT", 2.5, 0.5, 8.0)
+    if ar < min_ar or ar > max_ar:
+        return False
+    min_w = _env_float("SMARTCAM_PERSON_MIN_BOX_WIDTH", 0.07, 0.02, 0.95)
+    if w < min_w:
+        return False
+    return True
 
 
 def _hailo_coord_order() -> str:
@@ -456,23 +464,18 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
-        presence_conf = _presence_confidence()
+        conf = _person_confidence()
         overlay_min = _overlay_min_confidence()
-        # Legacy env kept for diagnostics; presence drives detection.
-        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
-        hold_conf = _env_float(
-            "SMARTCAM_PERSON_HOLD_CONFIDENCE",
-            max(0.50, presence_conf - 0.10),
-            0.01,
-            0.99,
-        )
-        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 4.0, 0.0, 30.0)
+        self.conf = conf
+        hold_conf = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.85, 0.01, 0.99)
+        hold_conf = min(hold_conf, conf - 0.01)
+        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
         boxes = [
             b
-            for b in _nms(self._parse_outputs(outputs, score_min=presence_conf), self.nms_iou)
+            for b in _nms(self._parse_outputs(outputs, score_min=conf), self.nms_iou)
             if _box_plausible(b)
         ]
         now = time.monotonic()

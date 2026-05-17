@@ -199,15 +199,6 @@ def handle_person_detected(
                 st.get("recording_id"),
             )
         else:
-            append_event(
-                cam_id,
-                "recording_start_declined",
-                detail={
-                    "reason": result.get("reason"),
-                    "objects_detected": tag_list,
-                    "source": source,
-                },
-            )
             logger.debug(
                 "motion clip declined cam_id=%s reason=%s",
                 cam_id,

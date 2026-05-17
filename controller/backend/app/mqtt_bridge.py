@@ -12,7 +12,6 @@ import paho.mqtt.client as mqtt
 
 from . import camera_store
 from .agent_debug import agent_log
-from .events_store import append_event
 
 logger = logging.getLogger(__name__)
 
@@ -240,41 +239,6 @@ class MqttRecordingBridge:
                 "recording_id": str(payload.get("recording_id") or ""),
             },
         )
-        rid = str(payload.get("recording_id") or "")
-        fn = payload.get("filename")
-        filename = str(fn).strip() if isinstance(fn, str) and fn.strip() else None
-        try:
-            if status == "Start" and rid:
-                append_event(
-                    cid,
-                    "mqtt_recording_start",
-                    recording_id=rid,
-                    detail={
-                        "objects_detected": payload.get("objects_detected"),
-                        "local_path": payload.get("local_path"),
-                    },
-                )
-            elif status == "Stop":
-                if filename:
-                    append_event(
-                        cid,
-                        "recording_completed",
-                        recording_id=rid or None,
-                        filename=filename,
-                        detail={
-                            "objects_detected": payload.get("objects_detected"),
-                            "local_path": payload.get("local_path"),
-                        },
-                    )
-                elif rid:
-                    append_event(
-                        cid,
-                        "recording_stopped",
-                        recording_id=rid,
-                        detail={"local_path": payload.get("local_path")},
-                    )
-        except Exception as e:
-            logger.debug("event log skip cam_id=%s: %s", cid, e)
         self._publish_snapshot()
 
     def _run(self) -> None:
