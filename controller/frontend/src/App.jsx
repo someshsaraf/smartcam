@@ -184,6 +184,26 @@ function formatTime(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
+function formatCountdown(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m > 0) return `${m}:${String(r).padStart(2, "0")}`;
+  return `${r}s`;
+}
+
+function formatPersonMockLine(status) {
+  if (!status?.active) return null;
+  if (status.phase === "materializing") return "Mock rec: saving clip…";
+  if (status.phase === "post_roll") {
+    const rem =
+      typeof status.remaining_seconds === "number" ? status.remaining_seconds : 0;
+    return `Mock rec: ${formatCountdown(rem)} left (10s pre + ${status.post_seconds ?? 50}s post)`;
+  }
+  if (status.phase === "starting") return "Mock rec: starting…";
+  return "Mock rec: active";
+}
+
 function edgeBaseUrlForCamera(cameras, camId) {
   if (!Array.isArray(cameras) || !isSetCameraId(camId)) return "";
   const cam = cameras.find((c) => cameraIdsMatch(c.id, camId));
@@ -716,6 +736,7 @@ function LiveTile({
   personCount,
   detectionInfo,
   detectionWsOpen,
+  personMockLine,
   overlayDelayMs,
   layout = "default",
   isMobile = false,
@@ -1017,23 +1038,32 @@ function LiveTile({
       </div>
       ) : null}
       {!isThumb ? (
-      <p
-        className={`hidden sm:block text-[10px] mb-1 font-mono leading-snug ${
-          personDebugPositive
-            ? "text-blue-300 font-semibold"
-            : personDebugLine.includes("—") || personDebugLine.includes("waiting") || personDebugLine.includes("disconnected")
-              ? "text-amber-400/90"
-              : "text-gray-500"
-        }`}
-        title="YOLOv8n person detection debug (independent of recording mode)"
-      >
-        {personDebugLine}
-      </p>
-      ) : null}
-      {!isThumb && isMobile && persons > 0 ? (
-        <p className="sm:hidden text-[10px] mb-1 text-blue-300 font-semibold">
-          Person detected ({persons})
+      <motion.div className="mb-1 space-y-0.5">
+        <p
+          className={`text-[10px] font-mono leading-snug hidden sm:block ${
+            personDebugPositive
+              ? "text-blue-300 font-semibold"
+              : personDebugLine.includes("—") ||
+                  personDebugLine.includes("waiting") ||
+                  personDebugLine.includes("disconnected")
+                ? "text-amber-400/90"
+                : "text-gray-500"
+          }`}
+          title="YOLOv8n person detection (triggers mock clip when a person appears)"
+        >
+          {personDebugLine}
         </p>
+        {personMockLine ? (
+          <p className="text-[10px] font-mono text-rose-300 font-semibold" title="Person mock recording">
+            {personMockLine}
+          </p>
+        ) : null}
+        {isMobile && persons > 0 ? (
+          <p className="sm:hidden text-[10px] text-blue-300 font-semibold">
+            Person detected ({persons})
+          </p>
+        ) : null}
+      </motion.div>
       ) : null}
       {!isThumb && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
@@ -1199,6 +1229,8 @@ export default function App() {
   const [activeCameraId, setActiveCameraId] = useState(null);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
+  /** Person-detected mock clip on Pi edge (cam id → status from edge). */
+  const [personMockById, setPersonMockById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
   /** Phase 1: controller `/ws/detections` → per-camera inference + person debug */
   const [detectionsById, setDetectionsById] = useState({});
@@ -1308,14 +1340,98 @@ export default function App() {
     };
   }, [cams]);
 
+  useEffect(() => {
+    const edgeCams = cams.filter((c) => c.edge_base_url && isSetCameraId(c.id));
+    if (!edgeCams.length) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      for (const c of edgeCams) {
+        try {
+          const res = await fetch(`${API}/cameras/${c.id}/recordings/person-mock/status`);
+          if (!res.ok || cancelled) continue;
+          const st = await res.json();
+          if (cancelled || !st || typeof st !== "object") continue;
+          setPersonMockById((prev) => {
+            const wasActive = Boolean(prev[c.id]?.active);
+            const next = { ...prev, [c.id]: st };
+            if (wasActive && !st.active) {
+              loadAllRecordingsRef.current(camsRef.current);
+              window.setTimeout(
+                () => loadAllRecordingsRef.current(camsRef.current),
+                1500
+              );
+            }
+            return next;
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    poll();
+    const iv = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, [cams]);
+
   const camsRef = useRef(cams);
   const loadAllRecordingsRef = useRef(loadAllRecordings);
+  const prevPersonDetectedRef = useRef({});
+  const personMockByIdRef = useRef(personMockById);
+  const recordingByIdRef = useRef(recordingById);
+  const manualRecordingByIdRef = useRef(manualRecordingById);
+
+  const cameraRecordingBusy = useCallback((camId) => {
+    if (personMockByIdRef.current[camId]?.active) return true;
+    if (manualRecordingByIdRef.current[camId] === true) return true;
+    return recordingActiveForCam(recordingByIdRef.current, camId);
+  }, []);
+
+  const triggerPersonMock = useCallback(async (cam) => {
+    if (!cam?.edge_base_url || !isSetCameraId(cam.id)) return;
+    if (cameraRecordingBusy(cam.id)) return;
+    const pre = Number(cam.settings?.pre_record_seconds);
+    const post = Number(cam.settings?.post_record_seconds);
+    try {
+      const res = await fetch(`${API}/cameras/${cam.id}/recordings/person-mock/trigger`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pre_record_seconds: Number.isFinite(pre) && pre > 0 ? pre : 10,
+          post_record_seconds: Number.isFinite(post) && post > 0 ? post : 50,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.warn(`[person-mock] trigger failed cam=${cam.id}:`, data);
+        return;
+      }
+      if (data.accepted) {
+        setPersonMockById((prev) => ({ ...prev, [cam.id]: data }));
+        setActiveCameraId(cam.id);
+      }
+    } catch (e) {
+      console.warn(`[person-mock] trigger error cam=${cam.id}:`, e);
+    }
+  }, [cameraRecordingBusy]);
+
   useEffect(() => {
     camsRef.current = cams;
   }, [cams]);
   useEffect(() => {
     loadAllRecordingsRef.current = loadAllRecordings;
   }, [loadAllRecordings]);
+  useEffect(() => {
+    personMockByIdRef.current = personMockById;
+  }, [personMockById]);
+  useEffect(() => {
+    recordingByIdRef.current = recordingById;
+  }, [recordingById]);
+  useEffect(() => {
+    manualRecordingByIdRef.current = manualRecordingById;
+  }, [manualRecordingById]);
 
   useEffect(() => {
     let ws;
@@ -1419,13 +1535,14 @@ export default function App() {
               typeof msg.person_count === "number"
                 ? msg.person_count
                 : countPersonDetections(faces);
+            const personDetected = Boolean(msg.person_detected) || personCount > 0;
             setDetectionsById((prev) => ({
               ...prev,
               [id]: {
                 faces,
                 ts: msg.ts || "",
                 personCount,
-                personDetected: Boolean(msg.person_detected) || personCount > 0,
+                personDetected,
                 faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
@@ -1439,6 +1556,14 @@ export default function App() {
                     : null,
               },
             }));
+            const wasPerson = Boolean(prevPersonDetectedRef.current[id]);
+            prevPersonDetectedRef.current[id] = personDetected;
+            if (personDetected && !wasPerson) {
+              const cam = camsRef.current.find((c) => cameraIdsMatch(c.id, id));
+              if (cam?.edge_base_url) {
+                triggerPersonMock(cam);
+              }
+            }
           }
         } catch {
           /* ignore */
@@ -1459,7 +1584,7 @@ export default function App() {
       setDetectionWsOpen(false);
       if (ws) ws.close();
     };
-  }, []);
+  }, [triggerPersonMock]);
 
   const detectCameras = async () => {
     setDetecting(true);
@@ -1758,6 +1883,7 @@ export default function App() {
           ? detectionSystem.overlay_delay_ms
           : undefined
       }
+      personMockLine={formatPersonMockLine(personMockById[c.id])}
     />
   );
 

@@ -506,6 +506,58 @@ def camera_manual_record_stop(cam_id: int):
     return _edge_manual_proxy(edge, "stop")
 
 
+@app.post("/cameras/{cam_id}/recordings/person-mock/trigger")
+def camera_person_mock_trigger(cam_id: int, body: Optional[dict[str, Any]] = None):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        raise HTTPException(
+            status_code=400,
+            detail="Person mock recording requires a Pi edge camera (edge_base_url).",
+        )
+    url = f"{edge.rstrip('/')}/recordings/person-mock/trigger"
+    try:
+        r = httpx.post(url, json=body if isinstance(body, dict) else {}, timeout=30.0)
+        if r.status_code >= 400:
+            detail: Any = r.text
+            try:
+                payload = r.json()
+                if isinstance(payload, dict) and payload.get("detail") is not None:
+                    detail = payload["detail"]
+            except Exception:
+                pass
+            raise HTTPException(status_code=r.status_code, detail=str(detail))
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+        return {"accepted": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.get("/cameras/{cam_id}/recordings/person-mock/status")
+def camera_person_mock_status(cam_id: int):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    edge = camera_store.edge_base_url(c)
+    if not edge:
+        return {"active": False, "phase": "idle", "remaining_seconds": 0}
+    try:
+        r = httpx.get(f"{edge.rstrip('/')}/recordings/person-mock/status", timeout=15.0)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"active": False, "phase": "idle", "remaining_seconds": 0}
+
+
 @app.get("/cameras/{cam_id}/recordings/manual/status")
 def camera_manual_record_status(cam_id: int):
     c = camera_store.get_camera(cam_id)

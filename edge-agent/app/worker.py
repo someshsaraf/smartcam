@@ -113,6 +113,14 @@ class EdgeRecorder:
         self._manual_proc: Optional[subprocess.Popen] = None
         self._manual_out_path: Optional[Path] = None
         self._manual_rid: str = ""
+        self._pm_lock = threading.Lock()
+        self._pm_buf_lock = threading.Lock()
+        self._pm_active = False
+        self._pm_status: dict[str, Any] = {}
+        self._pm_buf: collections.deque[bytes] = collections.deque()
+        self._pm_buffer_thread: Optional[threading.Thread] = None
+        self._clip_busy_lock = threading.Lock()
+        self._clip_busy = False
         self._on_settings_changed = on_settings_changed
         if model_dir:
             import os
@@ -205,10 +213,20 @@ class EdgeRecorder:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="edge-recorder", daemon=True)
         self._thread.start()
+        if self._pm_buffer_thread is None or not self._pm_buffer_thread.is_alive():
+            self._pm_buffer_thread = threading.Thread(
+                target=self._run_person_mock_buffer,
+                name="edge-person-mock-buffer",
+                daemon=True,
+            )
+            self._pm_buffer_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         self.stop_manual_recording()
+        with self._pm_lock:
+            self._pm_active = False
+            self._pm_status = {}
         self._terminate_ffmpeg()
         if self._mqtt:
             try:
@@ -253,6 +271,273 @@ class EdgeRecorder:
             active = proc is not None and proc.poll() is None
             fn = path.name if path is not None and active else None
         return {"active": active, "filename": fn}
+
+    def person_mock_busy(self) -> bool:
+        with self._pm_lock:
+            if self._pm_active:
+                return True
+        with self._manual_lock:
+            proc = self._manual_proc
+            if proc is not None and proc.poll() is None:
+                return True
+        with self._clip_busy_lock:
+            if self._clip_busy:
+                return True
+        return False
+
+    def person_mock_status(self) -> dict[str, Any]:
+        with self._pm_lock:
+            if not self._pm_active:
+                return {
+                    "active": False,
+                    "phase": "idle",
+                    "remaining_seconds": 0,
+                    "pre_seconds": 0,
+                    "post_seconds": 0,
+                    "recording_id": "",
+                    "filename": None,
+                }
+            st = dict(self._pm_status)
+            ends = float(st.get("ends_at") or 0.0)
+            st["remaining_seconds"] = max(0, int(ends - time.time()))
+            st["active"] = True
+            return st
+
+    def trigger_person_mock(
+        self,
+        *,
+        pre_seconds: Optional[int] = None,
+        post_seconds: Optional[int] = None,
+    ) -> dict[str, Any]:
+        settings = self.snapshot_settings()
+        pre_s = int(pre_seconds if pre_seconds is not None else settings.get("pre_record_seconds", 10))
+        post_s = int(post_seconds if post_seconds is not None else settings.get("post_record_seconds", 50))
+        pre_s = max(1, min(120, pre_s))
+        post_s = max(1, min(600, post_s))
+
+        if self.manual_recording_active():
+            return {
+                "accepted": False,
+                "reason": "manual_recording_active",
+                **self.person_mock_status(),
+            }
+        with self._clip_busy_lock:
+            if self._clip_busy:
+                return {
+                    "accepted": False,
+                    "reason": "recording_in_progress",
+                    **self.person_mock_status(),
+                }
+
+        with self._pm_lock:
+            if self._pm_active:
+                return {
+                    "accepted": False,
+                    "reason": "person_mock_already_active",
+                    **self.person_mock_status(),
+                }
+            rid = f"pmock_{int(time.time() * 1000)}"
+            self._pm_active = True
+            self._pm_status = {
+                "active": True,
+                "recording_id": rid,
+                "phase": "post_roll",
+                "pre_seconds": pre_s,
+                "post_seconds": post_s,
+                "ends_at": time.time() + post_s,
+                "remaining_seconds": post_s,
+                "filename": None,
+            }
+
+        with self._pm_buf_lock:
+            pre_frames = list(self._pm_buf)
+
+        threading.Thread(
+            target=self._run_person_mock_clip,
+            args=(rid, pre_frames, pre_s, post_s),
+            name=f"person-mock-{rid}",
+            daemon=True,
+        ).start()
+        return {"accepted": True, **self.person_mock_status()}
+
+    def _run_person_mock_buffer(self) -> None:
+        cap: Optional[cv2.VideoCapture] = None
+        while not self._stop.is_set():
+            st = self.snapshot_settings()
+            pre_s = int(st.get("pre_record_seconds", 10))
+            flip = bool(st.get("flip_180", False))
+            fps = _fps_for_quality(st.get("quality"))
+            maxlen = max(1, int(pre_s * fps))
+            period = 1.0 / fps
+
+            if cap is None or not cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
+                _configure_rtsp_capture(cap)
+                if not cap.isOpened():
+                    time.sleep(2.0)
+                    continue
+
+            loop_t0 = time.perf_counter()
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                cap.release()
+                cap = None
+                time.sleep(1.0)
+                continue
+
+            frame = _flip_if_needed(frame, flip)
+            enc_ok, jpg = cv2.imencode(
+                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+            )
+            if enc_ok:
+                blob = jpg.tobytes()
+                with self._pm_buf_lock:
+                    if self._pm_buf.maxlen != maxlen:
+                        self._pm_buf = collections.deque(list(self._pm_buf)[-maxlen:], maxlen=maxlen)
+                    self._pm_buf.append(blob)
+
+            elapsed = time.perf_counter() - loop_t0
+            time.sleep(max(0.0, period - elapsed))
+
+        if cap is not None:
+            cap.release()
+
+    def _run_person_mock_clip(
+        self,
+        rid: str,
+        pre_jpegs: list[bytes],
+        pre_seconds: int,
+        post_seconds: int,
+    ) -> None:
+        ff = shutil.which("ffmpeg")
+        out_dir = self._recordings_root
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tmp = out_dir / f"_tmp_{rid}"
+        out_mp4 = out_dir / f"person_mock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        flip = bool(self.snapshot_settings().get("flip_180", False))
+        read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
+
+        try:
+            if not ff:
+                print("[edge] person_mock: ffmpeg missing")
+                return
+
+            tmp.mkdir(parents=True, exist_ok=True)
+            idx = 0
+            for blob in pre_jpegs:
+                (tmp / f"{idx:05d}.jpg").write_bytes(blob)
+                idx += 1
+
+            self._publish(
+                status="Start",
+                recording_id=rid,
+                objects_detected=["person"],
+                local_path=out_mp4.resolve().as_posix(),
+            )
+
+            cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
+            _configure_rtsp_capture(cap)
+            end = time.time() + post_seconds
+            while time.time() < end and not self._stop.is_set():
+                with self._pm_lock:
+                    self._pm_status["phase"] = "post_roll"
+                    self._pm_status["ends_at"] = end
+                    self._pm_status["remaining_seconds"] = max(0, int(end - time.time()))
+
+                if not cap.isOpened():
+                    break
+                loop_t0 = time.perf_counter()
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                frame = _flip_if_needed(frame, flip)
+                enc_ok, jpg = cv2.imencode(
+                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+                )
+                if enc_ok:
+                    (tmp / f"{idx:05d}.jpg").write_bytes(jpg.tobytes())
+                    idx += 1
+                read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
+                elapsed = time.perf_counter() - loop_t0
+                time.sleep(max(0.0, (1.0 / read_fps) - elapsed))
+            if cap is not None:
+                cap.release()
+
+            with self._pm_lock:
+                self._pm_status["phase"] = "materializing"
+                self._pm_status["remaining_seconds"] = 0
+
+            if idx == 0:
+                self._publish(status="Stop", recording_id=rid, local_path="")
+                return
+
+            cmd = [
+                ff,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-framerate",
+                str(max(1, int(round(read_fps)))),
+                "-i",
+                str(tmp / "%05d.jpg"),
+                *h264_mobile_output_args(preset="veryfast"),
+                str(out_mp4),
+            ]
+            r = subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=600,
+            )
+            if r.returncode != 0:
+                print("[edge] person_mock ffmpeg failed:", (r.stderr or "")[-400:])
+                remove_invalid_mp4(out_mp4)
+                self._publish(status="Stop", recording_id=rid, local_path="")
+                return
+            if not finalize_mp4_for_mobile(out_mp4):
+                print("[edge] person_mock finalize failed:", out_mp4.name)
+            if not mp4_ios_playable(out_mp4):
+                print("[edge] person_mock not playable, removing:", out_mp4.name)
+                remove_invalid_mp4(out_mp4)
+                self._publish(status="Stop", recording_id=rid, local_path="")
+                return
+
+            with self._pm_lock:
+                self._pm_status["filename"] = out_mp4.name
+
+            self._publish(
+                status="Stop",
+                recording_id=rid,
+                objects_detected=["person"],
+                local_path=out_mp4.resolve().as_posix(),
+                filename=out_mp4.name,
+            )
+        except Exception as e:
+            print("[edge] person_mock clip failed:", e)
+            self._publish(status="Stop", recording_id=rid, local_path="")
+        finally:
+            saved_fn: Optional[str] = None
+            with self._pm_lock:
+                saved_fn = self._pm_status.get("filename")
+                self._pm_active = False
+                self._pm_status = {
+                    "active": False,
+                    "phase": "idle",
+                    "remaining_seconds": 0,
+                    "pre_seconds": pre_seconds,
+                    "post_seconds": post_seconds,
+                    "recording_id": rid,
+                    "filename": saved_fn,
+                }
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
 
     def start_manual_recording(self) -> dict[str, Any]:
         ff = shutil.which("ffmpeg")
@@ -569,6 +854,12 @@ class EdgeRecorder:
         flip: bool,
         tags: list[str],
     ) -> None:
+        if self.person_mock_busy():
+            return
+        with self._clip_busy_lock:
+            if self._clip_busy:
+                return
+            self._clip_busy = True
         rid = f"evt_{int(time.time() * 1000)}"
         out_dir = self._recordings_root
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -677,6 +968,8 @@ class EdgeRecorder:
             print("[edge] materialize failed:", e)
             self._publish(status="Stop", recording_id=rid, local_path="")
         finally:
+            with self._clip_busy_lock:
+                self._clip_busy = False
             try:
                 shutil.rmtree(tmp, ignore_errors=True)
             except Exception:
