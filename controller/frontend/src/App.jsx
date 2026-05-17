@@ -349,7 +349,13 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(typeof body.detail === "string" ? body.detail : "Repair failed");
+        const detail =
+          typeof body.detail === "string"
+            ? body.detail
+            : res.status === 422
+              ? "This clip is incomplete or corrupt and cannot be repaired. Delete it and record again."
+              : "Repair failed";
+        setError(detail);
         return false;
       }
       reloadVideo();
@@ -1669,11 +1675,24 @@ export default function App() {
     if (!window.confirm(`Delete all ${n} clip${n === 1 ? "" : "s"} for ${label}?`)) return false;
     try {
       const res = await fetch(
-        `${API}/recordings/${encodeURIComponent(String(effectiveActiveCameraId))}/files`,
+        `${API}/recordings/${encodeURIComponent(String(effectiveActiveCameraId))}/all`,
         { method: "DELETE" }
       );
       if (!res.ok) {
         alert(await readApiError(res));
+        return false;
+      }
+      let body = {};
+      try {
+        body = await res.json();
+      } catch {
+        body = {};
+      }
+      const deleted = typeof body.deleted === "number" ? body.deleted : 0;
+      if (deleted === 0 && n > 0) {
+        alert(
+          "No clips were removed. Restart the edge agent and controller backend, then try again."
+        );
         return false;
       }
       setAllRecordings((prev) =>

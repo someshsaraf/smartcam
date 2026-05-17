@@ -25,8 +25,11 @@ import cv2
 from surveillance_shared.detector import Detector  # noqa: E402
 from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     finalize_mp4_for_mobile,
+    h264_mobile_fragmented_mp4_args,
     h264_mobile_output_args,
     h264_mobile_video_args,
+    mp4_probe_ok,
+    remove_invalid_mp4,
 )
 from surveillance_shared.rtsp_env import apply_rtsp_env  # noqa: E402
 
@@ -276,7 +279,7 @@ class EdgeRecorder:
             ]
             if st.get("flip_180"):
                 cmd.extend(["-vf", "vflip,hflip"])
-            cmd.extend(h264_mobile_output_args(preset="veryfast"))
+            cmd.extend(h264_mobile_fragmented_mp4_args(preset="veryfast"))
             cmd.append(str(out_path))
             try:
                 proc = subprocess.Popen(
@@ -322,17 +325,26 @@ class EdgeRecorder:
                     proc.kill()
                 except Exception:
                     pass
+        playable_name = ""
         if out_path is not None and out_path.is_file():
-            time.sleep(0.3)
-            if not finalize_mp4_for_mobile(out_path):
-                print("[edge] manual clip finalize failed:", out_path.name)
+            time.sleep(1.0)
+            ok = finalize_mp4_for_mobile(out_path)
+            if not ok:
+                time.sleep(1.5)
+                ok = finalize_mp4_for_mobile(out_path)
+            if ok and mp4_probe_ok(out_path):
+                playable_name = out_path.name
+            else:
+                print("[edge] manual clip unusable, removing:", out_path.name)
+                remove_invalid_mp4(out_path)
+                filename = ""
         self._publish(
             status="Stop",
             recording_id=rid or "manual",
-            local_path=out_path.resolve().as_posix() if out_path else "",
-            filename=filename,
+            local_path=out_path.resolve().as_posix() if out_path and playable_name else "",
+            filename=playable_name or None,
         )
-        return {"active": False, "filename": filename}
+        return {"active": False, "filename": playable_name or None}
 
     def _run_continuous_session(self, st: dict[str, Any]) -> None:
         ff = shutil.which("ffmpeg")
@@ -430,25 +442,34 @@ class EdgeRecorder:
                         prev = out_dir / last_filename
                         if prev.is_file():
                             finalize_mp4_for_mobile(prev)
+                            if not mp4_probe_ok(prev):
+                                remove_invalid_mp4(prev)
                     last_filename = seg_path.name
-                    self._publish(
-                        status="InProgress",
-                        recording_id=rid,
-                        local_path=seg_path.as_posix(),
-                        filename=last_filename,
-                    )
+                    if seg_path.is_file() and mp4_probe_ok(seg_path):
+                        self._publish(
+                            status="InProgress",
+                            recording_id=rid,
+                            local_path=seg_path.as_posix(),
+                            filename=last_filename,
+                        )
             time.sleep(0.2)
 
         self._terminate_ffmpeg()
+        stop_filename = ""
         if last_filename:
             last_seg = out_dir / last_filename
             if last_seg.is_file():
+                time.sleep(0.5)
                 finalize_mp4_for_mobile(last_seg)
+                if mp4_probe_ok(last_seg):
+                    stop_filename = last_filename
+                else:
+                    remove_invalid_mp4(last_seg)
         self._publish(
             status="Stop",
             recording_id=rid,
             local_path=out_dir.resolve().as_posix(),
-            filename=last_filename,
+            filename=stop_filename or None,
         )
 
     def _run_motion_session(self, st: dict[str, Any]) -> None:
@@ -633,10 +654,16 @@ class EdgeRecorder:
             )
             if r.returncode != 0:
                 print("[edge] ffmpeg clip failed:", (r.stderr or "")[-400:])
+                remove_invalid_mp4(out_mp4)
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return
             if not finalize_mp4_for_mobile(out_mp4):
                 print("[edge] motion clip finalize failed:", out_mp4.name)
+            if not mp4_probe_ok(out_mp4):
+                print("[edge] motion clip not playable, removing:", out_mp4.name)
+                remove_invalid_mp4(out_mp4)
+                self._publish(status="Stop", recording_id=rid, local_path="")
+                return
 
             self._publish(
                 status="Stop",

@@ -30,6 +30,8 @@ from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     finalize_mp4_for_mobile,
     h264_mobile_output_args,
     h264_mobile_video_args,
+    mp4_probe_ok,
+    remove_invalid_mp4,
 )
 
 RECORDINGS_ROOT = Path(__file__).resolve().parent.parent / "data" / "recordings"
@@ -374,8 +376,13 @@ class _CameraWorker:
             )
             if r.returncode != 0:
                 print("[recording] ffmpeg clip failed:", (r.stderr or "")[-500:])
-            elif not finalize_mp4_for_mobile(out_mp4):
-                print("[recording] clip finalize failed:", out_mp4.name)
+                remove_invalid_mp4(out_mp4)
+            else:
+                if not finalize_mp4_for_mobile(out_mp4):
+                    print("[recording] clip finalize failed:", out_mp4.name)
+                if not mp4_probe_ok(out_mp4):
+                    print("[recording] clip not playable, removing:", out_mp4.name)
+                    remove_invalid_mp4(out_mp4)
         except Exception as e:
             print("[recording] event failed:", e)
         finally:

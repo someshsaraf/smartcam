@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
-from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile
+from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile, mp4_probe_ok
 
 from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
@@ -223,6 +223,20 @@ def health():
     }
 
 
+@app.get("/recordings/names")
+def list_all_recording_names() -> List[str]:
+    """All .mp4 basenames on disk (including corrupt/partial); used for bulk delete fallback."""
+    root = _rec_root
+    root.mkdir(parents=True, exist_ok=True)
+    names: list[str] = []
+    for p in root.glob("*.mp4"):
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if _SAFE_NAME.match(p.name):
+            names.append(p.name)
+    return sorted(names, reverse=True)
+
+
 @app.get("/recordings")
 def list_recordings() -> List[dict[str, Any]]:
     root = _rec_root
@@ -230,6 +244,10 @@ def list_recordings() -> List[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in sorted(root.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        if not mp4_probe_ok(p):
             continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
@@ -243,6 +261,11 @@ def get_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt (no moov atom)",
+        )
     return FileResponse(
         path,
         media_type="video/mp4",
@@ -261,8 +284,16 @@ def finalize_file_for_mobile(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt (no moov atom); re-record this clip",
+        )
     if not finalize_mp4_for_mobile(path):
-        raise HTTPException(status_code=500, detail="finalize failed")
+        raise HTTPException(
+            status_code=422,
+            detail="could not repair clip for mobile playback",
+        )
     return {"ok": True, "filename": filename}
 
 
@@ -283,6 +314,7 @@ def delete_all_files():
     root = _rec_root
     root.mkdir(parents=True, exist_ok=True)
     deleted = 0
+    failed: list[str] = []
     for p in root.glob("*.mp4"):
         if p.name.startswith("_") or p.name.startswith("."):
             continue
@@ -291,9 +323,10 @@ def delete_all_files():
         try:
             p.unlink()
             deleted += 1
-        except OSError:
-            pass
-    return {"ok": True, "deleted": deleted}
+        except OSError as e:
+            failed.append(p.name)
+            logger.warning("delete_all: could not remove %s: %s", p.name, e)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
 
 
 @app.post("/recordings/manual/start")

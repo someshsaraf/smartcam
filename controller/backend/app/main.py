@@ -33,7 +33,10 @@ from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
 
 ensure_shared_on_path()
-from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile  # noqa: E402
+from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
+    finalize_mp4_for_mobile,
+    mp4_probe_ok,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -613,6 +616,10 @@ def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
     for p in sorted(d.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.name.startswith("_") or p.name.startswith("."):
             continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        if not mp4_probe_ok(p):
+            continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
     return out
@@ -704,9 +711,54 @@ async def finalize_recording_for_mobile(cam_id: int, filename: str):
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(path):
+        raise HTTPException(
+            status_code=422,
+            detail="recording incomplete or corrupt (no moov atom); re-record this clip",
+        )
     if not finalize_mp4_for_mobile(path):
-        raise HTTPException(status_code=500, detail="finalize failed")
+        raise HTTPException(status_code=422, detail="could not repair clip for mobile playback")
     return {"ok": True, "filename": filename}
+
+
+def _delete_all_on_edge(edge: str) -> dict[str, Any]:
+    """Bulk delete on edge; fall back to per-file DELETE if /recordings/all is missing."""
+    r = httpx.delete(f"{edge}/recordings/all", timeout=120.0)
+    if r.status_code not in (404, 405):
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        if isinstance(data, dict):
+            return data
+        return {"ok": True, "deleted": 0}
+
+    # Older edge agents: delete each known clip, then any remaining .mp4 on disk.
+    names: set[str] = set()
+    lr = httpx.get(f"{edge}/recordings", timeout=60.0)
+    lr.raise_for_status()
+    raw = lr.json()
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("name"):
+                names.add(str(item["name"]))
+    nr = httpx.get(f"{edge}/recordings/names", timeout=60.0)
+    if nr.status_code == 200:
+        extra = nr.json()
+        if isinstance(extra, list):
+            for name in extra:
+                if isinstance(name, str) and _SAFE_NAME.match(name):
+                    names.add(name)
+
+    deleted = 0
+    failed: list[str] = []
+    for name in sorted(names):
+        dr = httpx.delete(f"{edge}/recordings/files/{name}", timeout=30.0)
+        if dr.status_code in (200, 204):
+            deleted += 1
+        elif dr.status_code == 404:
+            continue
+        else:
+            failed.append(name)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
 
 
 @app.delete("/recordings/{cam_id}/files/{filename}")
@@ -740,28 +792,10 @@ def delete_recording_file(cam_id: int, filename: str):
     return {"ok": True}
 
 
-@app.delete("/recordings/{cam_id}/files")
-def delete_all_recording_files(cam_id: int):
-    """Delete every clip for this camera (edge proxy or local recordings dir)."""
-    c = camera_store.get_camera(cam_id)
-    if not c:
-        raise HTTPException(status_code=404, detail="camera not found")
-
-    edge = camera_store.edge_base_url(c)
-    if edge:
-        try:
-            r = httpx.delete(f"{edge}/recordings/all", timeout=120.0)
-            r.raise_for_status()
-            data = r.json() if r.content else {}
-            deleted = int(data.get("deleted", 0)) if isinstance(data, dict) else 0
-            return {"ok": True, "deleted": deleted}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
-
+def _delete_all_local(cam_id: int) -> dict[str, Any]:
     d = _recordings_dir(cam_id)
     deleted = 0
+    failed: list[str] = []
     if d.is_dir():
         for p in d.glob("*.mp4"):
             if p.name.startswith("_") or p.name.startswith("."):
@@ -772,8 +806,28 @@ def delete_all_recording_files(cam_id: int):
                 p.unlink()
                 deleted += 1
             except OSError:
-                pass
-    return {"ok": True, "deleted": deleted}
+                failed.append(p.name)
+    return {"ok": len(failed) == 0, "deleted": deleted, "failed": failed}
+
+
+@app.delete("/recordings/{cam_id}/all")
+@app.delete("/recordings/{cam_id}/files")
+def delete_all_recording_files(cam_id: int):
+    """Delete every clip for this camera (edge proxy or local recordings dir)."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        try:
+            return _delete_all_on_edge(edge)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return _delete_all_local(cam_id)
 
 
 # =========================
