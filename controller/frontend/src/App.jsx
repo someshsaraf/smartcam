@@ -778,10 +778,17 @@ function LiveTile({
   const canvasRef = useRef(null);
   const hlsRef = useRef(null);
   const overlaySync = detectionOverlaySyncEnabled();
+  const backendInferenceDelayMs =
+    typeof detectionSystem?.inference_delay_ms === "number"
+      ? detectionSystem.inference_delay_ms
+      : 0;
+  // Backend already runs inference on delayed RTSP frames; do not add the same delay again in UI.
   const baseOverlayDelay =
-    typeof overlayDelayMs === "number" && overlayDelayMs >= 0
-      ? overlayDelayMs
-      : detectionOverlayDelayMs();
+    backendInferenceDelayMs > 0
+      ? 0
+      : typeof overlayDelayMs === "number" && overlayDelayMs >= 0
+        ? overlayDelayMs
+        : detectionOverlayDelayMs();
   const [useIframeFallback, setUseIframeFallback] = useState(false);
   const synced = useOverlaySyncedDetections(faces, personCount, {
     videoRef,

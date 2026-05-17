@@ -36,6 +36,37 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _box_plausible(box: dict[str, Any]) -> bool:
+    w = float(box.get("w", 0.0))
+    h = float(box.get("h", 0.0))
+    if w <= 0.0 or h <= 0.0:
+        return False
+    area = w * h
+    max_area = _env_float("SMARTCAM_PERSON_MAX_BOX_AREA", 0.42, 0.05, 0.95)
+    if area < 1e-5 or area > max_area:
+        return False
+    ar = h / max(1e-6, w)
+    return 0.12 <= ar <= 6.0
+
+
+def _normalize_model_corners(
+    y0: float, x0: float, y1: float, x1: float, input_size: int
+) -> tuple[float, float, float, float]:
+    """Hailo may return 0..1 or 0..input_size corner coords."""
+    vals = [y0, x0, y1, x1]
+    if max(vals) > 1.5:
+        inv = 1.0 / float(input_size)
+        vals = [v * inv for v in vals]
+    return float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3])
+
+
 def _default_hef_path() -> str:
     here = Path(__file__).resolve()
     return str((here.parents[1] / "models" / REQUIRED_HEF_BASENAME).resolve())
@@ -161,9 +192,10 @@ def _parse_person_rows(
             continue
         if score <= 0.0 or score < score_min:
             continue
+        y0, x0, y1, x1 = _normalize_model_corners(y0, x0, y1, x1, det.input_size)
         if y1 <= y0 or x1 <= x0:
             continue
-        box = det._box_from_model_coords(y0, x0, y1, x1, score)
+        box = det._row_to_frame_box(y0, x0, y1, x1, score)
         if box is None:
             continue
         if box["w"] * det._lb_src_w < det.min_box_px or box["h"] * det._lb_src_h < det.min_box_px:
@@ -189,6 +221,7 @@ class HailoYolov8Detector:
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
+        self._use_letterbox = _env_bool("SMARTCAM_HAILO_LETTERBOX", True)
         self._infer_lock = threading.Lock()
         self._init_lock = threading.Lock()
         self._ready = False
@@ -310,16 +343,23 @@ class HailoYolov8Detector:
                 return False
 
     def _preprocess(self, frame_bgr: np.ndarray) -> np.ndarray:
-        """Letterbox to model input (YOLOv8-style); preserves aspect ratio for profile/partial bodies."""
+        """Preprocess to model input. Letterbox (default) or stretch (baseline)."""
         h, w = frame_bgr.shape[:2]
         size = self.input_size
+        self._lb_src_w = max(1, w)
+        self._lb_src_h = max(1, h)
         if h < 2 or w < 2:
             self._lb_scale = 1.0
             self._lb_pad_x = 0
             self._lb_pad_y = 0
-            self._lb_src_w = max(1, w)
-            self._lb_src_h = max(1, h)
             return np.zeros((size, size, 3), dtype=np.uint8)
+
+        if not self._use_letterbox:
+            self._lb_scale = 1.0
+            self._lb_pad_x = 0
+            self._lb_pad_y = 0
+            img = cv2.resize(frame_bgr, (size, size), interpolation=cv2.INTER_LINEAR)
+            return np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), dtype=np.uint8)
 
         scale = min(size / float(w), size / float(h))
         nw = max(1, int(round(w * scale)))
@@ -355,6 +395,31 @@ class HailoYolov8Detector:
             score,
         )
 
+    def _row_to_frame_box(
+        self, y0: float, x0: float, y1: float, x1: float, score: float
+    ) -> Optional[dict[str, Any]]:
+        """Map Hailo row to source-frame box.
+
+        Some HEF builds already emit source-normalized corners; letterbox unmap can
+        then shift boxes onto empty wall/ceiling. Prefer the plausible candidate.
+        """
+        # Baseline mapping (worked with stretch preprocess): xmin, ymin, xmax, ymax.
+        direct = self._make_box(x0, y0, x1, y1, score)
+        if not self._use_letterbox:
+            return direct if _box_plausible(direct) else None
+        unmapped = self._box_from_model_coords(y0, x0, y1, x1, score)
+        direct_ok = direct is not None and _box_plausible(direct)
+        unmapped_ok = unmapped is not None and _box_plausible(unmapped)
+        if direct_ok and unmapped_ok:
+            d_area = float(direct["w"]) * float(direct["h"])
+            u_area = float(unmapped["w"]) * float(unmapped["h"])
+            return direct if d_area <= u_area else unmapped
+        if direct_ok:
+            return direct
+        if unmapped_ok:
+            return unmapped
+        return unmapped if unmapped is not None else direct
+
     def _infer(self, frame_bgr: np.ndarray) -> Optional[dict[str, Any]]:
         if not self._init():
             return None
@@ -381,14 +446,26 @@ class HailoYolov8Detector:
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
-        boxes = _nms(self._parse_outputs(outputs, score_min=self.conf), self.nms_iou)
+        boxes = [
+            b
+            for b in _nms(self._parse_outputs(outputs, score_min=self.conf), self.nms_iou)
+            if _box_plausible(b)
+        ]
         now = time.monotonic()
         if boxes:
             self._hold_boxes = boxes
             self._hold_until = now + hold_sec
         elif self._hold_boxes and now <= self._hold_until:
-            loose = _nms(self._parse_outputs(outputs, score_min=hold_conf), self.nms_iou)
-            boxes = loose if loose else list(self._hold_boxes)
+            loose = [
+                b
+                for b in _nms(self._parse_outputs(outputs, score_min=hold_conf), self.nms_iou)
+                if _box_plausible(b)
+            ]
+            held = [b for b in self._hold_boxes if _box_plausible(b)]
+            boxes = loose if loose else held
+        else:
+            self._hold_boxes = []
+            self._hold_until = 0.0
         if (
             not boxes
             and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
@@ -480,7 +557,7 @@ class HailoYolov8Detector:
                 if not np.isfinite(score) or score < threshold:
                     continue
                 box = self._coords_to_box(vals[:4], score)
-                if box is None:
+                if box is None or not _box_plausible(box):
                     continue
                 if box["w"] * self.input_size < self.min_box_px or box["h"] * self.input_size < self.min_box_px:
                     continue
