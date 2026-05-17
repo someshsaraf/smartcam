@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+PERSON_DETECTED_EVENT = "person_detected"
+
 _DB_PATH = Path(__file__).resolve().parents[1] / "data" / "events.db"
 _LOCK = threading.Lock()
 _CONN: Optional[sqlite3.Connection] = None
@@ -81,8 +83,8 @@ def append_event(
     if not isinstance(camera_id, int) or camera_id < 0:
         raise ValueError("camera_id must be a non-negative int")
     et = str(event_type or "").strip()
-    if not et:
-        raise ValueError("event_type required")
+    if et != PERSON_DETECTED_EVENT:
+        raise ValueError(f"only {PERSON_DETECTED_EVENT!r} events are stored")
     ts = _utc_iso()
     detail_json = json.dumps(detail) if detail else None
     with _LOCK:
@@ -133,10 +135,22 @@ def list_events(
             """
             SELECT id, camera_id, event_type, ts, recording_id, filename, person_count, detail
             FROM surveillance_events
-            WHERE camera_id = ?
+            WHERE camera_id = ? AND event_type = ?
             ORDER BY id DESC
             LIMIT ? OFFSET ?
             """,
-            (int(camera_id), limit, offset),
+            (int(camera_id), PERSON_DETECTED_EVENT, limit, offset),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def purge_legacy_events() -> int:
+    """Remove mqtt/recording_* rows written before person_detected-only policy."""
+    with _LOCK:
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM surveillance_events WHERE event_type != ?",
+            (PERSON_DETECTED_EVENT,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)

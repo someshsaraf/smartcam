@@ -385,7 +385,8 @@ function EventsPanel({ cameraId, cameraName, className = "" }) {
       const res = await fetch(`${API}/cameras/${encodeURIComponent(String(cameraId))}/events?limit=150`);
       if (!res.ok) return;
       const data = await res.json();
-      setEvents(Array.isArray(data.events) ? data.events : []);
+      const rows = Array.isArray(data.events) ? data.events : [];
+      setEvents(rows.filter((ev) => ev?.event_type === "person_detected"));
     } catch {
       /* ignore */
     } finally {
@@ -441,13 +442,7 @@ function EventsPanel({ cameraId, cameraName, className = "" }) {
               {ev.recording_id ? (
                 <p className="text-gray-500 font-mono text-[10px] mt-0.5 truncate">{ev.recording_id}</p>
               ) : null}
-              {ev.filename ? (
-                <p className="text-gray-400 font-mono text-[10px] truncate">{ev.filename}</p>
-              ) : null}
-              {ev.detail?.reason ? (
-                <p className="text-amber-400/90 text-[10px] mt-0.5">Reason: {String(ev.detail.reason)}</p>
-              ) : null}
-              {typeof ev.person_count === "number" && ev.event_type === "person_detected" ? (
+              {typeof ev.person_count === "number" ? (
                 <p className="text-gray-500 text-[10px]">Person count: {ev.person_count}</p>
               ) : null}
             </div>
@@ -855,7 +850,18 @@ function formatPersonDebugLine(info, wsOpen, system) {
   const hailoErr = info.hailoError || system?.hailo_error || null;
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) return `Person test: YES — ${n} person(s)`;
+  if (info.personRecording || info.person_recording) {
+    return `Person test: YES — ${n} person(s), recording`;
+  }
+  if (n > 0) {
+    const thr =
+      typeof info.recordingConfidenceMin === "number"
+        ? info.recordingConfidenceMin
+        : typeof info.recording_confidence_min === "number"
+          ? info.recording_confidence_min
+          : 0.9;
+    return `Person test: visible — ${n} (need ≥${Math.round(thr * 100)}% to record)`;
+  }
   if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
@@ -1671,6 +1677,7 @@ export default function App() {
                 ? msg.person_count
                 : countPersonDetections(faces);
             const personDetected = Boolean(msg.person_detected) || personCount > 0;
+            const personRecording = Boolean(msg.person_recording);
             setDetectionsById((prev) => ({
               ...prev,
               [id]: {
@@ -1678,6 +1685,11 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected,
+                personRecording,
+                recordingConfidenceMin:
+                  typeof msg.recording_confidence_min === "number"
+                    ? msg.recording_confidence_min
+                    : 0.9,
                 faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,

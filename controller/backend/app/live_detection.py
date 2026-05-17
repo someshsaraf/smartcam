@@ -17,6 +17,7 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
+from .hailo_yolov8_backend import _recording_confidence
 from .motion_recording import handle_person_detected
 from .rtsp_env import apply_rtsp_env
 
@@ -291,7 +292,14 @@ class _CameraWorker(threading.Thread):
 
             meta = inference_debug_status()
             last_send = now
+            rec_conf = _recording_confidence()
+            people_recording = [
+                p
+                for p in people
+                if float(p.get("score", 0.0)) >= rec_conf
+            ]
             person_detected = len(people) > 0
+            person_recording = len(people_recording) > 0
             self._hub.broadcast_json(
                 {
                     "type": "detections",
@@ -301,17 +309,19 @@ class _CameraWorker(threading.Thread):
                     "face_count": len(faces),
                     "person_count": len(people),
                     "person_detected": person_detected,
+                    "person_recording": person_recording,
+                    "recording_confidence_min": rec_conf,
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
                     "person_detection_source": meta.get("person_detection_source"),
                 }
             )
-            if person_detected:
+            if person_recording:
                 handle_person_detected(
                     cid,
                     tags=["person"],
-                    person_count=len(people),
+                    person_count=len(people_recording),
                 )
             self._prev_person_detected = person_detected
 

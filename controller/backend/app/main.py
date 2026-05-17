@@ -30,7 +30,7 @@ from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
 from .mosquitto_manager import stop_managed_broker
 from ._shared_path import ensure_shared_on_path
-from .events_store import list_events
+from .events_store import list_events, purge_legacy_events
 from .motion_recording import (
     cache_motion_status,
     fetch_edge_motion_status,
@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     ensure_broker_started()
+    removed = purge_legacy_events()
+    if removed:
+        logger.info("Purged %d legacy event row(s) from events.db", removed)
     bridge = mqtt_bridge.init_bridge_from_env(loop)
     recording_manager.start()
     mediamtx_start_embedded()

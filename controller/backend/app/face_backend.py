@@ -260,10 +260,11 @@ def inference_debug_status() -> dict[str, Any]:
         out["hailo_ready"] = det.ready
         out["person_confidence_min"] = det.conf
         try:
-            from .hailo_yolov8_backend import _overlay_min_confidence, _person_confidence
+            from .hailo_yolov8_backend import _overlay_confidence, _recording_confidence
 
-            out["person_overlay_min_confidence"] = _overlay_min_confidence()
-            out["person_presence_confidence"] = _person_confidence()
+            out["person_overlay_min_confidence"] = _overlay_confidence()
+            out["person_recording_confidence"] = _recording_confidence()
+            out["person_presence_confidence"] = _recording_confidence()
         except Exception:
             pass
         out["hef_path"] = det.hef_path
