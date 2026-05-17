@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, List, Optional, Sequence
 
@@ -133,7 +134,13 @@ def _summarize_hailo_output(outputs: Any) -> str:
     return "; ".join(parts) or "empty"
 
 
-def _parse_person_rows(obj: Any, parsed: List[dict[str, Any]], det: "HailoYolov8Detector") -> None:
+def _parse_person_rows(
+    obj: Any,
+    parsed: List[dict[str, Any]],
+    det: "HailoYolov8Detector",
+    *,
+    score_min: float,
+) -> None:
     try:
         arr = np.squeeze(np.asarray(obj, dtype=np.float32))
     except Exception:
@@ -148,14 +155,18 @@ def _parse_person_rows(obj: Any, parsed: List[dict[str, Any]], det: "HailoYolov8
         return
     for row in arr:
         y0, x0, y1, x1, score = (float(row[i]) for i in range(5))
+        if score > 1.0 and score <= 100.0:
+            score /= 100.0
         if not all(np.isfinite(v) for v in (y0, x0, y1, x1, score)):
             continue
-        if score < det.conf:
+        if score <= 0.0 or score < score_min:
             continue
-        box = det._make_box(x0, y0, x1, y1, score)
+        if y1 <= y0 or x1 <= x0:
+            continue
+        box = det._box_from_model_coords(y0, x0, y1, x1, score)
         if box is None:
             continue
-        if box["w"] * det.input_size < det.min_box_px or box["h"] * det.input_size < det.min_box_px:
+        if box["w"] * det._lb_src_w < det.min_box_px or box["h"] * det._lb_src_h < det.min_box_px:
             continue
         parsed.append(box)
 
@@ -189,6 +200,13 @@ class HailoYolov8Detector:
         self._output_vstreams_params = None
         self._input_name: Optional[str] = None
         self._InferVStreams = None
+        self._lb_scale = 1.0
+        self._lb_pad_x = 0
+        self._lb_pad_y = 0
+        self._lb_src_w = 1
+        self._lb_src_h = 1
+        self._hold_boxes: List[dict[str, Any]] = []
+        self._hold_until = 0.0
         if hef_err:
             logger.error(hef_err)
 
@@ -292,9 +310,50 @@ class HailoYolov8Detector:
                 return False
 
     def _preprocess(self, frame_bgr: np.ndarray) -> np.ndarray:
-        img = cv2.resize(frame_bgr, (self.input_size, self.input_size), interpolation=cv2.INTER_LINEAR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return np.ascontiguousarray(img, dtype=np.uint8)
+        """Letterbox to model input (YOLOv8-style); preserves aspect ratio for profile/partial bodies."""
+        h, w = frame_bgr.shape[:2]
+        size = self.input_size
+        if h < 2 or w < 2:
+            self._lb_scale = 1.0
+            self._lb_pad_x = 0
+            self._lb_pad_y = 0
+            self._lb_src_w = max(1, w)
+            self._lb_src_h = max(1, h)
+            return np.zeros((size, size, 3), dtype=np.uint8)
+
+        scale = min(size / float(w), size / float(h))
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        resized = cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+        pad_x = (size - nw) // 2
+        pad_y = (size - nh) // 2
+        canvas[pad_y : pad_y + nh, pad_x : pad_x + nw] = rgb
+
+        self._lb_scale = scale
+        self._lb_pad_x = pad_x
+        self._lb_pad_y = pad_y
+        self._lb_src_w = w
+        self._lb_src_h = h
+        return np.ascontiguousarray(canvas, dtype=np.uint8)
+
+    def _box_from_model_coords(
+        self, y0: float, x0: float, y1: float, x1: float, score: float
+    ) -> Optional[dict[str, Any]]:
+        """Map Hailo norm coords (letterboxed 640) back to source-frame normalized box."""
+        s = float(self.input_size)
+        x1p = (x0 * s - self._lb_pad_x) / self._lb_scale
+        y1p = (y0 * s - self._lb_pad_y) / self._lb_scale
+        x2p = (x1 * s - self._lb_pad_x) / self._lb_scale
+        y2p = (y1 * s - self._lb_pad_y) / self._lb_scale
+        return self._make_box(
+            x1p / float(self._lb_src_w),
+            y1p / float(self._lb_src_h),
+            x2p / float(self._lb_src_w),
+            y2p / float(self._lb_src_h),
+            score,
+        )
 
     def _infer(self, frame_bgr: np.ndarray) -> Optional[dict[str, Any]]:
         if not self._init():
@@ -317,10 +376,19 @@ class HailoYolov8Detector:
         if h < 2 or w < 2:
             return []
         self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+        hold_conf = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.85, 0.01, 0.99)
+        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
-        boxes = _nms(self._parse_outputs(outputs), self.nms_iou)
+        boxes = _nms(self._parse_outputs(outputs, score_min=self.conf), self.nms_iou)
+        now = time.monotonic()
+        if boxes:
+            self._hold_boxes = boxes
+            self._hold_until = now + hold_sec
+        elif self._hold_boxes and now <= self._hold_until:
+            loose = _nms(self._parse_outputs(outputs, score_min=hold_conf), self.nms_iou)
+            boxes = loose if loose else list(self._hold_boxes)
         if (
             not boxes
             and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
@@ -329,7 +397,8 @@ class HailoYolov8Detector:
             logger.info("Hailo parse: 0 boxes; output summary=%s", _summarize_hailo_output(outputs))
         return boxes[: self.max_detections]
 
-    def _parse_outputs(self, outputs: Any) -> List[dict[str, Any]]:
+    def _parse_outputs(self, outputs: Any, *, score_min: Optional[float] = None) -> List[dict[str, Any]]:
+        threshold = self.conf if score_min is None else score_min
         """Parse HailoRT-postprocess YOLO (y0,x0,y1,x1,score per class) and legacy tensor layouts."""
         parsed: List[dict[str, Any]] = []
         visited: set[int] = set()
@@ -349,7 +418,7 @@ class HailoYolov8Detector:
 
             if isinstance(obj, (list, tuple)) and _looks_like_per_class_detections(obj):
                 if len(obj) > PERSON_CLASS_ID:
-                    _parse_person_rows(obj[PERSON_CLASS_ID], parsed, self)
+                    _parse_person_rows(obj[PERSON_CLASS_ID], parsed, self, score_min=threshold)
                 return
 
             if isinstance(obj, (list, tuple)):
@@ -357,14 +426,15 @@ class HailoYolov8Detector:
                     consume(v)
                 return
 
-            _parse_person_rows(obj, parsed, self)
+            _parse_person_rows(obj, parsed, self, score_min=threshold)
 
         consume(outputs)
         if not parsed:
-            parsed.extend(self._parse_outputs_legacy(outputs))
+            parsed.extend(self._parse_outputs_legacy(outputs, score_min=threshold))
         return parsed
 
-    def _parse_outputs_legacy(self, outputs: Any) -> List[dict[str, Any]]:
+    def _parse_outputs_legacy(self, outputs: Any, *, score_min: Optional[float] = None) -> List[dict[str, Any]]:
+        threshold = self.conf if score_min is None else score_min
         """Fallback for non-postprocess tensors (xyxy + optional class column)."""
         candidates: list[np.ndarray] = []
 
@@ -405,7 +475,9 @@ class HailoYolov8Detector:
                 if len(vals) >= 6 and int(round(vals[5])) != PERSON_CLASS_ID:
                     continue
                 score = vals[4]
-                if not np.isfinite(score) or score < self.conf:
+                if score > 1.0 and score <= 100.0:
+                    score /= 100.0
+                if not np.isfinite(score) or score < threshold:
                     continue
                 box = self._coords_to_box(vals[:4], score)
                 if box is None:

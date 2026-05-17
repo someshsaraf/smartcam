@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 import paho.mqtt.client as mqtt
 
 from . import _shared_bootstrap  # noqa: F401 — sys.path for surveillance_shared
+from .agent_debug import agent_log
 
 import cv2
 
@@ -121,6 +122,7 @@ class EdgeRecorder:
         self._pm_buf: collections.deque[bytes] = collections.deque()
         self._pm_buffer_thread: Optional[threading.Thread] = None
         self._last_external_clip_trigger = 0.0
+        self._external_clip_cooldown_until = 0.0
         self._clip_busy_lock = threading.Lock()
         self._clip_busy = False
         self._on_settings_changed = on_settings_changed
@@ -162,8 +164,24 @@ class EdgeRecorder:
                 "filename": filename or "",
             }
             c.publish(self._topic_recording(), json.dumps(payload), qos=0)
+            agent_log(
+                "H2",
+                "worker.py:_publish",
+                "mqtt_publish",
+                {
+                    "status": status,
+                    "recording_id": recording_id,
+                    "topic": self._topic_recording(),
+                },
+            )
         except Exception as e:
             print("[edge] mqtt publish failed:", e)
+            agent_log(
+                "H2",
+                "worker.py:_publish",
+                "mqtt_publish_failed",
+                {"status": status, "recording_id": recording_id, "error": str(e)},
+            )
 
     def update_settings(self, s: dict[str, Any]) -> dict[str, Any]:
         prev = self.snapshot_settings()
@@ -486,6 +504,12 @@ class EdgeRecorder:
                 objects_detected=tags,
                 local_path=out_mp4.resolve().as_posix(),
             )
+            agent_log(
+                "H1",
+                "worker.py:_run_external_motion_clip",
+                "clip_start",
+                {"rid": rid, "pre_s": pre_seconds, "post_s": post_seconds},
+            )
 
             cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
             _configure_rtsp_capture(cap)
@@ -524,6 +548,12 @@ class EdgeRecorder:
                 self._pm_active = False
 
             self._publish(status="Stop", recording_id=rid, local_path="")
+            agent_log(
+                "H1",
+                "worker.py:_run_external_motion_clip",
+                "capture_stop_published",
+                {"rid": rid, "frames": idx, "post_s": post_seconds},
+            )
 
             if idx == 0:
                 return
@@ -592,6 +622,8 @@ class EdgeRecorder:
                 shutil.rmtree(tmp, ignore_errors=True)
             except Exception:
                 pass
+            with self._pm_lock:
+                self._external_clip_cooldown_until = time.time() + COOLDOWN_SEC
 
     def start_manual_recording(self) -> dict[str, Any]:
         ff = shutil.which("ffmpeg")
@@ -908,6 +940,14 @@ class EdgeRecorder:
         flip: bool,
         tags: list[str],
     ) -> None:
+        if time.time() < self._external_clip_cooldown_until:
+            agent_log(
+                "H3",
+                "worker.py:_materialize_event",
+                "skipped_ssd_cooldown",
+                {"until": self._external_clip_cooldown_until},
+            )
+            return
         if self.motion_clip_busy():
             return
         with self._clip_busy_lock:
@@ -934,10 +974,15 @@ class EdgeRecorder:
                 objects_detected=tags,
                 local_path=out_mp4.resolve().as_posix(),
             )
+            agent_log(
+                "H3",
+                "worker.py:_materialize_event",
+                "ssd_clip_start",
+                {"rid": rid, "post_s": post_seconds},
+            )
 
             end = time.time() + post_seconds
             post_i = 0
-            last_tick = 0.0
             extend_post = os.environ.get("EDGE_MOTION_EXTEND_POST_ROLL", "").strip().lower() in (
                 "1",
                 "true",
@@ -954,15 +999,6 @@ class EdgeRecorder:
                     break
                 frame = _flip_if_needed(frame, flip)
                 now = time.time()
-                if now - last_tick >= 1.0:
-                    _, tags2 = detector.detect_interesting_with_tags(frame)
-                    self._publish(
-                        status="InProgress",
-                        recording_id=rid,
-                        objects_detected=tags2 or tags,
-                        local_path=out_mp4.resolve().as_posix(),
-                    )
-                    last_tick = now
                 if extend_post and post_i % DETECT_EVERY_N_FRAMES == 0:
                     hit, _ = detector.detect_interesting_with_tags(frame)
                     if hit:
@@ -980,6 +1016,12 @@ class EdgeRecorder:
                 time.sleep(max(0.0, read_period - elapsed))
 
             self._publish(status="Stop", recording_id=rid, local_path="")
+            agent_log(
+                "H3",
+                "worker.py:_materialize_event",
+                "ssd_capture_stop_published",
+                {"rid": rid, "frames": idx, "extend_post": extend_post},
+            )
 
             if idx == 0:
                 return
@@ -1029,6 +1071,12 @@ class EdgeRecorder:
         finally:
             with self._clip_busy_lock:
                 self._clip_busy = False
+            agent_log(
+                "H3",
+                "worker.py:_materialize_event",
+                "ssd_clip_finished",
+                {"rid": rid},
+            )
             try:
                 shutil.rmtree(tmp, ignore_errors=True)
             except Exception:
