@@ -56,11 +56,6 @@ function countPersonDetections(detections) {
   return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
-function personDetectedLabel(count) {
-  if (!count || count < 1) return "";
-  return count === 1 ? "Person detected" : `${count} people detected`;
-}
-
 /** Always-on debug line for YOLOv8n person test (not tied to recording mode). */
 function formatPersonDebugLine(info, wsOpen) {
   if (!wsOpen) return "Person test: WS disconnected";
@@ -355,14 +350,6 @@ function LiveTile({
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
-          {persons > 0 ? (
-            <span
-              className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-blue-600/90 text-white"
-              title={personDetectedLabel(persons)}
-            >
-              {personDetectedLabel(persons)}
-            </span>
-          ) : null}
           <span
             className={
               edgeHint ? "text-red-400" : useIframeFallback ? "text-amber-400" : "text-green-400"
@@ -408,16 +395,7 @@ function LiveTile({
         ) : null}
         {useIframeFallback && countPersonDetections(rawFaces) > 0 ? (
           <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-amber-900/90 px-2 py-1 text-[10px] text-amber-100">
-            Person detected — use HLS (LIVE badge) to see boxes on video.
-          </div>
-        ) : null}
-        {persons > 0 ? (
-          <div
-            className="absolute top-2 left-2 z-20 rounded-md bg-blue-600/95 px-2 py-1 text-[10px] font-semibold text-white shadow-lg ring-1 ring-white/20"
-            role="status"
-            aria-live="polite"
-          >
-            {personDetectedLabel(persons)}
+            Use HLS (LIVE badge) to see detection boxes on video.
           </div>
         ) : null}
         <div
@@ -1174,23 +1152,6 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-[#111827] px-3 py-2 border-t border-gray-800 text-[10px] text-gray-500 space-y-1">
-          <p>
-            Live tiles use HLS via <span className="font-mono text-gray-400">{API}/cameras/&lt;id&gt;/hls/</span>{" "}
-            (proxied from {HLS_BASE}) for OpenCV/Hailo face boxes over{" "}
-            <span className="font-mono text-gray-400">{WS_DETECTIONS}</span>. WebRTC reader (
-            {MEDIAMTX_BASE}) is used if HLS fails. Red dot = recording via {WS_RECORDING}.
-          </p>
-          <p className="text-amber-500/90">
-            “Refused to connect” → nothing listening on the MediaMTX URL (usually missing <span className="font-mono text-gray-400">mediamtx</span>{" "}
-            binary on the Pi, wrong IP, or firewall). Check{" "}
-            <span className="font-mono text-gray-400">{API}/system/mediamtx</span> for{" "}
-            <span className="font-mono text-gray-400">process_running</span>. Set{" "}
-            <span className="font-mono text-gray-400">VITE_API_URL</span> /{" "}
-            <span className="font-mono text-gray-400">VITE_MEDIAMTX_BASE</span> in{" "}
-            <span className="font-mono text-gray-400">.env.local</span> if defaults don’t match your network.
-          </p>
-        </div>
       </div>
 
       {settingsCam && (
