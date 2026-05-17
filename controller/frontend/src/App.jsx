@@ -99,6 +99,11 @@ function cameraIdsMatch(a, b) {
   return String(a) === String(b);
 }
 
+/** Camera ids may be 0; never use truthiness on id alone. */
+function isSetCameraId(id) {
+  return id !== null && id !== undefined;
+}
+
 function recordingActiveForCam(recordingById, camId) {
   if (!recordingById || camId == null) return false;
   if (recordingById[camId] === true) return true;
@@ -766,9 +771,15 @@ export default function App() {
     try {
       const results = await Promise.all(
         cameraList.map(async (cam) => {
+          if (!isSetCameraId(cam?.id)) return [];
           try {
             const res = await fetch(`${API}/recordings/${cam.id}`);
-            if (!res.ok) return [];
+            if (!res.ok) {
+              console.warn(
+                `[clips] list failed cam=${cam.id} ${cam.name}: ${res.status} ${res.statusText}`
+              );
+              return [];
+            }
             const files = await res.json();
             if (!Array.isArray(files)) return [];
             return files.map((r) => ({
@@ -778,7 +789,8 @@ export default function App() {
               size: r.size ?? 0,
               mtime: r.mtime ?? 0,
             }));
-          } catch {
+          } catch (e) {
+            console.warn(`[clips] list error cam=${cam.id}:`, e);
             return [];
           }
         })
@@ -1149,17 +1161,44 @@ export default function App() {
       const res = await fetch(`${API}/cameras/${cam.id}/recordings/manual/${path}`, {
         method: "POST",
       });
-      const errBody = await res.json().catch(() => ({}));
+      const responseBody = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(typeof errBody.detail === "string" ? errBody.detail : `${path} failed`);
+        alert(
+          typeof responseBody.detail === "string" ? responseBody.detail : `${path} failed`
+        );
         return;
       }
       setActiveCameraId(cam.id);
       setManualRecordingById((prev) => ({ ...prev, [cam.id]: path === "start" }));
-      await loadAllRecordings(cams);
+      const refreshClips = () => loadAllRecordings(cams);
+      await refreshClips();
       if (path === "stop") {
-        window.setTimeout(() => loadAllRecordings(cams), 1500);
-        window.setTimeout(() => loadAllRecordings(cams), 4000);
+        const body =
+          responseBody && typeof responseBody === "object" ? responseBody : {};
+        const stoppedName =
+          typeof body.filename === "string" && body.filename.trim()
+            ? body.filename.trim()
+            : null;
+        if (stoppedName) {
+          setAllRecordings((prev) => {
+            const key = recordingKey({ camId: cam.id, name: stoppedName });
+            if (prev.some((r) => recordingKey(r) === key)) return prev;
+            const next = [
+              {
+                camId: cam.id,
+                camName: cam.name,
+                name: stoppedName,
+                size: 0,
+                mtime: Date.now() / 1000,
+              },
+              ...prev,
+            ];
+            next.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+            return next;
+          });
+        }
+        window.setTimeout(refreshClips, 1500);
+        window.setTimeout(refreshClips, 4000);
       }
     } catch (e) {
       alert(String(e));
@@ -1181,10 +1220,10 @@ export default function App() {
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
   const effectiveActiveCameraId =
-    activeCameraId ?? (cams.length > 0 ? cams[0].id : null);
+    isSetCameraId(activeCameraId) ? activeCameraId : cams.length > 0 ? cams[0].id : null;
   const activeCamera =
     cams.find((c) => cameraIdsMatch(c.id, effectiveActiveCameraId)) ?? null;
-  const recordingsForActiveCamera = effectiveActiveCameraId
+  const recordingsForActiveCamera = isSetCameraId(effectiveActiveCameraId)
     ? allRecordings.filter((r) => cameraIdsMatch(r.camId, effectiveActiveCameraId))
     : [];
 
