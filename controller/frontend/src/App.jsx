@@ -305,14 +305,15 @@ function LiveTile({
       ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
       ctx.lineWidth = 2;
       ctx.font = "11px ui-monospace, system-ui, sans-serif";
-      const faceList = Array.isArray(drawFaces) ? drawFaces : [];
+      const faceList = (Array.isArray(drawFaces) ? drawFaces : []).filter(
+        (d) => String(d?.label || "").toLowerCase() === "person",
+      );
       for (const f of faceList) {
         const x = ox + Number(f.x) * vw * scaleContain;
         const y = oy + Number(f.y) * vh * scaleContain;
         const w = Number(f.w) * vw * scaleContain;
         const h = Number(f.h) * vh * scaleContain;
-        const isPerson = String(f?.label || "").toLowerCase() === "person";
-        ctx.strokeStyle = isPerson ? "rgba(59, 130, 246, 0.95)" : "rgba(34, 197, 94, 0.95)";
+        ctx.strokeStyle = "rgba(59, 130, 246, 0.95)";
         ctx.strokeRect(x, y, w, h);
         const label = formatDetectionLabel(f);
         if (!label) continue;
@@ -326,7 +327,7 @@ function LiveTile({
         const labelTop = Math.max(0, textY - boxH + 2);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
         ctx.fillRect(labelX, labelTop, boxW, boxH);
-        ctx.fillStyle = isPerson ? "rgba(96, 165, 250, 1)" : "rgba(34, 197, 94, 1)";
+        ctx.fillStyle = "rgba(96, 165, 250, 1)";
         ctx.fillText(label, labelX + padX, labelTop + boxH - padY - 2);
       }
     };

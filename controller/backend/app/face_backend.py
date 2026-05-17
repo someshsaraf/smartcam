@@ -142,20 +142,20 @@ def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
         people = detect_people_normalized(frame_bgr)
         detector = get_detector()
         if detector.error and not _HAILO_FALLBACK_WARNED:
-            logger.warning("Hailo backend unavailable (%s); falling back to OpenCV full-frame face detection", detector.error)
+            logger.warning("Hailo backend unavailable (%s); person detection disabled", detector.error)
             _HAILO_FALLBACK_WARNED = True
-            return _detect_haar_in_region(frame_bgr)
+            return []
     except Exception as e:
         if not _HAILO_FALLBACK_WARNED:
-            logger.exception("Hailo backend failed; falling back to OpenCV full-frame face detection: %s", e)
+            logger.exception("Hailo backend failed; person detection disabled: %s", e)
             _HAILO_FALLBACK_WARNED = True
-        return _detect_haar_in_region(frame_bgr)
+        return []
 
     out: List[dict[str, Any]] = []
     include_people = os.environ.get("SMARTCAM_SHOW_PERSON_BOXES", "1").strip().lower() not in ("0", "false", "no", "off")
     if include_people:
         out.extend(people)
-    face_stage = os.environ.get("SMARTCAM_HAILO_FACE_SECOND_STAGE", "opencv").strip().lower()
+    face_stage = os.environ.get("SMARTCAM_HAILO_FACE_SECOND_STAGE", "none").strip().lower()
     if face_stage in ("0", "false", "off", "none", "disabled"):
         return out
     max_faces_per_person = _env_int("SMARTCAM_FACE_MAX_PER_PERSON", 3, 0, 16)
