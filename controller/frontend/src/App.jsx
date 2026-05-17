@@ -46,6 +46,170 @@ function formatTime(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
+function recordingFileUrl(camId, name) {
+  return `${API}/recordings/${camId}/files/${encodeURIComponent(name)}`;
+}
+
+/** First-frame preview from clip metadata (same-origin API). */
+function RecordingThumbnail({ src, className = "" }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const seek = () => {
+      const d = el.duration;
+      const t = Number.isFinite(d) && d > 0 ? Math.min(0.5, d * 0.05) : 0.1;
+      try {
+        el.currentTime = t;
+      } catch {
+        /* seek before buffer */
+      }
+    };
+    el.addEventListener("loadedmetadata", seek);
+    if (el.readyState >= 1) seek();
+    return () => el.removeEventListener("loadedmetadata", seek);
+  }, [src]);
+  return (
+    <video
+      ref={ref}
+      src={src}
+      preload="metadata"
+      muted
+      playsInline
+      className={className}
+      aria-hidden
+    />
+  );
+}
+
+function RecordingsSidebar({
+  recordings,
+  loading,
+  hasCameras,
+  onRefresh,
+  onDelete,
+}) {
+  const [playing, setPlaying] = useState(null);
+
+  const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
+
+  return (
+    <>
+      <aside className="w-72 xl:w-80 shrink-0 border-l border-gray-800 bg-[#070c16] flex flex-col min-h-0">
+        <div className="px-3 py-3 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
+          <h2 className="text-sm font-semibold text-gray-200">Recordings</h2>
+          <button
+            type="button"
+            disabled={loading || !hasCameras}
+            onClick={onRefresh}
+            className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {!hasCameras ? (
+            <p className="text-xs text-gray-500 p-3">Add a camera to see recordings.</p>
+          ) : loading && recordings.length === 0 ? (
+            <p className="text-xs text-gray-500 p-3">Loading…</p>
+          ) : recordings.length === 0 ? (
+            <p className="text-xs text-gray-500 p-3">No clips yet.</p>
+          ) : (
+            <ul className="divide-y divide-gray-800">
+              {recordings.map((r) => {
+                const url = recordingFileUrl(r.camId, r.name);
+                const active = playing?.camId === r.camId && playing?.name === r.name;
+                return (
+                  <li key={`${r.camId}-${r.name}`}>
+                    <div
+                      className={`flex gap-2 p-2 hover:bg-[#111827]/80 ${active ? "bg-[#111827]" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPlaying(r)}
+                        className="shrink-0 w-[7.5rem] aspect-video rounded overflow-hidden bg-black border border-gray-700 hover:border-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        title="Play clip"
+                      >
+                        <RecordingThumbnail
+                          src={url}
+                          className="w-full h-full object-cover pointer-events-none"
+                        />
+                      </button>
+                      <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-[10px]">
+                        <span className="font-medium text-gray-200 truncate" title={r.camName}>
+                          {r.camName}
+                        </span>
+                        <span className="text-gray-500">{formatTime(r.mtime)}</span>
+                        <span className="text-gray-600">{formatBytes(r.size)}</span>
+                        <p className="font-mono text-gray-500 truncate" title={r.name}>
+                          {r.name}
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setPlaying(r)}
+                            className="text-blue-400 hover:underline"
+                          >
+                            Play
+                          </button>
+                          <a href={url} download={r.name} className="text-gray-400 hover:underline">
+                            Save
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (active) setPlaying(null);
+                              onDelete(r.camId, r.name);
+                            }}
+                            className="text-red-400 hover:underline"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </aside>
+
+      {playing ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPlaying(null)}
+        >
+          <div
+            className="max-w-4xl w-full bg-[#111827] rounded-xl border border-gray-700 p-3 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start gap-2 mb-2 text-xs">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-200 truncate">{playing.camName}</p>
+                <p className="font-mono text-gray-500 truncate">{playing.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlaying(null)}
+                className="text-gray-400 hover:text-white px-2 shrink-0"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <video key={playUrl} className="w-full rounded bg-black max-h-[75vh]" src={playUrl} controls autoPlay />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
@@ -1054,15 +1218,14 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex-1 p-3 overflow-auto min-h-0 flex flex-col gap-6">
-          <div>
-            {liveCams.length === 0 ? (
-              <p className="text-gray-500 text-sm p-4">
-                No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
-                backend restarts until removed.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-[1600px] mx-auto">
+        <div className="flex-1 p-3 overflow-auto min-h-0">
+          {liveCams.length === 0 ? (
+            <p className="text-gray-500 text-sm p-4">
+              No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
+              backend restarts until removed.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
                 {liveCams.map((c) => (
                   <LiveTile
                     key={c.id}
@@ -1086,74 +1249,18 @@ export default function App() {
                     }
                   />
                 ))}
-              </div>
-            )}
-          </div>
-
-          <div className="max-w-[1600px] mx-auto w-full border-t border-gray-800 pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <h2 className="text-sm font-semibold text-gray-200">Recordings</h2>
-              <div className="flex items-center gap-2">
-                {recordingsLoading ? (
-                  <span className="text-[10px] text-gray-500">Loading…</span>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={recordingsLoading || cams.length === 0}
-                  onClick={() => loadAllRecordings(cams)}
-                  className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Refresh
-                </button>
-              </div>
             </div>
-            {cams.length === 0 ? (
-              <p className="text-xs text-gray-500">Add a camera to see recordings.</p>
-            ) : allRecordings.length === 0 && !recordingsLoading ? (
-              <p className="text-xs text-gray-500">No clips yet across saved cameras.</p>
-            ) : (
-              <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {allRecordings.map((r) => {
-                  const url = `${API}/recordings/${r.camId}/files/${encodeURIComponent(r.name)}`;
-                  return (
-                    <li key={`${r.camId}-${r.name}`} className="bg-[#111827] rounded-lg p-3 text-xs border border-gray-800">
-                      <div className="flex justify-between gap-2 mb-1">
-                        <span className="truncate font-medium text-gray-200" title={r.camName}>
-                          {r.camName}
-                        </span>
-                        <span className="text-gray-500 shrink-0">{formatBytes(r.size)}</span>
-                      </div>
-                      <p className="font-mono text-[10px] text-gray-400 truncate mb-1" title={r.name}>
-                        {r.name}
-                      </p>
-                      <p className="text-gray-500 mb-2">{formatTime(r.mtime)}</p>
-                      <video
-                        className="w-full rounded bg-black max-h-40"
-                        src={url}
-                        controls
-                        preload="metadata"
-                      />
-                      <div className="flex gap-3 mt-2">
-                        <a href={url} download={r.name} className="text-blue-400 hover:underline">
-                          Download
-                        </a>
-                        <button
-                          type="button"
-                          onClick={() => deleteRecordingFor(r.camId, r.name)}
-                          className="text-red-400 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+          )}
         </div>
-
       </div>
+
+      <RecordingsSidebar
+        recordings={allRecordings}
+        loading={recordingsLoading}
+        hasCameras={cams.length > 0}
+        onRefresh={() => loadAllRecordings(cams)}
+        onDelete={deleteRecordingFor}
+      />
 
       {settingsCam && (
         <div
@@ -1309,7 +1416,7 @@ export default function App() {
               </button>
 
               <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-3">
-                Clips from all cameras are listed on the main page under <span className="text-gray-400">Recordings</span>.
+                Clips from all cameras are listed in the <span className="text-gray-400">Recordings</span> panel on the right.
               </p>
             </div>
           </div>
