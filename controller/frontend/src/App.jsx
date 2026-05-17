@@ -1624,6 +1624,9 @@ function LiveTile({
   const [hlsUrl, setHlsUrl] = useState(hlsProxyUrl);
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
+  const isHero = layout === "hero";
+  const isThumb = layout === "thumb";
+  const heroLayout = isHero && !isThumb;
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -1860,10 +1863,6 @@ function LiveTile({
       window.clearInterval(overlayTick);
     };
   }, [drawFaces, useWebRtc, cam.id, heroLayout]);
-
-  const isHero = layout === "hero";
-  const isThumb = layout === "thumb";
-  const heroLayout = isHero && !isThumb;
 
   return (
     <div
