@@ -93,39 +93,6 @@ function formatDetectionLabel(det) {
   return score !== "—" ? `${label} ${score}` : label;
 }
 
-function PersonConfidenceBadge({ detectionInfo, detectionWsOpen, persons }) {
-  if (!detectionWsOpen) return null;
-  const thr =
-    typeof detectionInfo?.personRecordThreshold === "number"
-      ? detectionInfo.personRecordThreshold
-      : typeof detectionInfo?.personDisplayThreshold === "number"
-        ? detectionInfo.personDisplayThreshold
-        : 0.9;
-  const score =
-    typeof detectionInfo?.personMaxScore === "number" ? detectionInfo.personMaxScore : null;
-  const scoreTxt = score != null ? formatConfidencePct(score) : "—";
-  const thrTxt = formatConfidencePct(thr);
-  const meets = score != null && score >= thr;
-  return (
-    <div
-      className={`absolute top-2 left-2 z-20 rounded px-2 py-1 text-[10px] font-mono font-semibold leading-tight shadow-lg border ${
-        meets
-          ? "text-blue-100 bg-blue-950/90 border-blue-500/60"
-          : persons > 0
-            ? "text-amber-100 bg-black/85 border-amber-500/50"
-            : "text-gray-300 bg-black/80 border-gray-600/60"
-      }`}
-      title="Hailo person confidence vs detection threshold"
-    >
-      <span className="block text-[9px] uppercase tracking-wide opacity-80">Confidence</span>
-      <span>
-        {scoreTxt}
-        <span className="opacity-75"> / ≥{thrTxt}</span>
-      </span>
-    </div>
-  );
-}
-
 function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
   const [layout, setLayout] = useState(null);
   const people = personDetections(faces);
@@ -1747,13 +1714,6 @@ function LiveTile({
               }`
         }`}
       >
-        {!isThumb ? (
-          <PersonConfidenceBadge
-            detectionInfo={detectionInfo}
-            detectionWsOpen={detectionWsOpen}
-            persons={persons}
-          />
-        ) : null}
         {recording ? (
           <div
             className="absolute top-2 right-2 z-20 h-5 w-5 rounded-full bg-red-600 shadow-lg ring-2 ring-white/90"
