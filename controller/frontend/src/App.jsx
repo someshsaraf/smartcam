@@ -192,18 +192,45 @@ function formatCountdown(seconds) {
   return `${r}s`;
 }
 
+function motionClipRemainingSec(status) {
+  if (!status?.active) return null;
+  const endsAt = Number(status.ends_at);
+  if (Number.isFinite(endsAt) && endsAt > 1e9) {
+    return Math.max(0, Math.floor(endsAt - Date.now() / 1000));
+  }
+  if (typeof status.remaining_seconds === "number") {
+    return Math.max(0, Math.floor(status.remaining_seconds));
+  }
+  return null;
+}
+
 function formatMotionClipLine(status, settings) {
   if (!status?.active) return null;
   const pre = settings?.pre_record_seconds ?? status.pre_seconds ?? 10;
   const post = settings?.post_record_seconds ?? status.post_seconds ?? 50;
   if (status.phase === "materializing") return "Motion clip: saving…";
+  if (status.phase === "starting") {
+    return `Recording: preparing clip (${pre}s pre + ${post}s post)…`;
+  }
   if (status.phase === "post_roll") {
-    const rem =
-      typeof status.remaining_seconds === "number" ? status.remaining_seconds : 0;
+    const rem = motionClipRemainingSec(status);
+    if (rem == null) return "Recording…";
     return `Recording: ${formatCountdown(rem)} left (${pre}s pre + ${post}s post)`;
   }
-  if (status.phase === "starting") return "Motion clip: starting…";
   return "Recording motion clip…";
+}
+
+/** Re-render live tiles every second while a motion clip countdown is visible. */
+function useMotionClipCountdownTicker(motionClipById) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const hasCountdown = Object.values(motionClipById || {}).some(
+      (st) => st?.active && (st.phase === "post_roll" || st.phase === "starting")
+    );
+    if (!hasCountdown) return undefined;
+    const iv = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(iv);
+  }, [motionClipById]);
 }
 
 function edgeBaseUrlForCamera(cameras, camId) {
@@ -1818,6 +1845,7 @@ export default function App() {
     }
   };
   const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
+  useMotionClipCountdownTicker(motionClipById);
   const showLivePanel = !isMobile || mobileTab === "live";
   const showClipsPanel = isMobile && mobileTab === "clips";
 

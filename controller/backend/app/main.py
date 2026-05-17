@@ -30,6 +30,11 @@ from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
 from .mosquitto_manager import stop_managed_broker
 from ._shared_path import ensure_shared_on_path
+from .motion_recording import (
+    cache_motion_status,
+    fetch_edge_motion_status,
+    motion_status_idle,
+)
 from .recording_manager import RECORDINGS_ROOT, recording_manager
 from .stream import generate_frames
 
@@ -531,19 +536,19 @@ def camera_manual_record_stop(cam_id: int):
     return _edge_manual_proxy(edge, "stop")
 
 
-def _edge_motion_clip_proxy(edge: str, subpath: str, body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    base = edge.rstrip("/")
-    if subpath == "trigger":
-        url = f"{base}/recordings/motion/trigger"
-        method = httpx.post
-    else:
-        url = f"{base}/recordings/motion/status"
-        method = httpx.get
+_MOTION_TRIGGER_TIMEOUT = httpx.Timeout(3.0, read=15.0)
+
+
+def _edge_motion_clip_trigger_proxy(
+    edge: str, body: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+    url = f"{edge.rstrip('/')}/recordings/motion/trigger"
     try:
-        if method is httpx.post:
-            r = method(url, json=body if isinstance(body, dict) else {}, timeout=30.0)
-        else:
-            r = method(url, timeout=15.0)
+        r = httpx.post(
+            url,
+            json=body if isinstance(body, dict) else {},
+            timeout=_MOTION_TRIGGER_TIMEOUT,
+        )
         if r.status_code >= 400:
             detail: Any = r.text
             try:
@@ -580,18 +585,28 @@ def camera_motion_clip_trigger(cam_id: int, body: Optional[dict[str, Any]] = Non
             status_code=400,
             detail="Motion recording on the Pi requires edge_base_url.",
         )
-    return _edge_motion_clip_proxy(edge, "trigger", body)
+    data = _edge_motion_clip_trigger_proxy(edge, body)
+    if isinstance(data, dict) and data.get("accepted"):
+        cache_motion_status(cam_id, data)
+    return data
 
 
 @app.get("/cameras/{cam_id}/recordings/motion/status")
 def camera_motion_clip_status(cam_id: int):
-    c = camera_store.get_camera(cam_id)
-    if not c:
-        raise HTTPException(status_code=404, detail="camera not found")
-    edge = camera_store.edge_base_url(c)
-    if not edge:
-        return {"active": False, "phase": "idle", "remaining_seconds": 0}
-    return _edge_motion_clip_proxy(edge, "status")
+    """Always HTTP 200 — never 502 when the Pi edge is slow or offline."""
+    try:
+        c = camera_store.get_camera(cam_id)
+        if not c:
+            raise HTTPException(status_code=404, detail="camera not found")
+        edge = camera_store.edge_base_url(c)
+        if not edge:
+            return motion_status_idle()
+        return fetch_edge_motion_status(edge, int(cam_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("motion clip status error cam_id=%s: %s", cam_id, e)
+        return {**motion_status_idle(), "phase": "edge_unreachable"}
 
 
 @app.post("/cameras/{cam_id}/recordings/person-mock/trigger")

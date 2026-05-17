@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from . import env_loader  # noqa: F401  # loads edge-agent/.env
 
+import asyncio
 import logging
 import os
 import re
@@ -381,12 +382,13 @@ def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
 
 
 @app.post("/recordings/motion/trigger")
-def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
+async def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
     if _recorder is None:
         raise HTTPException(status_code=503, detail="recorder not running")
     parsed = _parse_motion_clip_body(body)
     try:
-        return _recorder.trigger_motion_clip(
+        return await asyncio.to_thread(
+            _recorder.trigger_motion_clip,
             pre_seconds=parsed["pre_seconds"],
             post_seconds=parsed["post_seconds"],
             objects_detected=parsed["objects_detected"],
@@ -396,10 +398,10 @@ def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
 
 
 @app.get("/recordings/motion/status")
-def motion_clip_status():
+async def motion_clip_status():
     if _recorder is None:
         return {"active": False, "phase": "idle", "remaining_seconds": 0}
-    return _recorder.motion_clip_status()
+    return await asyncio.to_thread(_recorder.motion_clip_status)
 
 
 @app.post("/recordings/person-mock/trigger")

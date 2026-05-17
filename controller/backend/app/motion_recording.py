@@ -13,7 +13,61 @@ from . import camera_store
 
 logger = logging.getLogger(__name__)
 
-_MOTION_CLIP_TIMEOUT = httpx.Timeout(5.0, read=45.0)
+# Trigger should return immediately after the edge accepts the clip (read timeout is short).
+_MOTION_CLIP_TIMEOUT = httpx.Timeout(3.0, read=12.0)
+_MOTION_STATUS_TIMEOUT = httpx.Timeout(2.0, read=4.0)
+_STATUS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_STATUS_CACHE_TTL_SEC = 45.0
+
+
+def motion_status_idle() -> dict[str, Any]:
+    return {
+        "active": False,
+        "phase": "idle",
+        "remaining_seconds": 0,
+        "pre_seconds": 0,
+        "post_seconds": 0,
+        "recording_id": "",
+        "filename": None,
+    }
+
+
+def cache_motion_status(cam_id: int, data: dict[str, Any]) -> None:
+    _STATUS_CACHE[int(cam_id)] = (time.time(), data)
+
+
+def fetch_edge_motion_status(edge: str, cam_id: int) -> dict[str, Any]:
+    """GET Pi motion/status; never raises — caller always returns HTTP 200."""
+    base = edge.rstrip("/")
+    paths = ("/recordings/motion/status", "/recordings/person-mock/status")
+    last_err: Optional[Exception] = None
+    for path in paths:
+        url = f"{base}{path}"
+        try:
+            r = httpx.get(url, timeout=_MOTION_STATUS_TIMEOUT)
+            if r.status_code == 404 and path != paths[-1]:
+                continue
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, dict):
+                cache_motion_status(cam_id, data)
+                return data
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err is not None:
+        logger.info(
+            "edge motion status unavailable cam_id=%s (%s): %s",
+            cam_id,
+            base,
+            last_err,
+        )
+    ts, cached = _STATUS_CACHE.get(int(cam_id), (0.0, motion_status_idle()))
+    if time.time() - ts < _STATUS_CACHE_TTL_SEC:
+        return cached
+    return {**motion_status_idle(), "phase": "edge_unreachable"}
+
+
 _last_trigger_by_cam: dict[int, float] = {}
 _trigger_lock = threading.Lock()
 _COOLDOWN_SEC = 2.0
@@ -78,12 +132,15 @@ def schedule_motion_clip_trigger(
                 )
                 return
             data = r.json()
-            if isinstance(data, dict) and not data.get("accepted"):
-                logger.debug(
-                    "motion clip trigger declined cam_id=%s reason=%s",
-                    cam_id,
-                    data.get("reason"),
-                )
+            if isinstance(data, dict):
+                if data.get("accepted"):
+                    cache_motion_status(cam_id, data)
+                elif not data.get("accepted"):
+                    logger.debug(
+                        "motion clip trigger declined cam_id=%s reason=%s",
+                        cam_id,
+                        data.get("reason"),
+                    )
         except Exception as e:
             logger.warning("motion clip trigger error cam_id=%s: %s", cam_id, e)
 

@@ -374,25 +374,34 @@ class EdgeRecorder:
             self._pm_status = {
                 "active": True,
                 "recording_id": rid,
-                "phase": "post_roll",
+                "phase": "starting",
                 "pre_seconds": pre_s,
                 "post_seconds": post_s,
-                "ends_at": time.time() + post_s,
+                "ends_at": 0.0,
                 "remaining_seconds": post_s,
                 "filename": None,
                 "objects_detected": tags,
             }
 
-        with self._pm_buf_lock:
-            pre_frames = list(self._pm_buf)
-
         threading.Thread(
-            target=self._run_external_motion_clip,
-            args=(rid, pre_frames, pre_s, post_s, tags),
+            target=self._start_external_motion_clip,
+            args=(rid, pre_s, post_s, tags),
             name=f"motion-clip-{rid}",
             daemon=True,
         ).start()
         return {"accepted": True, **self.motion_clip_status()}
+
+    def _start_external_motion_clip(
+        self,
+        rid: str,
+        pre_seconds: int,
+        post_seconds: int,
+        tags: list[str],
+    ) -> None:
+        """Copy pre-roll and record clip off the HTTP thread (buffer copy can be large)."""
+        with self._pm_buf_lock:
+            pre_frames = list(self._pm_buf)
+        self._run_external_motion_clip(rid, pre_frames, pre_seconds, post_seconds, tags)
 
     def trigger_person_mock(
         self,
@@ -494,10 +503,12 @@ class EdgeRecorder:
             cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
             _configure_rtsp_capture(cap)
             end = time.time() + post_seconds
+            with self._pm_lock:
+                self._pm_status["phase"] = "post_roll"
+                self._pm_status["ends_at"] = end
+                self._pm_status["remaining_seconds"] = max(0, int(end - time.time()))
             while time.time() < end and not self._stop.is_set():
                 with self._pm_lock:
-                    self._pm_status["phase"] = "post_roll"
-                    self._pm_status["ends_at"] = end
                     self._pm_status["remaining_seconds"] = max(0, int(end - time.time()))
 
                 if not cap.isOpened():
