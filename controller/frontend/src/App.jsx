@@ -94,8 +94,37 @@ function bentoTileClass(index, total) {
   return "";
 }
 
+function cameraIdsMatch(a, b) {
+  if (a == null || b == null) return false;
+  return String(a) === String(b);
+}
+
+function recordingActiveForCam(recordingById, camId) {
+  if (!recordingById || camId == null) return false;
+  if (recordingById[camId] === true) return true;
+  const n = Number(camId);
+  if (!Number.isNaN(n) && recordingById[n] === true) return true;
+  return recordingById[String(camId)] === true;
+}
+
 function recordingKey(r) {
   return `${r.camId}-${r.name}`;
+}
+
+function IconDownload({ className = "w-3.5 h-3.5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M12 3v12M7 10l5 5 5-5M5 21h14" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconTrash({ className = "w-3.5 h-3.5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M10 11v6M14 11v6M6 7l1 12a1 1 0 001 1h8a1 1 0 001-1l1-12" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function RecordingsTimeline({
@@ -107,135 +136,106 @@ function RecordingsTimeline({
   onDelete,
 }) {
   const [playing, setPlaying] = useState(null);
-  const [selectedKey, setSelectedKey] = useState(null);
 
   const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
-  const selected =
-    recordings.find((r) => recordingKey(r) === selectedKey) ?? null;
-  const selectedUrl = selected ? recordingFileUrl(selected.camId, selected.name) : "";
-
-  useEffect(() => {
-    if (!recordings.length) {
-      setSelectedKey(null);
-      return;
-    }
-    const keys = new Set(recordings.map(recordingKey));
-    if (!selectedKey || !keys.has(selectedKey)) {
-      setSelectedKey(recordingKey(recordings[0]));
-    }
-  }, [recordings, selectedKey]);
-
-  const handleDeleteSelected = () => {
-    if (!selected) return;
-    if (playing && recordingKey(playing) === selectedKey) setPlaying(null);
-    onDelete(selected.camId, selected.name);
-  };
 
   return (
     <>
       <section
-        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex max-h-[200px] min-h-[120px]"
+        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex flex-col max-h-[200px] min-h-[120px]"
         aria-label="Recordings timeline"
       >
-        <div className="w-36 shrink-0 border-r border-gray-800 flex flex-col p-2 gap-2">
-          <div>
+        <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
+          <div className="min-w-0">
             <h2 className="text-xs font-semibold text-gray-200">Clips</h2>
-            <p className="text-[10px] text-gray-500 truncate mt-0.5" title={activeCameraName || ""}>
-              {activeCameraName ? activeCameraName : "No camera selected"}
+            <p className="text-[10px] text-gray-500 truncate" title={activeCameraName || ""}>
+              {activeCameraName || "No camera selected"}
             </p>
           </div>
-          <div className="flex flex-col gap-1.5 mt-auto">
-            <a
-              href={selectedUrl || undefined}
-              download={selected?.name}
-              className={`text-center text-[10px] px-2 py-1.5 rounded font-medium ${
-                selected
-                  ? "bg-gray-700 hover:bg-gray-600 text-gray-100"
-                  : "bg-gray-800 text-gray-500 pointer-events-none"
-              }`}
-              aria-disabled={!selected}
-              onClick={(e) => {
-                if (!selected) e.preventDefault();
-              }}
-            >
-              Download
-            </a>
-            <button
-              type="button"
-              disabled={!selected}
-              onClick={handleDeleteSelected}
-              className="text-[10px] px-2 py-1.5 rounded font-medium bg-red-900/50 hover:bg-red-800/60 text-red-300 disabled:opacity-40 disabled:cursor-not-allowed border border-red-800/50"
-            >
-              Delete
-            </button>
-            <button
-              type="button"
-              disabled={loading || !hasCameras}
-              onClick={onRefresh}
-              className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-200"
-            >
-              {loading ? "Loading…" : "Refresh"}
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={loading || !hasCameras}
+            onClick={onRefresh}
+            className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-200 shrink-0"
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
         </div>
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="px-2 py-1 border-b border-gray-800/80 shrink-0">
-            <p className="text-[10px] text-gray-500">
-              {hasCameras
-                ? recordings.length
-                  ? `${recordings.length} clip${recordings.length === 1 ? "" : "s"} · click to select`
-                  : loading
-                    ? "Loading clips…"
-                    : "No clips for this camera"
-                : "Add a camera to see recordings"}
-            </p>
-          </div>
-          <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-2 py-2">
-            {hasCameras && recordings.length > 0 ? (
-              <ul className="flex gap-3 pb-1">
-                {recordings.map((r) => {
-                  const url = recordingFileUrl(r.camId, r.name);
-                  const key = recordingKey(r);
-                  const isSelected = selectedKey === key;
-                  const isPlaying = playing?.camId === r.camId && playing?.name === r.name;
-                  return (
-                    <li key={key}>
+        <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-3 py-2">
+          {!hasCameras ? (
+            <p className="text-xs text-gray-500 py-2">Add a camera to see recordings.</p>
+          ) : loading && recordings.length === 0 ? (
+            <p className="text-xs text-gray-500 py-2">Loading clips…</p>
+          ) : recordings.length === 0 ? (
+            <p className="text-xs text-gray-500 py-2">No clips for this camera yet.</p>
+          ) : (
+            <ul className="flex gap-3 pb-1">
+              {recordings.map((r) => {
+                const url = recordingFileUrl(r.camId, r.name);
+                const key = recordingKey(r);
+                const isPlaying =
+                  playing != null &&
+                  cameraIdsMatch(playing.camId, r.camId) &&
+                  playing.name === r.name;
+                return (
+                  <li
+                    key={key}
+                    className={`shrink-0 w-[10.5rem] rounded-lg border p-1.5 flex flex-col gap-1 ${
+                      isPlaying
+                        ? "border-blue-500/70 bg-[#111827]"
+                        : "border-gray-800 bg-[#111827]/60"
+                    }`}
+                  >
+                    <div className="relative w-full aspect-video rounded overflow-hidden bg-black border border-gray-700">
                       <button
                         type="button"
-                        onClick={() => setSelectedKey(key)}
-                        onDoubleClick={() => setPlaying(r)}
-                        className={`shrink-0 w-[10.5rem] rounded-lg border p-1.5 flex flex-col gap-1 text-left transition-colors ${
-                          isSelected
-                            ? "border-indigo-500 bg-[#111827] ring-1 ring-indigo-500/50"
-                            : "border-gray-800 bg-[#111827]/60 hover:border-gray-600"
-                        } ${isPlaying ? "outline outline-1 outline-blue-400/60" : ""}`}
-                        title="Click to select · double-click to play"
+                        onClick={() => setPlaying(r)}
+                        className="absolute inset-0 w-full h-full"
+                        title="Play clip"
                       >
-                        <span
-                          className="w-full aspect-video rounded overflow-hidden bg-black border border-gray-700 block"
+                        <RecordingThumbnail
+                          src={url}
+                          className="w-full h-full object-cover pointer-events-none"
+                        />
+                      </button>
+                      <div className="absolute top-1 right-1 flex gap-1 z-10">
+                        <a
+                          href={url}
+                          download={r.name}
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1 rounded bg-black/75 text-gray-100 hover:bg-black/90 hover:text-white border border-gray-600/80"
+                          title="Download"
+                          aria-label="Download clip"
+                        >
+                          <IconDownload />
+                        </a>
+                        <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedKey(key);
-                            setPlaying(r);
+                            if (isPlaying) setPlaying(null);
+                            onDelete(r.camId, r.name);
                           }}
-                          role="presentation"
+                          className="p-1 rounded bg-black/75 text-red-300 hover:bg-red-950/90 hover:text-red-200 border border-red-900/50"
+                          title="Delete"
+                          aria-label="Delete clip"
                         >
-                          <RecordingThumbnail
-                            src={url}
-                            className="w-full h-full object-cover pointer-events-none"
-                          />
-                        </span>
-                        <span className="min-w-0 text-[10px]">
-                          <span className="text-gray-500 block truncate">{formatTime(r.mtime)}</span>
-                          <span className="text-gray-600">{formatBytes(r.size)}</span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
-          </div>
+                          <IconTrash />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="min-w-0 text-[10px] px-0.5">
+                      <p className="text-gray-500 truncate">{formatTime(r.mtime)}</p>
+                      <p className="text-gray-600">{formatBytes(r.size)}</p>
+                      <p className="font-mono text-gray-600 truncate" title={r.name}>
+                        {r.name}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </section>
 
@@ -801,7 +801,7 @@ export default function App() {
       return;
     }
     setActiveCameraId((prev) => {
-      if (prev != null && cams.some((c) => c.id === prev)) return prev;
+      if (prev != null && cams.some((c) => cameraIdsMatch(c.id, prev))) return prev;
       return cams[0].id;
     });
   }, [cams]);
@@ -843,9 +843,27 @@ export default function App() {
     };
   }, [cams]);
 
+  const camsRef = useRef(cams);
+  const loadAllRecordingsRef = useRef(loadAllRecordings);
+  useEffect(() => {
+    camsRef.current = cams;
+  }, [cams]);
+  useEffect(() => {
+    loadAllRecordingsRef.current = loadAllRecordings;
+  }, [loadAllRecordings]);
+
   useEffect(() => {
     let ws;
     let alive = true;
+    const prevRecordingRef = { current: {} };
+    const scheduleRecordingsRefresh = () => {
+      const list = camsRef.current;
+      const load = loadAllRecordingsRef.current;
+      if (!list?.length || typeof load !== "function") return;
+      load(list);
+      window.setTimeout(() => load(camsRef.current), 1500);
+      window.setTimeout(() => load(camsRef.current), 4000);
+    };
     const connect = () => {
       try {
         ws = new WebSocket(WS_RECORDING);
@@ -857,10 +875,21 @@ export default function App() {
           const data = JSON.parse(ev.data);
           const camsMap = data.cameras || {};
           const next = {};
+          let anyStopped = false;
           Object.entries(camsMap).forEach(([id, row]) => {
-            next[Number(id)] = Boolean(row.recording);
+            const key = Number(id);
+            const now = Boolean(row.recording);
+            const was = Boolean(
+              prevRecordingRef.current[key] ??
+                prevRecordingRef.current[id] ??
+                prevRecordingRef.current[String(id)]
+            );
+            if (was && !now) anyStopped = true;
+            next[key] = now;
           });
+          prevRecordingRef.current = next;
           if (alive) setRecordingById(next);
+          if (anyStopped) scheduleRecordingsRefresh();
         } catch {
           /* ignore */
         }
@@ -1125,8 +1154,13 @@ export default function App() {
         alert(typeof errBody.detail === "string" ? errBody.detail : `${path} failed`);
         return;
       }
+      setActiveCameraId(cam.id);
       setManualRecordingById((prev) => ({ ...prev, [cam.id]: path === "start" }));
       await loadAllRecordings(cams);
+      if (path === "stop") {
+        window.setTimeout(() => loadAllRecordings(cams), 1500);
+        window.setTimeout(() => loadAllRecordings(cams), 4000);
+      }
     } catch (e) {
       alert(String(e));
     }
@@ -1146,9 +1180,12 @@ export default function App() {
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
-  const activeCamera = cams.find((c) => c.id === activeCameraId) ?? null;
-  const recordingsForActiveCamera = activeCameraId
-    ? allRecordings.filter((r) => r.camId === activeCameraId)
+  const effectiveActiveCameraId =
+    activeCameraId ?? (cams.length > 0 ? cams[0].id : null);
+  const activeCamera =
+    cams.find((c) => cameraIdsMatch(c.id, effectiveActiveCameraId)) ?? null;
+  const recordingsForActiveCamera = effectiveActiveCameraId
+    ? allRecordings.filter((r) => cameraIdsMatch(r.camId, effectiveActiveCameraId))
     : [];
 
   return (
@@ -1284,7 +1321,7 @@ export default function App() {
                 }
               }}
               className={`bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1 cursor-pointer border ${
-                activeCameraId === c.id
+                cameraIdsMatch(activeCameraId, c.id)
                   ? "border-indigo-500 ring-1 ring-indigo-500/40"
                   : "border-transparent hover:border-gray-600"
               }`}
@@ -1391,11 +1428,11 @@ export default function App() {
                     }
                   }}
                   className={`min-h-0 min-w-0 rounded-xl transition-shadow cursor-pointer ${bentoTileClass(i, liveCams.length)} ${
-                    activeCameraId === c.id
+                    cameraIdsMatch(activeCameraId, c.id)
                       ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-[#0b1220]"
                       : "hover:ring-1 hover:ring-gray-600"
                   }`}
-                  title={activeCameraId === c.id ? "Active camera (clips below)" : "Click to activate — show this camera's clips"}
+                  title={cameraIdsMatch(activeCameraId, c.id) ? "Active camera (clips below)" : "Click to activate — show this camera's clips"}
                 >
                   <LiveTile
                     cam={c}
@@ -1403,7 +1440,7 @@ export default function App() {
                     recording={
                       (c.settings?.recording_mode || "motion") === "off"
                         ? manualRecordingById[c.id] === true
-                        : recordingById[c.id] === true
+                        : recordingActiveForCam(recordingById, c.id)
                     }
                     recordingMode={c.settings?.recording_mode || "motion"}
                     manualRecording={manualRecordingById[c.id] === true}
