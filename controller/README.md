@@ -2,154 +2,92 @@
 
 ## Description
 
-The Smartcam **controller** runs on the **Raspberry Pi 5** (Hailo-capable host). It provides the FastAPI backend (MQTT bridge with Mosquitto, WebSocket updates, LAN discovery, proxy to edge agents, aggregated recordings), a React dashboard, and the authoritative Python package [`shared/surveillance_shared`](shared/surveillance_shared) (MobileNet-SSD detector helpers and RTSP/OpenCV environment).
+The SmartCam **controller** runs on the **Raspberry Pi 5** (Hailo-capable host). It provides the FastAPI backend (MQTT bridge with Mosquitto, WebSocket updates, LAN discovery, proxy to edge agents, aggregated recordings), a React dashboard, and the authoritative Python package [`shared/surveillance_shared`](shared/surveillance_shared).
 
-**Documentation:** [`docs/`](../docs/) — architecture, MQTT schema, and step-by-step setup ([`docs/SETUP_PI5.md`](../docs/SETUP_PI5.md), [`docs/SETUP_PI4.md`](../docs/SETUP_PI4.md)). Mosquitto bootstrap: [`scripts/install-mosquitto.sh`](scripts/install-mosquitto.sh).
+**Documentation:** [`docs/`](../docs/) — [`docs/SETUP_PI5.md`](../docs/SETUP_PI5.md), [`docs/SETUP_PI4.md`](../docs/SETUP_PI4.md), [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
-Layout:
+**Layout**
 
-- **`backend/`** — FastAPI application (`uvicorn app.main:app`).
-- **`frontend/`** — React + Vite UI.
-- **`shared/`** — canonical **`surveillance_shared`** for the Pi 5 backend. Each Pi 4 edge device keeps a **real file copy** under `edge-agent/shared/surveillance_shared/` (not a symlink). After editing `controller/shared/surveillance_shared/`, refresh the edge copy with `edge-agent/scripts/sync-shared-from-controller.sh` and deploy or commit under `edge-agent/shared/`.
-- **`ENVCAM/`** — legacy checkout artifacts only; **do not activate** if copied from another machine (scripts embed absolute paths and `pip` will fail with “cannot execute: required file not found”). Create a fresh venv under `backend/` instead (see below).
+| Path | Role |
+|------|------|
+| [`backend/`](backend/) | FastAPI app, `.env`, Hailo models, MediaMTX binary |
+| [`frontend/`](frontend/) | React + Vite UI |
+| [`shared/`](shared/) | Canonical `surveillance_shared` (sync to Pi 4 via [`edge-agent/scripts/sync-shared-from-controller.sh`](../edge-agent/scripts/sync-shared-from-controller.sh)) |
+| [`../start.sh`](../start.sh) | **Install and run** backend + frontend from repo root |
 
-## Installation
+Do not use legacy **`ENVCAM/`** venvs from other machines.
 
-You can run **`../start.sh controller --install`** from this tree’s parent directory (repo root) to perform the backend and frontend setup steps below in one go. See [Quick start](#quick-start-recommended) under Execution.
+## Prerequisites (host)
 
-**System prerequisites**
+Install once on the Pi 5 (not handled by `start.sh`):
 
-- Python 3 with `pip` (on each device run `python3 -m venv .venv` inside `controller/backend` and use that environment).
-- **Node.js** and **npm** for the frontend.
-- **ffmpeg** on `PATH` — required for recording pipelines (muxing, continuous copy mode) in the backend.
-- **MediaMTX** — **not a Python package**; `pip` / `requirements.txt` cannot install it. On the controller host, run **`./scripts/install_mediamtx.sh`** once (downloads the official release tarball into **`backend/bin/mediamtx`**). Alternatively install from [releases](https://github.com/bluenviron/mediamtx/releases) or set **`CONTROLLER_MEDIAMTX_BIN`**. The API starts MediaMTX when it finds a binary. **`CONTROLLER_MEDIAMTX_DISABLED=1`** skips startup.
+- **Python 3**, **Node.js 20+**, **npm**, **ffmpeg** on `PATH`
+- **Mosquitto** — [`scripts/install-mosquitto.sh`](scripts/install-mosquitto.sh) or `apt install mosquitto`
+- **Hailo** — `sudo apt install hailo-all python3-hailort` (see [`docs/SETUP_PI5.md`](../docs/SETUP_PI5.md))
 
-**Backend**
+## Configuration
 
-```bash
-cd controller/backend
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-export PYTHONPATH="$(pwd)/../shared"
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-bash scripts/install_mediamtx.sh   # MediaMTX binary (needs curl); skip if already on PATH
-```
+Edit before first run:
 
-**SSD models (motion detection / diagnostics on the controller)**
+- [`backend/.env`](backend/.env) — MQTT, MediaMTX, Hailo, inference delay (loaded by [`app/env_loader.py`](backend/app/env_loader.py); do not `source .env`)
+- [`frontend/.env`](frontend/.env) — `VITE_API_URL`, HLS/WebRTC bases (restart required after changes; `start.sh` handles that)
 
-Run once if `backend/models/` does not yet contain the Caffe MobileNet-SSD files (defaults via `SURVEILLANCE_MODEL_DIR` in [`backend/app/detector.py`](backend/app/detector.py)):
+Set **`CONTROLLER_MQTT_HOST`** to this Pi’s **LAN IPv4** (not `127.0.0.1`).
 
-```bash
-cd controller/backend
-./scripts/fetch_ssd_models.sh
-```
+## Install and run
 
-**Frontend**
-
-```bash
-cd controller/frontend
-npm install
-```
-
-## Execution
-
-### Quick start (recommended)
-
-From the **repository root** on the Pi 5, one script starts the API and the dev UI. Edit **[`backend/.env`](backend/.env)** and **[`frontend/.env`](frontend/.env)** for your LAN IPs first.
+All commands from the **repository root**:
 
 ```bash
 cd /path/to/smartcam
 
-# First time (venv, pip, npm, MediaMTX binary):
+# First time — venv, pip, npm, MediaMTX binary, Hailo check:
 ./start.sh controller --install
 
-# Every run (backend :8000 + Vite :5173); Ctrl+C stops both:
+# Start API (:8000) + UI (:5173); Ctrl+C stops both:
 ./start.sh controller
 ```
 
 | Option | Effect |
 |--------|--------|
-| `--install` / `-i` | Create `backend/.venv` (with `--system-site-packages` for `python3-hailort`), install Python/npm deps, fetch MediaMTX if missing |
-| `--backend-only` | Uvicorn only |
+| `--install` / `-i` | Install dependencies |
+| `--backend-only` | API only |
 | `--frontend-only` | Vite only |
 
-Optional env overrides: **`SMARTCAM_API_PORT`** (default **8000**), **`SMARTCAM_UI_PORT`** (default **5173**). The script prints LAN URLs (from `.env` or `hostname -I`). After start it runs [`backend/scripts/check_hailo.sh`](backend/scripts/check_hailo.sh) when the backend is up.
+Optional: **`SMARTCAM_API_PORT`** (default `8000`), **`SMARTCAM_UI_PORT`** (default `5173`).
 
-Open the dashboard at **`http://<pi5-lan-ip>:5173/`**. API docs: **`http://<pi5-lan-ip>:8000/docs`**.
+- Dashboard: `http://<pi5-lan-ip>:5173/`
+- API docs: `http://<pi5-lan-ip>:8000/docs`
 
-### Manual start (alternative)
+## Operations
 
-**API** — from `controller/backend`, with `.venv` activated and `PYTHONPATH` including `../shared`:
+**MediaMTX (live tiles)**
 
-```bash
-source .venv/bin/activate
-export PYTHONPATH="$(pwd)/../shared"
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+- Backend writes [`backend/data/mediamtx.generated.yml`](backend/data/mediamtx.generated.yml) from [`backend/data/cameras.json`](backend/data/cameras.json) and runs embedded MediaMTX (see [`backend/app/mediamtx_manager.py`](backend/app/mediamtx_manager.py)).
+- WebRTC UI: port **8889**; HLS: **8888**. Set **`VITE_MEDIAMTX_BASE`** / **`VITE_HLS_BASE`** in [`frontend/.env`](frontend/.env).
+- Diagnostics: `GET /system/mediamtx`
 
-**Frontend** — see [Frontend (development)](#frontend-development) below.
+**Edge cameras (mDNS)**
 
-[`backend/.env`](backend/.env) is loaded automatically via [`app/env_loader.py`](backend/app/env_loader.py); do not `source .env` in the shell.
+- Use the UI **Detect cameras** or `GET /detect/edges`. Add edges with **`edge_base_url`** set so recording and RTSP stay on the Pi 4; the controller proxies recordings and pulls RTSP for tiles.
 
-Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
-
-**MediaMTX (central live tiles — Option B)**
-
-- On startup, the backend writes **`backend/data/mediamtx.generated.yml`** from **`backend/data/cameras.json`** (each camera’s **`url`** as an RTSP/HLS pull `source`, path name from **`mediamtx_path`**) and runs **`mediamtx <that file>`** as a child process (see [`backend/app/mediamtx_manager.py`](backend/app/mediamtx_manager.py)).
-- Listeners default to **`webrtcAddress: :8889`** (browser iframe player). Override with **`CONTROLLER_MEDIAMTX_WEBRTC_ADDRESS`** if needed.
-- When you **add, remove, or change saved cameras**, config is **regenerated** and MediaMTX is **restarted** (debounced ~1.2s). Selection-only changes do not alter the config file and do not restart.
-- Point the UI at this instance: **`VITE_MEDIAMTX_BASE=http://<controller-lan-ip>:8889`**, or set **`VITE_API_URL`** and let the dev UI default MediaMTX to **the same host** on port **8889**. If the browser says **“refused to connect”** to that IP, check **`GET /system/mediamtx`** (e.g. `http://<pi5>:8000/system/mediamtx`) for **`process_running`**, **`binary_path`**, and **`last_start_error`**.
-
-**Edge agents (mDNS) vs OpenCV on the controller**
-
-- **Discovery does not run at API startup.** The UI **Detect cameras** button calls **`GET /detect/edges`** and **`GET /detect`** (each ~3s mDNS listen in [`backend/app/discovery.py`](backend/app/discovery.py)). Results only include devices not already listed in **`backend/data/cameras.json`**.
-- **`GET /detect/edges`** returns payloads with `edge_base_url`, `mqtt_camera_id`, and `url`. Use **`POST /cameras`** (or **Add** in the UI) so the entry is stored with **`edge_base_url` set** for Pi 4 edges.
-- Saved cameras persist in **`backend/data/cameras.json`** until removed (**DELETE `/cameras/{id}`** or **✕** in the UI). A fresh checkout uses an empty camera list until you add devices.
-- If a camera has a **non-empty `edge_base_url`**, the controller **does not** start the per-camera OpenCV/motion worker in [`backend/app/recording_manager.py`](backend/app/recording_manager.py) (recording and RTSP inference stay on the edge; the controller lists recordings over HTTP to the edge and shows live video via MediaMTX in the UI).
-- If `edge_base_url` is **missing** but `url` is an RTSP URL, the controller assumes a **local/direct** camera and will connect to that RTSP URL at startup for motion recording — which produces errors like `Connection refused` when nothing is listening on that host/port (for example edge RTSP on `:8554` while MediaMTX is down).
-
-**MQTT (recording indicators and bridge)**
-
-Set **`CONTROLLER_MQTT_HOST`** to this Pi’s **LAN IPv4** (e.g. `192.168.2.139`, not `127.0.0.1`). When the API starts, it ensures a broker listens on that address (managed `mosquitto` subprocess with config under `backend/data/`, unless something already accepts connections there). Edge agents use the same host in **`SURVEILLANCE_MQTT_HOST`**.
+**MQTT**
 
 | Variable | Purpose |
 |----------|---------|
-| `CONTROLLER_MQTT_HOST` | Broker bind/connect address; empty disables broker management and the MQTT bridge. |
-| `CONTROLLER_MQTT_PORT` | Default **1883**. |
-| `CONTROLLER_MQTT_USER` / `CONTROLLER_MQTT_PASSWORD` | Optional; empty = anonymous on the managed broker. |
-| `CONTROLLER_MQTT_TOPIC_PREFIX` | Default **`surveillance/cameras`**. |
-| `CONTROLLER_MOSQUITTO_DISABLED` | Set to **`1`** if you run Mosquitto yourself and do not want the API to start it. |
-| `CONTROLLER_MOSQUITTO_USE_SYSTEM` | Set to **`1`** to run **`systemctl start mosquitto`** (after [`scripts/install-mosquitto.sh`](scripts/install-mosquitto.sh)) instead of the embedded process. |
+| `CONTROLLER_MQTT_HOST` | Broker address on this Pi |
+| `CONTROLLER_MQTT_PORT` | Default `1883` |
+| `CONTROLLER_MQTT_TOPIC_PREFIX` | Default `surveillance/cameras` |
+| `CONTROLLER_MOSQUITTO_DISABLED` | `1` = do not start embedded broker |
+| `CONTROLLER_MOSQUITTO_USE_SYSTEM` | `1` = use system `mosquitto` service |
 
-Diagnostics: **`GET /system/mosquitto`** and **`GET /system/recording`** (`mosquitto` field). Requires **`mosquitto`** on `PATH` (`apt install mosquitto`).
+Diagnostics: `GET /system/mosquitto`, `GET /system/recording`
 
-**Frontend (development)**
-
-From `controller/frontend` (or use `./start.sh controller` from the repo root):
-
-```bash
-npm install
-npm run dev
-```
-
-Use **Node.js 20+** (LTS recommended). Install dependencies **on the same machine** that runs the UI (do not copy `node_modules` from a Mac to a Pi). If `npm run dev` fails, run:
-
-```bash
-rm -rf node_modules package-lock.json
-npm install
-npm run dev
-```
-
-Edit **[`frontend/.env`](frontend/.env)** (or **`.env.local`** for machine-specific overrides). **Restart `npm run dev`** after changes.
-
-The dev server uses **`vite --host`**. Open the **Network** URL Vite prints (e.g. `http://<your-pi>:5173/`) from other devices on the LAN.
+**Frontend env (Vite)**
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_API_URL` | Controller API, e.g. `http://<pi5>:8000` (set in `.env` for a stable setup). |
-| `VITE_HLS_BASE` | MediaMTX HLS, default `http://<same-host-as-api>:8888`. |
-| `VITE_MEDIAMTX_BASE` | MediaMTX WebRTC HTTP, default `http://<same-host-as-api>:8889`. |
-| `VITE_WS_RECORDING_URL` / `VITE_WS_DETECTIONS_URL` | Optional; default from `VITE_API_URL`. |
-
-If `VITE_API_URL` is unset, the UI falls back to `http://<browser-hostname>:8000`.
+| `VITE_API_URL` | Controller API, e.g. `http://<pi5>:8000` |
+| `VITE_HLS_BASE` | HLS, default same host port `8888` |
+| `VITE_MEDIAMTX_BASE` | WebRTC reader, default port `8889` |
+| `VITE_WS_RECORDING_URL` / `VITE_WS_DETECTIONS_URL` | Optional; default derived from `VITE_API_URL` |
