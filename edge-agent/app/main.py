@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
-from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile, mp4_probe_ok
+from surveillance_shared.ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_probe_ok
 
 from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
@@ -247,7 +247,7 @@ def list_recordings() -> List[dict[str, Any]]:
             continue
         if not _SAFE_NAME.match(p.name):
             continue
-        if not mp4_probe_ok(p):
+        if not mp4_ios_playable(p):
             continue
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
@@ -261,10 +261,10 @@ def get_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    if not mp4_probe_ok(path):
+    if not mp4_ios_playable(path):
         raise HTTPException(
             status_code=422,
-            detail="recording incomplete or corrupt (no moov atom)",
+            detail="recording not ready for mobile playback; try Convert clip in the dashboard",
         )
     return FileResponse(
         path,
@@ -287,7 +287,7 @@ def finalize_file_for_mobile(filename: str):
     if not mp4_probe_ok(path):
         raise HTTPException(
             status_code=422,
-            detail="recording incomplete or corrupt (no moov atom); re-record this clip",
+            detail="recording incomplete or corrupt; re-record this clip",
         )
     if not finalize_mp4_for_mobile(path):
         raise HTTPException(

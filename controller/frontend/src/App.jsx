@@ -38,15 +38,20 @@ function canPlayNativeHls(video) {
   });
 }
 
-function preferNativeHlsPlayback() {
+function isIosDevice() {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent || "";
-  const ios =
+  return (
     /iPad|iPhone|iPod/i.test(ua) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  const android = /Android/i.test(ua);
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function preferNativeHlsPlayback() {
+  if (typeof navigator === "undefined") return false;
+  const android = /Android/i.test(navigator.userAgent || "");
   const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
-  return ios || (android && narrow);
+  return isIosDevice() || (android && narrow);
 }
 
 function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
@@ -330,6 +335,7 @@ function recordingKey(r) {
 function ClipPlayer({ url, camId, filename, onRepaired }) {
   const videoRef = useRef(null);
   const autoRepairRef = useRef(false);
+  const iosPrepareRef = useRef(false);
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [playToken, setPlayToken] = useState(0);
@@ -367,6 +373,37 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
     } finally {
       setRepairing(false);
     }
+  }, [camId, filename, onRepaired, reloadVideo]);
+
+  useEffect(() => {
+    iosPrepareRef.current = false;
+  }, [camId, filename]);
+
+  useEffect(() => {
+    if (!isIosDevice() || !isSetCameraId(camId) || !filename) return undefined;
+    if (iosPrepareRef.current) return undefined;
+    iosPrepareRef.current = true;
+    let cancelled = false;
+    (async () => {
+      setRepairing(true);
+      try {
+        const res = await fetch(
+          `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(filename)}/finalize-mobile`,
+          { method: "POST" }
+        );
+        if (!cancelled && res.ok) {
+          reloadVideo();
+          if (typeof onRepaired === "function") onRepaired();
+        }
+      } catch {
+        /* fall through to normal load + error repair */
+      } finally {
+        if (!cancelled) setRepairing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [camId, filename, onRepaired, reloadVideo]);
 
   useEffect(() => {
@@ -413,9 +450,12 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
         src={url}
         controls
         playsInline
-        preload="auto"
+        preload={isIosDevice() ? "metadata" : "auto"}
         className="w-full rounded bg-black max-h-[75vh]"
       />
+      {repairing ? (
+        <p className="text-[10px] text-gray-400 mt-1">Preparing clip for playback…</p>
+      ) : null}
       {error ? (
         <div className="mt-2 space-y-2">
           <p className="text-xs text-red-400">{error}</p>

@@ -28,6 +28,7 @@ from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     h264_mobile_fragmented_mp4_args,
     h264_mobile_output_args,
     h264_mobile_video_args,
+    mp4_ios_playable,
     mp4_probe_ok,
     remove_invalid_mp4,
 )
@@ -332,7 +333,7 @@ class EdgeRecorder:
             if not ok:
                 time.sleep(1.5)
                 ok = finalize_mp4_for_mobile(out_path)
-            if ok and mp4_probe_ok(out_path):
+            if ok and mp4_ios_playable(out_path):
                 playable_name = out_path.name
             else:
                 print("[edge] manual clip unusable, removing:", out_path.name)
@@ -442,10 +443,10 @@ class EdgeRecorder:
                         prev = out_dir / last_filename
                         if prev.is_file():
                             finalize_mp4_for_mobile(prev)
-                            if not mp4_probe_ok(prev):
+                            if not mp4_ios_playable(prev):
                                 remove_invalid_mp4(prev)
                     last_filename = seg_path.name
-                    if seg_path.is_file() and mp4_probe_ok(seg_path):
+                    if seg_path.is_file() and mp4_ios_playable(seg_path):
                         self._publish(
                             status="InProgress",
                             recording_id=rid,
@@ -461,7 +462,7 @@ class EdgeRecorder:
             if last_seg.is_file():
                 time.sleep(0.5)
                 finalize_mp4_for_mobile(last_seg)
-                if mp4_probe_ok(last_seg):
+                if mp4_ios_playable(last_seg):
                     stop_filename = last_filename
                 else:
                     remove_invalid_mp4(last_seg)
@@ -659,8 +660,8 @@ class EdgeRecorder:
                 return
             if not finalize_mp4_for_mobile(out_mp4):
                 print("[edge] motion clip finalize failed:", out_mp4.name)
-            if not mp4_probe_ok(out_mp4):
-                print("[edge] motion clip not playable, removing:", out_mp4.name)
+            if not mp4_ios_playable(out_mp4):
+                print("[edge] motion clip not iOS-playable, removing:", out_mp4.name)
                 remove_invalid_mp4(out_mp4)
                 self._publish(status="Stop", recording_id=rid, local_path="")
                 return

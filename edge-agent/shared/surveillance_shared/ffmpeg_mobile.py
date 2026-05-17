@@ -43,6 +43,33 @@ def h264_mobile_fragmented_mp4_args(*, preset: str = "veryfast") -> list[str]:
     ]
 
 
+def mp4_is_fragmented(path: Path) -> bool:
+    """True when the file uses fMP4 moof/mdat (Safari often shows thumb but blank full-screen play)."""
+    if not path.is_file():
+        return False
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            data = f.read(min(size, 32 * 1024 * 1024))
+        return b"moof" in data
+    except OSError:
+        return False
+
+
+def mp4_ios_playable(path: Path, *, timeout: float = 30.0) -> bool:
+    """Progressive MP4 with moov near the start — required for iOS Safari <video> playback."""
+    if not mp4_probe_ok(path, timeout=timeout):
+        return False
+    if mp4_is_fragmented(path):
+        return False
+    try:
+        with path.open("rb") as f:
+            head = f.read(512 * 1024)
+        return b"moov" in head
+    except OSError:
+        return False
+
+
 def mp4_probe_ok(path: Path, *, timeout: float = 30.0) -> bool:
     """True when ffprobe can read the file (moov present and decodable)."""
     if not path.is_file():
@@ -121,42 +148,45 @@ def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
                 return False
         except OSError:
             return False
-        if not mp4_probe_ok(tmp, timeout=timeout):
+        if not mp4_ios_playable(tmp, timeout=timeout):
             return False
         tmp.replace(path)
-        return mp4_probe_ok(path, timeout=timeout)
+        return mp4_ios_playable(path, timeout=timeout)
 
-    # Fast path: remux with stream copy when bitstream is already compatible.
-    try:
-        r = subprocess.run(
-            [
-                ff,
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                str(path),
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                str(tmp),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if r.returncode == 0 and _commit_tmp():
-            return True
-        if r.returncode != 0 and r.stderr:
-            print("[ffmpeg_mobile] remux failed:", r.stderr.strip()[-300:])
-    except (OSError, subprocess.TimeoutExpired) as e:
-        print("[ffmpeg_mobile] remux error:", e)
-    finally:
-        _cleanup_tmp()
+    fragmented_in = mp4_is_fragmented(path)
 
-    # Fallback: re-encode to baseline H.264 (fixes High/HEVC or truncated moov).
+    # Fast path: remux with stream copy (skip for fMP4 — copy often leaves moof for iOS).
+    if not fragmented_in:
+        try:
+            r = subprocess.run(
+                [
+                    ff,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    str(tmp),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if r.returncode == 0 and _commit_tmp():
+                return True
+            if r.returncode != 0 and r.stderr:
+                print("[ffmpeg_mobile] remux failed:", r.stderr.strip()[-300:])
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print("[ffmpeg_mobile] remux error:", e)
+        finally:
+            _cleanup_tmp()
+
+    # Re-encode to progressive baseline H.264 (fMP4, High profile, or missing faststart).
     try:
         r = subprocess.run(
             [
@@ -185,13 +215,13 @@ def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
     finally:
         _cleanup_tmp()
 
-    return mp4_probe_ok(path, timeout=timeout)
+    return mp4_ios_playable(path, timeout=timeout)
 
 
 def remove_invalid_mp4(path: Path) -> None:
-    """Delete corrupt/partial MP4 if present."""
+    """Delete corrupt or non-iOS-playable MP4 if present."""
     try:
-        if path.is_file() and not mp4_probe_ok(path):
+        if path.is_file() and not mp4_ios_playable(path):
             path.unlink()
     except OSError:
         pass
