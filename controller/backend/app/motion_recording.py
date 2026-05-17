@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import threading
 import time
 from typing import Any, Optional
 
+import cv2
 import httpx
+import numpy as np
 
 from . import camera_store
 from .events_store import append_event
@@ -19,7 +22,7 @@ _MOTION_STATUS_TIMEOUT = httpx.Timeout(2.0, read=4.0)
 _STATUS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _STATUS_CACHE_TTL_SEC = 45.0
 
-_ACTIVE_PHASES = frozenset({"starting", "post_roll", "materializing"})
+_CAPTURE_PHASES = frozenset({"starting", "post_roll"})
 
 
 def motion_status_idle() -> dict[str, Any]:
@@ -67,20 +70,75 @@ def fetch_edge_motion_status(edge: str, cam_id: int) -> dict[str, Any]:
 
 
 def motion_recording_in_progress(status: dict[str, Any]) -> bool:
-    """True while edge is capturing or materializing a motion clip."""
+    """True while edge is capturing the motion clip window (not while ffmpeg saving only)."""
     if not isinstance(status, dict):
         return False
-    phase = str(status.get("phase") or "idle")
-    if phase in _ACTIVE_PHASES:
+    if bool(status.get("capture_active")):
         return True
-    return bool(status.get("active"))
+    phase = str(status.get("phase") or "idle")
+    if phase in _CAPTURE_PHASES:
+        return True
+    ends = float(status.get("ends_at") or 0.0)
+    if ends > time.time() and phase not in ("idle", "materializing"):
+        return True
+    return False
 
 
 _last_trigger_by_cam: dict[int, float] = {}
 _last_handle_by_cam: dict[int, float] = {}
 _trigger_lock = threading.Lock()
+_capture_block_until: dict[int, float] = {}
+
+
+def notify_motion_clip_accepted(cam_id: int, duration_seconds: int) -> None:
+    """Block re-trigger until the clip capture window ends (saving may continue)."""
+    dur = max(1.0, float(duration_seconds))
+    with _trigger_lock:
+        _capture_block_until[int(cam_id)] = time.time() + dur
+
+
+def motion_capture_busy(cam_id: int, *, edge: Optional[str] = None) -> bool:
+    """
+    True while the ~60s capture is in progress. False during materializing/saving so
+    a new clip may start while the previous MP4 is still being encoded.
+    """
+    cid = int(cam_id)
+    if edge:
+        st = fetch_edge_motion_status(edge, cid)
+        if motion_recording_in_progress(st):
+            return True
+        with _trigger_lock:
+            _capture_block_until.pop(cid, None)
+        return False
+    with _trigger_lock:
+        until = _capture_block_until.get(cid, 0.0)
+    return time.time() < until
 _TRIGGER_COOLDOWN_SEC = 2.0
 _HANDLE_MIN_INTERVAL_SEC = 0.35
+
+
+_THUMB_JPEG_MAX_BYTES = 512_000
+_THUMB_MAX_WIDTH = 480
+
+
+def _encode_detection_thumbnail_b64(frame_bgr: Any) -> Optional[str]:
+    """JPEG base64 of the Hailo inference frame (person-detected moment)."""
+    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        return None
+    if frame_bgr.ndim < 2:
+        return None
+    img = frame_bgr
+    h, w = img.shape[:2]
+    if w > _THUMB_MAX_WIDTH:
+        scale = float(_THUMB_MAX_WIDTH) / float(w)
+        img = cv2.resize(img, (_THUMB_MAX_WIDTH, max(1, int(h * scale))))
+    enc_ok, jpg = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not enc_ok:
+        return None
+    blob = jpg.tobytes()
+    if len(blob) < 64 or len(blob) > _THUMB_JPEG_MAX_BYTES:
+        return None
+    return base64.b64encode(blob).decode("ascii")
 
 
 def _normalize_tags(tags: Optional[list[str]]) -> list[str]:
@@ -100,15 +158,24 @@ def _trigger_motion_clip(
     *,
     tags: list[str],
     source: str,
+    person_detected_at: float,
+    detection_frame: Optional[Any] = None,
 ) -> dict[str, Any]:
     pre = int(settings.get("pre_record_seconds", 10))
     post = int(settings.get("post_record_seconds", 50))
+    pre = max(1, min(120, pre))
+    post = max(1, min(600, post))
+    duration = pre + post
     body: dict[str, Any] = {
-        "pre_record_seconds": pre,
-        "post_record_seconds": post,
+        "person_detected_at": float(person_detected_at),
+        "duration_seconds": duration,
+        "pre_roll_seconds": pre,
         "objects_detected": tags,
         "source": source,
     }
+    thumb_b64 = _encode_detection_thumbnail_b64(detection_frame)
+    if thumb_b64:
+        body["thumbnail_jpeg_b64"] = thumb_b64
     url = f"{edge.rstrip('/')}/recordings/motion/trigger"
     try:
         r = httpx.post(url, json=body, timeout=_MOTION_CLIP_TIMEOUT)
@@ -137,6 +204,8 @@ def handle_person_detected(
     tags: Optional[list[str]] = None,
     person_count: int = 1,
     source: str = "person_detection",
+    person_detected_at: Optional[float] = None,
+    detection_frame: Optional[Any] = None,
 ) -> None:
     """
     State machine on each person-positive inference frame:
@@ -165,7 +234,12 @@ def handle_person_detected(
         tag_list = _normalize_tags(tags)
         status = fetch_edge_motion_status(edge, cam_id)
 
-        if motion_recording_in_progress(status):
+        if motion_capture_busy(cam_id, edge=edge):
+            logger.debug(
+                "motion clip skipped cam_id=%s (capture in progress phase=%s)",
+                cam_id,
+                status.get("phase"),
+            )
             return
 
         now = time.time()
@@ -175,10 +249,24 @@ def handle_person_detected(
                 return
             _last_trigger_by_cam[cam_id] = now
 
+        detected_at = (
+            float(person_detected_at)
+            if person_detected_at is not None
+            else time.time()
+        )
         result = _trigger_motion_clip(
-            cam_id, edge, settings, tags=tag_list, source=source
+            cam_id,
+            edge,
+            settings,
+            tags=tag_list,
+            source=source,
+            person_detected_at=detected_at,
+            detection_frame=detection_frame,
         )
         if result.get("accepted"):
+            pre = int(settings.get("pre_record_seconds", 10))
+            post = int(settings.get("post_record_seconds", 50))
+            notify_motion_clip_accepted(cam_id, pre + post)
             st = fetch_edge_motion_status(edge, cam_id)
             rid = str(st.get("recording_id") or result.get("recording_id") or "")
             append_event(
@@ -189,6 +277,8 @@ def handle_person_detected(
                 detail={
                     "pre_seconds": st.get("pre_seconds"),
                     "post_seconds": st.get("post_seconds"),
+                    "duration_seconds": st.get("duration_seconds"),
+                    "person_detected_at": detected_at,
                     "objects_detected": tag_list,
                     "source": source,
                 },
@@ -199,7 +289,7 @@ def handle_person_detected(
                 st.get("recording_id"),
             )
         else:
-            logger.debug(
+            logger.info(
                 "motion clip declined cam_id=%s reason=%s",
                 cam_id,
                 result.get("reason"),
@@ -219,4 +309,6 @@ def schedule_motion_clip_trigger(
     source: str = "person_detection",
 ) -> None:
     """Backward-compatible entry: run person state machine."""
-    handle_person_detected(cam_id, tags=tags, source=source, person_count=1)
+    handle_person_detected(
+        cam_id, tags=tags, source=source, person_count=1, detection_frame=None
+    )

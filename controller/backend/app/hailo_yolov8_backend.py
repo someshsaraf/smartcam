@@ -43,9 +43,49 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _person_confidence() -> float:
-    """One threshold for overlay, recording, and events — person class only (default 90%)."""
-    return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+def _person_confidence_unified() -> float:
+    """Single person threshold for overlay, arming, and recording (default 90%)."""
+    if os.environ.get("SMARTCAM_PERSON_DISPLAY_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_DISPLAY_CONFIDENCE", 0.90, 0.01, 0.99)
+    if os.environ.get("SMARTCAM_PERSON_RECORD_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_RECORD_CONFIDENCE", 0.90, 0.01, 0.99)
+    if os.environ.get("SMARTCAM_PERSON_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+    return 0.90
+
+
+def _person_display_confidence() -> float:
+    return _person_confidence_unified()
+
+
+def _person_record_confidence() -> float:
+    return _person_confidence_unified()
+
+
+def _person_hold_confidence() -> float:
+    """Brief flicker hold after a >=90% hit; never below display threshold on screen."""
+    hold = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.85, 0.01, 0.99)
+    return min(hold, _person_display_confidence())
+
+
+def _clahe_clip_limit() -> float:
+    """CLAHE contrast limit; higher = stronger lift in shadows (typical 2–4)."""
+    return _env_float("SMARTCAM_CLAHE_CLIP_LIMIT", 2.0, 1.0, 8.0)
+
+
+def _clahe_tile_size() -> int:
+    """CLAHE tile side length in pixels (smaller = more local, can add noise)."""
+    return _env_int("SMARTCAM_CLAHE_TILE_SIZE", 8, 4, 32)
+
+
+def person_record_confidence() -> float:
+    """Public accessor for live_detection recording gate."""
+    return _person_record_confidence()
+
+
+def person_display_confidence() -> float:
+    """Public accessor for UI threshold display."""
+    return _person_display_confidence()
 
 
 def _box_plausible(box: dict[str, Any]) -> bool:
@@ -66,7 +106,7 @@ def _box_plausible(box: dict[str, Any]) -> bool:
     min_w = _env_float("SMARTCAM_PERSON_MIN_BOX_WIDTH", 0.08, 0.02, 0.95)
     if w < min_w:
         return False
-    min_h = _env_float("SMARTCAM_PERSON_MIN_BOX_HEIGHT", 0.12, 0.02, 0.95)
+    min_h = _env_float("SMARTCAM_PERSON_MIN_BOX_HEIGHT", 0.09, 0.02, 0.95)
     if h < min_h:
         return False
     return True
@@ -249,7 +289,7 @@ class HailoYolov8Detector:
         raw_hef = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
         self.hef_path, hef_err = _resolve_hef_path(raw_hef)
         self.input_size = _env_int("SMARTCAM_HAILO_INPUT_SIZE", 640, 64, 2048)
-        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
+        self.conf = _person_display_confidence()
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
@@ -374,8 +414,28 @@ class HailoYolov8Detector:
                 logger.exception(self._error)
                 return False
 
+    def _enhance_low_light(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """CLAHE on L channel — helps seated/profile subjects in very dark scenes."""
+        if not _env_bool("SMARTCAM_LOW_LIGHT_BOOST", True):
+            return frame_bgr
+        if frame_bgr is None or frame_bgr.size == 0 or frame_bgr.ndim != 3:
+            return frame_bgr
+        try:
+            tile = _clahe_tile_size()
+            lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            clahe = cv2.createCLAHE(
+                clipLimit=_clahe_clip_limit(),
+                tileGridSize=(tile, tile),
+            )
+            l_ch = clahe.apply(l_ch)
+            return cv2.cvtColor(cv2.merge((l_ch, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
+        except Exception:
+            return frame_bgr
+
     def _preprocess(self, frame_bgr: np.ndarray) -> np.ndarray:
         """Preprocess to model input. Letterbox (default) or stretch (baseline)."""
+        frame_bgr = self._enhance_low_light(frame_bgr)
         h, w = frame_bgr.shape[:2]
         size = self.input_size
         self._lb_src_w = max(1, w)
@@ -459,16 +519,18 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
-        conf = _person_confidence()
-        self.conf = conf
+        display_conf = _person_display_confidence()
+        hold_conf = _person_hold_confidence()
+        self.conf = display_conf
         hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
+        parse_min = min(display_conf, hold_conf)
         boxes = [
             b
-            for b in _nms(self._parse_outputs(outputs, score_min=conf), self.nms_iou)
-            if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
+            for b in _nms(self._parse_outputs(outputs, score_min=parse_min), self.nms_iou)
+            if _box_plausible(b) and float(b.get("score", 0.0)) >= display_conf
         ]
         now = time.monotonic()
         if boxes:
@@ -478,7 +540,7 @@ class HailoYolov8Detector:
             boxes = [
                 b
                 for b in self._hold_boxes
-                if _box_plausible(b) and float(b.get("score", 0.0)) >= conf
+                if _box_plausible(b) and float(b.get("score", 0.0)) >= hold_conf
             ]
         else:
             self._hold_boxes = []
