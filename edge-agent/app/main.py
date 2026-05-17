@@ -405,14 +405,14 @@ async def motion_clip_status():
 
 
 @app.post("/recordings/person-mock/trigger")
-def person_mock_trigger(body: Optional[dict[str, Any]] = None):
+async def person_mock_trigger(body: Optional[dict[str, Any]] = None):
     """Deprecated alias for controller person-detection clips in motion mode."""
-    return motion_clip_trigger(body)
+    return await motion_clip_trigger(body)
 
 
 @app.get("/recordings/person-mock/status")
-def person_mock_status():
-    return motion_clip_status()
+async def person_mock_status():
+    return await motion_clip_status()
 
 
 @app.get("/settings")
