@@ -12,6 +12,139 @@ import {
 import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
 
 const MAX_LIVE_TILES = 6;
+const MOBILE_BREAKPOINT_PX = 768;
+
+function useIsMobile(breakpoint = MOBILE_BREAKPOINT_PX) {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(`(max-width: ${breakpoint}px)`).matches;
+  });
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [breakpoint]);
+  return isMobile;
+}
+
+function canPlayNativeHls(video) {
+  if (!video) return false;
+  const types = ["application/vnd.apple.mpegurl", "application/x-mpegURL"];
+  return types.some((t) => {
+    const v = video.canPlayType(t);
+    return v === "probably" || v === "maybe";
+  });
+}
+
+function preferNativeHlsPlayback() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const ios =
+    /iPad|iPhone|iPod/i.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(ua);
+  const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
+  return ios || (android && narrow);
+}
+
+function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
+  if (containerW < 2 || containerH < 2 || videoW < 2 || videoH < 2) return null;
+  const scale = Math.min(containerW / videoW, containerH / videoH);
+  const drawW = videoW * scale;
+  const drawH = videoH * scale;
+  return {
+    containerW,
+    containerH,
+    offsetX: (containerW - drawW) / 2,
+    offsetY: (containerH - drawH) / 2,
+    drawW,
+    drawH,
+    videoW,
+    videoH,
+    scale,
+  };
+}
+
+function personDetections(faces) {
+  return (Array.isArray(faces) ? faces : []).filter(
+    (d) => String(d?.label || "").toLowerCase() === "person",
+  );
+}
+
+function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
+  const [layout, setLayout] = useState(null);
+  const people = personDetections(faces);
+
+  useEffect(() => {
+    const container = containerRef?.current;
+    const video = videoRef?.current;
+    if (!container) return undefined;
+
+    const measure = () => {
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const vw =
+        video && video.videoWidth > 0
+          ? video.videoWidth
+          : assumedAspect?.w ?? 16;
+      const vh =
+        video && video.videoHeight > 0
+          ? video.videoHeight
+          : assumedAspect?.h ?? 9;
+      setLayout(computeObjectContainLayout(cw, ch, vw, vh));
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    if (video) {
+      video.addEventListener("loadedmetadata", measure);
+      video.addEventListener("loadeddata", measure);
+    }
+    window.addEventListener("orientationchange", measure);
+    const tick = window.setInterval(measure, 250);
+    return () => {
+      ro.disconnect();
+      if (video) {
+        video.removeEventListener("loadedmetadata", measure);
+        video.removeEventListener("loadeddata", measure);
+      }
+      window.removeEventListener("orientationchange", measure);
+      window.clearInterval(tick);
+    };
+  }, [faces, videoRef, containerRef, assumedAspect?.w, assumedAspect?.h]);
+
+  if (!layout || people.length === 0) return null;
+
+  return (
+    <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden" aria-hidden>
+      {people.map((f, i) => {
+        const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
+        const y = layout.offsetY + Number(f.y) * layout.videoH * layout.scale;
+        const w = Math.max(2, Number(f.w) * layout.videoW * layout.scale);
+        const h = Math.max(2, Number(f.h) * layout.videoH * layout.scale);
+        const leftPct = (x / layout.containerW) * 100;
+        const topPct = (y / layout.containerH) * 100;
+        const wPct = (w / layout.containerW) * 100;
+        const hPct = (h / layout.containerH) * 100;
+        return (
+          <div
+            key={`${i}-${leftPct}-${topPct}`}
+            className="absolute box-border border-2 border-blue-400/95 rounded-sm shadow-[0_0_0_1px_rgba(0,0,0,0.35)]"
+            style={{
+              left: `${leftPct}%`,
+              top: `${topPct}%`,
+              width: `${wPct}%`,
+              height: `${hPct}%`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 function streamPathForCamera(cam) {
   if (cam.mediamtx_path && String(cam.mediamtx_path).trim()) {
@@ -82,16 +215,45 @@ function RecordingThumbnail({ src, className = "" }) {
   );
 }
 
-/** Bento grid cell placement for layout D (index 0 = hero). */
+/** Bento grid cell placement for layout D (index 0 = hero). Desktop only. */
 function bentoTileClass(index, total) {
-  if (total <= 1) return "col-span-3 row-span-2";
-  if (index === 0) return "col-start-1 row-start-1 row-span-2";
-  if (index === 1) return "col-start-2 row-start-1";
-  if (index === 2) return "col-start-3 row-start-1";
-  if (index === 3) return "col-start-2 row-start-2";
-  if (index === 4) return "col-start-3 row-start-2";
-  if (index === 5) return "col-span-3 row-start-3";
+  if (total <= 1) return "md:col-span-3 md:row-span-2";
+  if (index === 0) return "md:col-start-1 md:row-start-1 md:row-span-2";
+  if (index === 1) return "md:col-start-2 md:row-start-1";
+  if (index === 2) return "md:col-start-3 md:row-start-1";
+  if (index === 3) return "md:col-start-2 md:row-start-2";
+  if (index === 4) return "md:col-start-3 md:row-start-2";
+  if (index === 5) return "md:col-span-3 md:row-start-3";
   return "";
+}
+
+function MobileBottomNav({ tab, onTab, clipCount }) {
+  const tabs = [
+    { id: "live", label: "Live" },
+    { id: "cameras", label: "Cameras" },
+    { id: "clips", label: clipCount > 0 ? `Clips (${clipCount})` : "Clips" },
+  ];
+  return (
+    <nav
+      className="md:hidden shrink-0 border-t border-gray-800 bg-[#070c16] flex pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+      aria-label="Main navigation"
+    >
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => onTab(t.id)}
+          className={`flex-1 py-3 text-xs font-medium transition-colors ${
+            tab === t.id
+              ? "text-indigo-300 border-t-2 border-indigo-500 bg-indigo-500/10"
+              : "text-gray-400 border-t-2 border-transparent"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </nav>
+  );
 }
 
 function cameraIdsMatch(a, b) {
@@ -139,15 +301,22 @@ function RecordingsTimeline({
   hasCameras,
   onRefresh,
   onDelete,
+  variant = "dock",
+  className = "",
 }) {
   const [playing, setPlaying] = useState(null);
+  const isPage = variant === "page";
 
   const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
 
   return (
     <>
       <section
-        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex flex-col max-h-[200px] min-h-[120px]"
+        className={`bg-[#070c16] flex flex-col ${
+          isPage
+            ? "flex-1 min-h-0 border-t border-gray-800"
+            : "shrink-0 border-t border-gray-800 max-h-[200px] min-h-[120px]"
+        } ${className}`}
         aria-label="Recordings timeline"
       >
         <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
@@ -166,7 +335,11 @@ function RecordingsTimeline({
             {loading ? "Loading…" : "Refresh"}
           </button>
         </div>
-        <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-3 py-2">
+        <div
+          className={`flex-1 min-h-0 px-3 py-2 ${
+            isPage ? "overflow-y-auto overflow-x-hidden" : "overflow-x-auto overflow-y-hidden"
+          }`}
+        >
           {!hasCameras ? (
             <p className="text-xs text-gray-500 py-2">Add a camera to see recordings.</p>
           ) : loading && recordings.length === 0 ? (
@@ -174,7 +347,7 @@ function RecordingsTimeline({
           ) : recordings.length === 0 ? (
             <p className="text-xs text-gray-500 py-2">No clips for this camera yet.</p>
           ) : (
-            <ul className="flex gap-3 pb-1">
+            <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
               {recordings.map((r) => {
                 const url = recordingFileUrl(r.camId, r.name);
                 const key = recordingKey(r);
@@ -185,7 +358,9 @@ function RecordingsTimeline({
                 return (
                   <li
                     key={key}
-                    className={`shrink-0 w-[10.5rem] rounded-lg border p-1.5 flex flex-col gap-1 ${
+                    className={`rounded-lg border p-1.5 flex flex-col gap-1 ${
+                      isPage ? "w-full max-w-xl" : "shrink-0 w-[10.5rem]"
+                    } ${
                       isPlaying
                         ? "border-blue-500/70 bg-[#111827]"
                         : "border-gray-800 bg-[#111827]/60"
@@ -332,6 +507,7 @@ function LiveTile({
   detectionWsOpen,
   overlayDelayMs,
   layout = "default",
+  isMobile = false,
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
@@ -438,24 +614,56 @@ function LiveTile({
     const video = videoRef.current;
     if (!video) return undefined;
     let hls;
-    const onVideoError = () => {
+    let cancelled = false;
+    let triedDirectHls = false;
+
+    const failToIframe = () => {
+      if (cancelled) return;
       setStreamError("");
       setUseIframeFallback(true);
+      fetch(`${API}/cameras/${cam.id}/stream_health?probe_rtsp=false`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((h) => {
+          if (!h || cancelled) return;
+          if (Array.isArray(h.summary) && h.summary.length) {
+            setEdgeHint(h.summary.join(" "));
+          }
+        })
+        .catch(() => {});
     };
+
+    const onVideoError = () => {
+      if (cancelled) return;
+      if (!triedDirectHls && hlsUrl === hlsProxyUrl && hlsDirectUrl !== hlsProxyUrl) {
+        triedDirectHls = true;
+        setHlsUrl(hlsDirectUrl);
+        return;
+      }
+      failToIframe();
+    };
+
     const onPlaying = () => {
       setStreamError("");
       setEdgeHint("");
     };
+
     video.addEventListener("error", onVideoError);
     video.addEventListener("playing", onPlaying);
-    if (Hls.isSupported()) {
-      let triedDirectHls = false;
-      // Use Count *or* Duration live-sync keys, not both (hls.js rejects mixed config).
-      // MediaMTX serves mpegts HLS; overlay delay syncs boxes to playback.
+
+    const useNative = preferNativeHlsPlayback() && canPlayNativeHls(video);
+
+    if (useNative) {
+      hlsRef.current = null;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "");
+      video.setAttribute("webkit-playsinline", "");
+      video.src = hlsUrl;
+      video.load();
+    } else if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: false,
         maxLiveSyncPlaybackRate: 1.5,
-        enableWorker: true,
+        enableWorker: !preferNativeHlsPlayback(),
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 6,
         fragLoadingTimeOut: 20000,
@@ -465,7 +673,7 @@ function LiveTile({
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal) return;
+        if (!data.fatal || cancelled) return;
         if (
           data.type === Hls.ErrorTypes.NETWORK_ERROR &&
           !triedDirectHls &&
@@ -474,32 +682,22 @@ function LiveTile({
         ) {
           triedDirectHls = true;
           setHlsUrl(hlsDirectUrl);
-          hls.loadSource(hlsDirectUrl);
           return;
         }
         hls?.destroy();
-        setStreamError("");
-        setUseIframeFallback(true);
-        fetch(`${API}/cameras/${cam.id}/stream_health?probe_rtsp=false`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((h) => {
-            if (!h) return;
-            if (Array.isArray(h.summary) && h.summary.length) {
-              setEdgeHint(h.summary.join(" "));
-              return;
-            }
-            setEdgeHint("");
-          })
-          .catch(() => {});
+        failToIframe();
       });
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    } else if (canPlayNativeHls(video)) {
+      hlsRef.current = null;
       video.src = hlsUrl;
     } else {
       setStreamError("HLS not supported in this browser — using WebRTC reader.");
       setUseIframeFallback(true);
       return undefined;
     }
+
     return () => {
+      cancelled = true;
       video.removeEventListener("error", onVideoError);
       video.removeEventListener("playing", onPlaying);
       hlsRef.current = null;
@@ -507,20 +705,21 @@ function LiveTile({
       video.removeAttribute("src");
       video.load();
     };
-  }, [cam.id, cam.url, hlsUrl, useIframeFallback]);
+  }, [cam.id, cam.url, hlsUrl, hlsProxyUrl, hlsDirectUrl, useIframeFallback]);
 
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    const container = wrapRef.current;
     if (!video || !canvas || useIframeFallback) return undefined;
     const ctx = canvas.getContext("2d");
     if (!ctx) return undefined;
 
     const paint = () => {
-      const cw = video.clientWidth;
-      const ch = video.clientHeight;
+      const cw = container?.clientWidth || video.clientWidth;
+      const ch = container?.clientHeight || video.clientHeight;
       if (cw < 2 || ch < 2) return;
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
       canvas.width = Math.round(cw * dpr);
       canvas.height = Math.round(ch * dpr);
       canvas.style.width = `${cw}px`;
@@ -530,22 +729,19 @@ function LiveTile({
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) return;
-      const scaleContain = Math.min(cw / vw, ch / vh);
-      const dw = vw * scaleContain;
-      const dh = vh * scaleContain;
-      const ox = (cw - dw) / 2;
-      const oy = (ch - dh) / 2;
-      ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
-      ctx.lineWidth = 2;
-      ctx.font = "11px ui-monospace, system-ui, sans-serif";
-      const faceList = (Array.isArray(drawFaces) ? drawFaces : []).filter(
-        (d) => String(d?.label || "").toLowerCase() === "person",
-      );
+      const layout = computeObjectContainLayout(cw, ch, vw, vh);
+      if (!layout) return;
+      const lineW = isMobile ? 3 : 2;
+      ctx.lineWidth = lineW;
+      ctx.font = isMobile
+        ? "12px ui-monospace, system-ui, sans-serif"
+        : "11px ui-monospace, system-ui, sans-serif";
+      const faceList = personDetections(drawFaces);
       for (const f of faceList) {
-        const x = ox + Number(f.x) * vw * scaleContain;
-        const y = oy + Number(f.y) * vh * scaleContain;
-        const w = Number(f.w) * vw * scaleContain;
-        const h = Number(f.h) * vh * scaleContain;
+        const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
+        const y = layout.offsetY + Number(f.y) * layout.videoH * layout.scale;
+        const w = Number(f.w) * layout.videoW * layout.scale;
+        const h = Number(f.h) * layout.videoH * layout.scale;
         ctx.strokeStyle = "rgba(59, 130, 246, 0.95)";
         ctx.strokeRect(x, y, w, h);
         const label = formatDetectionLabel(f);
@@ -555,7 +751,7 @@ function LiveTile({
         const textY = Math.max(12, y - 4);
         const metrics = ctx.measureText(label);
         const boxW = metrics.width + padX * 2;
-        const boxH = 14;
+        const boxH = isMobile ? 16 : 14;
         const labelX = Math.min(Math.max(0, x), cw - boxW);
         const labelTop = Math.max(0, textY - boxH + 2);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
@@ -566,18 +762,25 @@ function LiveTile({
     };
 
     paint();
+    video.addEventListener("loadedmetadata", paint);
     video.addEventListener("loadeddata", paint);
+    video.addEventListener("playing", paint);
     video.addEventListener("timeupdate", paint);
     const ro = new ResizeObserver(paint);
+    if (container) ro.observe(container);
     ro.observe(video);
-    const overlayTick = setInterval(paint, 200);
+    window.addEventListener("orientationchange", paint);
+    const overlayTick = window.setInterval(paint, 150);
     return () => {
+      video.removeEventListener("loadedmetadata", paint);
       video.removeEventListener("loadeddata", paint);
+      video.removeEventListener("playing", paint);
       video.removeEventListener("timeupdate", paint);
       ro.disconnect();
-      clearInterval(overlayTick);
+      window.removeEventListener("orientationchange", paint);
+      window.clearInterval(overlayTick);
     };
-  }, [drawFaces, useIframeFallback, cam.id]);
+  }, [drawFaces, useIframeFallback, cam.id, isMobile]);
 
   const isHero = layout === "hero";
 
@@ -596,7 +799,7 @@ function LiveTile({
         </div>
       </div>
       <p
-        className={`text-[10px] mb-1 font-mono leading-snug ${
+        className={`hidden sm:block text-[10px] mb-1 font-mono leading-snug ${
           personDebugPositive
             ? "text-blue-300 font-semibold"
             : personDebugLine.includes("—") || personDebugLine.includes("waiting") || personDebugLine.includes("disconnected")
@@ -607,6 +810,11 @@ function LiveTile({
       >
         {personDebugLine}
       </p>
+      {isMobile && persons > 0 ? (
+        <p className="sm:hidden text-[10px] mb-1 text-blue-300 font-semibold">
+          Person detected ({persons})
+        </p>
+      ) : null}
       {edgeHint && (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
@@ -621,7 +829,13 @@ function LiveTile({
       <div
         ref={wrapRef}
         className={`relative flex-1 rounded-lg bg-black overflow-hidden touch-none ${
-          isHero ? "min-h-[200px] max-h-none" : "min-h-[100px] max-h-[200px]"
+          isHero
+            ? isMobile
+              ? "min-h-[42dvh] max-h-[68dvh]"
+              : "min-h-[200px] max-h-none"
+            : isMobile
+              ? "min-h-[28dvh] max-h-[40dvh]"
+              : "min-h-[100px] max-h-[200px]"
         }`}
       >
         {recording ? (
@@ -631,9 +845,9 @@ function LiveTile({
             aria-label="Recording"
           />
         ) : null}
-        {useIframeFallback && countPersonDetections(rawFaces) > 0 ? (
-          <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-amber-900/90 px-2 py-1 text-[10px] text-amber-100">
-            Use HLS (LIVE badge) to see detection boxes on video.
+        {useIframeFallback && personDetections(rawFaces).length > 0 ? (
+          <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-blue-900/85 px-2 py-1 text-[10px] text-blue-100">
+            Person detected — approximate boxes (WebRTC mode).
           </div>
         ) : null}
         <div
@@ -649,11 +863,18 @@ function LiveTile({
                 allow="autoplay; fullscreen"
                 sandbox="allow-scripts allow-same-origin allow-autoplay allow-fullscreen"
               />
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
-                {edgeHint
-                  ? "WebRTC reader — see message above."
-                  : "WebRTC reader (no face overlay). HLS unavailable for detection boxes."}
-              </div>
+              <PersonBoxesOverlay
+                faces={drawFaces}
+                containerRef={wrapRef}
+                assumedAspect={{ w: 16, h: 9 }}
+              />
+              {!personDetections(drawFaces).length ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
+                  {edgeHint
+                    ? "WebRTC reader — see message above."
+                    : "WebRTC reader. HLS unavailable for detection overlay."}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="relative w-full h-full min-h-[140px] bg-black">
@@ -718,7 +939,7 @@ function LiveTile({
         </div>
       </div>
       <p
-        className="text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
+        className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
         title={useIframeFallback ? "WebRTC reader (no overlay)" : "HLS playlist for video + face overlay"}
       >
         {useIframeFallback ? streamUrl : hlsUrl}
@@ -755,6 +976,8 @@ export default function App() {
   const [detectionsById, setDetectionsById] = useState({});
   const [detectionWsOpen, setDetectionWsOpen] = useState(false);
   const [detectionSystem, setDetectionSystem] = useState(null);
+  const isMobile = useIsMobile();
+  const [mobileTab, setMobileTab] = useState("live");
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -1226,10 +1449,47 @@ export default function App() {
   const recordingsForActiveCamera = isSetCameraId(effectiveActiveCameraId)
     ? allRecordings.filter((r) => cameraIdsMatch(r.camId, effectiveActiveCameraId))
     : [];
+  const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
+  const showLivePanel = !isMobile || mobileTab === "live";
+  const showCamerasPanel = isMobile && mobileTab === "cameras";
+  const showClipsPanel = isMobile && mobileTab === "clips";
+
+  const renderLiveTile = (c, layout) => (
+    <LiveTile
+      cam={c}
+      layout={layout}
+      isMobile={isMobile}
+      recording={
+        (c.settings?.recording_mode || "motion") === "off"
+          ? manualRecordingById[c.id] === true
+          : recordingActiveForCam(recordingById, c.id)
+      }
+      recordingMode={c.settings?.recording_mode || "motion"}
+      manualRecording={manualRecordingById[c.id] === true}
+      onManualToggle={() => toggleManualRecording(c)}
+      faces={detectionsById[c.id]?.faces}
+      personCount={detectionsById[c.id]?.personCount ?? 0}
+      detectionInfo={detectionsById[c.id]}
+      detectionWsOpen={detectionWsOpen}
+      overlayDelayMs={
+        typeof detectionSystem?.overlay_delay_ms === "number"
+          ? detectionSystem.overlay_delay_ms
+          : undefined
+      }
+    />
+  );
 
   return (
-    <div className="flex h-screen bg-[#0b1220] text-white">
-      <div className="w-56 lg:w-60 bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto shrink-0 border-r border-gray-800">
+    <div className="flex flex-col md:flex-row h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
+      <aside
+        className={`bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto border-r border-gray-800 min-h-0 ${
+          isMobile
+            ? showCamerasPanel
+              ? "flex flex-1 w-full"
+              : "hidden"
+            : "hidden md:flex w-56 lg:w-60 shrink-0"
+        }`}
+      >
         <h1 className="text-lg font-bold">Vigilance</h1>
         <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
 
@@ -1394,10 +1654,12 @@ export default function App() {
             </div>
           ))}
         </div>
-      </div>
+      </aside>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
+        {showLivePanel ? (
+        <>
+        <div className="flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
           <span className="text-xs font-medium text-gray-200">
             {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
           </span>
@@ -1439,16 +1701,42 @@ export default function App() {
           </span>
         </div>
 
-        <div className="flex-1 p-3 min-h-0 overflow-hidden flex flex-col">
+        <div className="flex-1 p-2 md:p-3 min-h-0 overflow-hidden flex flex-col">
           {liveCams.length === 0 ? (
             <p className="text-gray-500 text-sm p-4">
               No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
               backend restarts until removed.
             </p>
+          ) : isMobile ? (
+            <div className="flex flex-col flex-1 min-h-0 gap-2">
+              {liveCams.length > 1 ? (
+                <div className="flex gap-2 overflow-x-auto pb-1 shrink-0">
+                  {liveCams.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setActiveCameraId(c.id)}
+                      className={`shrink-0 px-3 py-1.5 rounded-full text-xs border ${
+                        cameraIdsMatch(activeCameraId, c.id)
+                          ? "border-indigo-500 bg-indigo-500/20 text-indigo-100"
+                          : "border-gray-700 text-gray-300"
+                      }`}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {mobileLiveCam ? (
+                <div className="flex-1 min-h-0 rounded-xl ring-1 ring-gray-800">
+                  {renderLiveTile(mobileLiveCam, "hero")}
+                </div>
+              ) : null}
+            </div>
           ) : (
             <div
-              className={`grid flex-1 min-h-0 gap-3 grid-cols-3 ${
-                liveCams.length > 4 ? "grid-rows-3" : "grid-rows-2"
+              className={`grid flex-1 min-h-0 gap-3 grid-cols-1 md:grid-cols-3 ${
+                liveCams.length > 4 ? "md:grid-rows-3" : "md:grid-rows-2"
               }`}
             >
               {liveCams.map((c, i) => (
@@ -1471,35 +1759,22 @@ export default function App() {
                       ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-[#0b1220]"
                       : "hover:ring-1 hover:ring-gray-600"
                   }`}
-                  title={cameraIdsMatch(activeCameraId, c.id) ? "Active camera (clips below)" : "Click to activate — show this camera's clips"}
+                  title={
+                    cameraIdsMatch(activeCameraId, c.id)
+                      ? "Active camera (clips below)"
+                      : "Click to activate — show this camera's clips"
+                  }
                 >
-                  <LiveTile
-                    cam={c}
-                    layout={i === 0 ? "hero" : "default"}
-                    recording={
-                      (c.settings?.recording_mode || "motion") === "off"
-                        ? manualRecordingById[c.id] === true
-                        : recordingActiveForCam(recordingById, c.id)
-                    }
-                    recordingMode={c.settings?.recording_mode || "motion"}
-                    manualRecording={manualRecordingById[c.id] === true}
-                    onManualToggle={() => toggleManualRecording(c)}
-                    faces={detectionsById[c.id]?.faces}
-                    personCount={detectionsById[c.id]?.personCount ?? 0}
-                    detectionInfo={detectionsById[c.id]}
-                    detectionWsOpen={detectionWsOpen}
-                    overlayDelayMs={
-                      typeof detectionSystem?.overlay_delay_ms === "number"
-                        ? detectionSystem.overlay_delay_ms
-                        : undefined
-                    }
-                  />
+                  {renderLiveTile(c, i === 0 ? "hero" : "default")}
                 </div>
               ))}
             </div>
           )}
         </div>
+        </>
+        ) : null}
 
+        {(!isMobile || showClipsPanel) && (
         <RecordingsTimeline
           recordings={recordingsForActiveCamera}
           activeCameraName={activeCamera?.name ?? ""}
@@ -1507,8 +1782,19 @@ export default function App() {
           hasCameras={cams.length > 0}
           onRefresh={() => loadAllRecordings(cams)}
           onDelete={deleteRecordingFor}
+          variant={isMobile ? "page" : "dock"}
         />
+        )}
+
+        {isMobile ? (
+          <MobileBottomNav
+            tab={mobileTab}
+            onTab={setMobileTab}
+            clipCount={recordingsForActiveCamera.length}
+          />
+        ) : null}
       </div>
+    </div>
 
       {settingsCam && (
         <div
