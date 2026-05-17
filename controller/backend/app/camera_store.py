@@ -226,7 +226,10 @@ def update_camera(cam_id: int, patch: dict[str, Any]) -> dict[str, Any]:
         if not c:
             raise KeyError("camera not found")
         if "name" in patch and patch["name"] is not None:
-            c["name"] = str(patch["name"])
+            name = str(patch["name"]).strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            c["name"] = name
         if "location" in patch and patch["location"] is not None:
             c["location"] = str(patch["location"])
         if "url" in patch and patch["url"] is not None:

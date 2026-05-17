@@ -1734,7 +1734,11 @@ export default function App() {
     quality: "medium",
     flip_180: false,
   });
-  const [connectionForm, setConnectionForm] = useState({ url: "", edge_base_url: "" });
+  const [connectionForm, setConnectionForm] = useState({
+    name: "",
+    url: "",
+    edge_base_url: "",
+  });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
@@ -2115,6 +2119,7 @@ export default function App() {
   const openSettings = async (cam) => {
     setSettingsCam(cam);
     setConnectionForm({
+      name: cam.name || "",
       url: cam.url || "",
       edge_base_url: cam.edge_base_url || "",
     });
@@ -2153,8 +2158,16 @@ export default function App() {
     setSaving(true);
     try {
       const connBody = {};
+      const nameTrim = String(connectionForm.name || "").trim();
       const urlTrim = String(connectionForm.url || "").trim();
       const edgeTrim = String(connectionForm.edge_base_url || "").trim();
+      if (!nameTrim) {
+        alert("Camera name cannot be empty.");
+        return;
+      }
+      if (nameTrim !== (settingsCam.name || "").trim()) {
+        connBody.name = nameTrim;
+      }
       if (urlTrim && urlTrim !== (settingsCam.url || "")) {
         connBody.url = urlTrim;
       }
@@ -2170,7 +2183,7 @@ export default function App() {
         });
         if (!connRes.ok) {
           const err = await connRes.json().catch(() => ({}));
-          alert(err.detail || "Failed to update stream URL");
+          alert(err.detail || "Failed to update camera");
           return;
         }
       }
@@ -2753,8 +2766,8 @@ export default function App() {
           <div className="bg-[#111827] rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 shadow-xl border border-gray-800">
             <div className="flex justify-between items-start mb-4">
               <div>
-                <h2 className="text-lg font-semibold">{settingsCam.name}</h2>
-                <p className="text-xs text-gray-400">{settingsCam.location}</p>
+                <h2 className="text-lg font-semibold">Camera settings</h2>
+                <p className="text-xs text-gray-400">{settingsCam.location || "No location"}</p>
                 {settingsCam.edge_base_url ? (
                   <p className="text-[10px] text-amber-400/90 mt-1">
                     Edge {settingsCam.edge_base_url} · MQTT id{" "}
@@ -2776,6 +2789,20 @@ export default function App() {
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Camera name</label>
+                <input
+                  type="text"
+                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                  value={connectionForm.name}
+                  onChange={(e) =>
+                    setConnectionForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  placeholder="e.g. Front door"
+                  maxLength={120}
+                />
+              </div>
+
               <div>
                 <label className="block text-xs text-gray-400 mb-1">RTSP URL (MediaMTX pull source)</label>
                 <input

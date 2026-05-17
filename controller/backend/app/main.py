@@ -339,7 +339,7 @@ def get_selected_camera_endpoint():
 
 @app.patch("/cameras/{cam_id}")
 def patch_camera(cam_id: int, body: CameraPatch):
-    """Update RTSP URL / edge HTTP base (e.g. when a Pi 4 gets a new LAN IP)."""
+    """Update name, RTSP URL, or edge HTTP base (e.g. when a Pi 4 gets a new LAN IP)."""
     patch = body.model_dump(exclude_unset=True)
     if not patch:
         c = camera_store.get_camera(cam_id)
