@@ -67,6 +67,37 @@ else
   echo "Backend not reachable on :8000 (start uvicorn to test live_detection status)"
 fi
 
+if [[ "$HAILO_PY" == ok ]]; then
+  echo ""
+  echo "=== Device.scan + VDevice open (Python) ==="
+  if ! $PY - <<'PY' 2>&1; then
+import os
+from hailo_platform import ConfigureParams, Device, HEF, HailoStreamInterface, VDevice
+
+ids = Device.scan()
+print("Device.scan():", ids)
+if not ids:
+    override = os.environ.get("SMARTCAM_HAILO_DEVICE_ID", "").strip()
+    if override:
+        ids = [override]
+        print("Using SMARTCAM_HAILO_DEVICE_ID:", ids)
+    else:
+        raise SystemExit("No devices from Device.scan(); set SMARTCAM_HAILO_DEVICE_ID")
+hef_path = os.environ.get("SMARTCAM_HAILO_HEF_PATH", "models/yolov8n.hef")
+hef = HEF(hef_path)
+vd = VDevice(device_ids=ids)
+cfg = ConfigureParams.create_from_hef(hef, HailoStreamInterface.PCIe)
+ng = vd.configure(hef, cfg)
+print("VDevice.configure OK, network groups:", len(ng))
+vd.release()
+print("Hailo Python path OK")
+PY
+    echo "FAIL: Python could not open VDevice (see error above)."
+    echo "Try: export SMARTCAM_HAILO_DEVICE_ID=0001:01:00.0  # use id from hailortcli identify"
+    exit 1
+  fi
+fi
+
 if [[ "$HAILO_PY" == ok ]] && [[ -f "$HEF" ]]; then
   echo ""
   echo "All checks passed. Restart uvicorn and refresh the UI."

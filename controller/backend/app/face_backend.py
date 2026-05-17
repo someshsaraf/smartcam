@@ -251,12 +251,24 @@ def inference_debug_status() -> dict[str, Any]:
         return out
     out["person_detection_source"] = "hailo_yolov8n"
     try:
-        from .hailo_yolov8_backend import get_detector
+        from .hailo_yolov8_backend import get_detector, reset_detector_cache
 
         det = get_detector()
+        if det.error and (
+            "HAILO_OUT_OF_PHYSICAL_DEVICES" in str(det.error)
+            or "error: 74" in str(det.error)
+        ):
+            reset_detector_cache()
+            det = get_detector()
         out["hailo_error"] = det.error
         out["hailo_ready"] = det.error is None
         out["hef_path"] = det.hef_path
+        try:
+            from hailo_platform import Device  # type: ignore
+
+            out["hailo_device_ids"] = Device.scan()
+        except Exception:
+            out["hailo_device_ids"] = []
     except Exception as e:
         out["hailo_error"] = str(e)
     return out

@@ -77,6 +77,26 @@ def _iou(a: dict[str, Any], b: dict[str, Any]) -> float:
     return inter / denom if denom > 0 else 0.0
 
 
+def _scan_hailo_device_ids() -> list[str]:
+    """Resolve PCIe device id(s). Empty VDevice(device_ids) causes error 74 on many systems."""
+    override = os.environ.get("SMARTCAM_HAILO_DEVICE_ID", "").strip()
+    if override:
+        return [override]
+    from hailo_platform import Device  # type: ignore
+
+    ids = Device.scan()
+    return list(ids) if ids else []
+
+
+def _release_vdevice(target: Any) -> None:
+    if target is None:
+        return
+    try:
+        target.release()
+    except Exception:
+        pass
+
+
 def _nms(boxes: List[dict[str, Any]], iou_thr: float) -> List[dict[str, Any]]:
     boxes = sorted(boxes, key=lambda d: float(d.get("score", 0.0)), reverse=True)
     kept: List[dict[str, Any]] = []
@@ -142,14 +162,28 @@ class HailoYolov8Detector:
                 logger.error(self._error)
                 return False
 
+            target: Any = None
             try:
                 self._hef = HEF(self.hef_path)
-                self._target = VDevice()
+                device_ids = _scan_hailo_device_ids()
+                if not device_ids:
+                    self._error = (
+                        "HailoRT Device.scan() found no devices. If hailortcli works, set "
+                        "SMARTCAM_HAILO_DEVICE_ID=0001:01:00.0 (from hailortcli identify) and "
+                        "restart uvicorn."
+                    )
+                    logger.error(self._error)
+                    return False
+                logger.info("Opening Hailo VDevice device_ids=%s hef=%s", device_ids, self.hef_path)
+                target = VDevice(device_ids=device_ids)
+                self._target = target
                 configure_params = ConfigureParams.create_from_hef(
                     hef=self._hef,
                     interface=HailoStreamInterface.PCIe,
                 )
-                network_groups = self._target.configure(self._hef, configure_params)
+                network_groups = target.configure(self._hef, configure_params)
+                if not network_groups:
+                    raise RuntimeError("Hailo configure returned no network groups")
                 self._network_group = network_groups[0]
                 self._input_vstreams_params = InputVStreamParams.make(self._network_group)
                 self._output_vstreams_params = OutputVStreamParams.make(self._network_group)
@@ -159,10 +193,27 @@ class HailoYolov8Detector:
                 self._input_name = in_infos[0].name
                 self._InferVStreams = InferVStreams
                 self._ready = True
-                logger.info("Hailo YOLOv8 backend ready hef=%s input=%s", self.hef_path, self._input_name)
+                self._error = None
+                logger.info(
+                    "Hailo YOLOv8 ready devices=%s hef=%s input=%s",
+                    device_ids,
+                    self.hef_path,
+                    self._input_name,
+                )
                 return True
             except Exception as e:
-                self._error = f"Failed to initialize Hailo backend: {e}"
+                _release_vdevice(target)
+                self._target = None
+                self._hef = None
+                err = str(e)
+                if "74" in err or "HAILO_OUT_OF_PHYSICAL_DEVICES" in err:
+                    self._error = (
+                        f"Failed to open Hailo device: {e}. "
+                        "Stop other Hailo apps, run: hailortcli fw-control identify, "
+                        "then set SMARTCAM_HAILO_DEVICE_ID to that PCIe id (e.g. 0001:01:00.0)."
+                    )
+                else:
+                    self._error = f"Failed to initialize Hailo backend: {e}"
                 logger.exception(self._error)
                 return False
 
@@ -275,6 +326,17 @@ class HailoYolov8Detector:
 
 _DETECTOR: Optional[HailoYolov8Detector] = None
 _DETECTOR_LOCK = threading.Lock()
+
+
+def reset_detector_cache() -> None:
+    """Release Hailo handles so the next request can re-open the device (e.g. after error 74)."""
+    global _DETECTOR
+    with _DETECTOR_LOCK:
+        if _DETECTOR is not None:
+            _release_vdevice(_DETECTOR._target)
+            _DETECTOR._target = None
+            _DETECTOR._ready = False
+        _DETECTOR = None
 
 
 def get_detector() -> HailoYolov8Detector:
