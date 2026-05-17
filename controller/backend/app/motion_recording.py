@@ -22,7 +22,7 @@ _MOTION_STATUS_TIMEOUT = httpx.Timeout(2.0, read=4.0)
 _STATUS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _STATUS_CACHE_TTL_SEC = 45.0
 
-_ACTIVE_PHASES = frozenset({"starting", "post_roll", "materializing"})
+_CAPTURE_PHASES = frozenset({"starting", "post_roll"})
 
 
 def motion_status_idle() -> dict[str, Any]:
@@ -70,13 +70,13 @@ def fetch_edge_motion_status(edge: str, cam_id: int) -> dict[str, Any]:
 
 
 def motion_recording_in_progress(status: dict[str, Any]) -> bool:
-    """True while edge is capturing or materializing a motion clip."""
+    """True while edge is actively capturing RTSP for a motion clip (not while saving only)."""
     if not isinstance(status, dict):
         return False
-    phase = str(status.get("phase") or "idle")
-    if phase in _ACTIVE_PHASES:
+    if bool(status.get("capture_active")):
         return True
-    return bool(status.get("active"))
+    phase = str(status.get("phase") or "idle")
+    return phase in _CAPTURE_PHASES
 
 
 _last_trigger_by_cam: dict[int, float] = {}
@@ -204,6 +204,11 @@ def handle_person_detected(
         status = fetch_edge_motion_status(edge, cam_id)
 
         if motion_recording_in_progress(status):
+            logger.debug(
+                "motion clip skipped cam_id=%s (capture in progress phase=%s)",
+                cam_id,
+                status.get("phase"),
+            )
             return
 
         now = time.time()
@@ -250,7 +255,7 @@ def handle_person_detected(
                 st.get("recording_id"),
             )
         else:
-            logger.debug(
+            logger.info(
                 "motion clip declined cam_id=%s reason=%s",
                 cam_id,
                 result.get("reason"),

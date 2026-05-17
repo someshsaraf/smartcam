@@ -1282,7 +1282,18 @@ function formatPersonDebugLine(info, wsOpen, system) {
   const hailoErr = info.hailoError || system?.hailo_error || null;
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) return `Person test: YES — ${n} person(s) (≥90%)`;
+  if (n > 0) {
+    const streak = typeof info.personTriggerStreak === "number" ? info.personTriggerStreak : 0;
+    const need =
+      typeof info.personTriggerMinFrames === "number" ? info.personTriggerMinFrames : 3;
+    if (info.personRecordEligible === false) {
+      return `Person test: YES — ${n} on screen (below record threshold)`;
+    }
+    if (streak >= need) {
+      return `Person test: YES — ${n} person(s) · triggering clip`;
+    }
+    return `Person test: YES — ${n} person(s) · arming ${streak}/${need}`;
+  }
   if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
@@ -2097,6 +2108,7 @@ export default function App() {
                 ? msg.person_count
                 : countPersonDetections(faces);
             const personDetected = Boolean(msg.person_detected) || personCount > 0;
+            const recordEligible = Boolean(msg.person_record_eligible);
             setDetectionsById((prev) => ({
               ...prev,
               [id]: {
@@ -2104,6 +2116,15 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected,
+                personRecordEligible: recordEligible,
+                personTriggerStreak:
+                  typeof msg.person_trigger_streak === "number"
+                    ? msg.person_trigger_streak
+                    : 0,
+                personTriggerMinFrames:
+                  typeof msg.person_trigger_min_frames === "number"
+                    ? msg.person_trigger_min_frames
+                    : 3,
                 faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
@@ -2434,7 +2455,8 @@ export default function App() {
       recording={
         (c.settings?.recording_mode || "motion") === "off"
           ? manualRecordingById[c.id] === true
-          : recordingActiveForCam(recordingById, c.id)
+          : recordingActiveForCam(recordingById, c.id) ||
+            motionClipIsActive(motionClipById[c.id])
       }
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}

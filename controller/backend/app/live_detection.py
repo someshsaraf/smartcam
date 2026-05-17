@@ -314,6 +314,11 @@ class _CameraWorker(threading.Thread):
             meta = inference_debug_status()
             last_send = now
             person_detected = len(people) > 0
+            record_eligible = _people_eligible_for_recording(people)
+            if record_eligible:
+                self._person_streak += 1
+            else:
+                self._person_streak = 0
             self._hub.broadcast_json(
                 {
                     "type": "detections",
@@ -323,24 +328,26 @@ class _CameraWorker(threading.Thread):
                     "face_count": len(faces),
                     "person_count": len(people),
                     "person_detected": person_detected,
+                    "person_record_eligible": record_eligible,
+                    "person_trigger_streak": self._person_streak,
+                    "person_trigger_min_frames": self._person_trigger_min_frames,
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
                     "person_detection_source": meta.get("person_detection_source"),
                 }
             )
-            if _people_eligible_for_recording(people):
-                self._person_streak += 1
-                if self._person_streak >= self._person_trigger_min_frames:
-                    handle_person_detected(
-                        cid,
-                        tags=["person"],
-                        person_count=len(people),
-                        person_detected_at=time.time(),
-                        detection_frame=infer_frame,
-                    )
-                    self._person_streak = 0
-            else:
+            if (
+                record_eligible
+                and self._person_streak >= self._person_trigger_min_frames
+            ):
+                handle_person_detected(
+                    cid,
+                    tags=["person"],
+                    person_count=len(people),
+                    person_detected_at=time.time(),
+                    detection_frame=infer_frame,
+                )
                 self._person_streak = 0
             self._prev_person_detected = person_detected
 
