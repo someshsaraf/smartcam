@@ -1618,11 +1618,6 @@ function LiveTile({
             aria-label="Recording"
           />
         ) : null}
-        {useWebRtc && personDetections(rawFaces).length > 0 ? (
-          <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-blue-900/85 px-2 py-1 text-[10px] text-blue-100">
-            Person detected — recording when mode is Motion.
-          </div>
-        ) : null}
         <div
           className="w-full h-full origin-center transition-transform duration-75"
           style={{ transform: `scale(${scale})` }}
@@ -1641,11 +1636,9 @@ function LiveTile({
                 containerRef={wrapRef}
                 assumedAspect={{ w: 16, h: 9 }}
               />
-              {!personDetections(drawFaces).length ? (
+              {edgeHint && !personDetections(drawFaces).length ? (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
-                  {edgeHint
-                    ? "WebRTC reader — see message above."
-                    : "WebRTC live view (low latency)."}
+                  WebRTC reader — see message above.
                 </div>
               ) : null}
             </div>
