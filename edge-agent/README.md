@@ -39,6 +39,8 @@ Then deploy or commit the updated files under `edge-agent/shared/`.
 
 ## Installation
 
+You can run **`../start.sh edge --install`** from the repo root to create a venv, install Python deps, and fetch SSD models in one go. See [Quick start](#quick-start-recommended) under Execution.
+
 ```bash
 cd /path/to/edge-agent
 ```
@@ -62,6 +64,26 @@ pip install -r requirements.txt
 Edit **[`.env`](.env)** for your LAN IPs and camera id. Variables load automatically on API start ([`app/env_loader.py`](app/env_loader.py)); shell exports override `.env`.
 
 ## Execution
+
+### Quick start (recommended)
+
+From the **repository root** on the Pi 4, one script installs (optional) and starts the edge API. Edit **[`.env`](.env)** for your LAN IPs and camera id first.
+
+```bash
+cd /path/to/smartcam
+
+# First time (venv, pip, SSD models; Pi-camera hosts may install local MediaMTX):
+./start.sh edge --install
+
+# Every run (uvicorn on SURVEILLANCE_EDGE_HTTP_PORT, default 8080); Ctrl+C to stop:
+./start.sh edge
+```
+
+Aliases: **`edge-agent`**, **`pi4`**. Optional env override: **`SMARTCAM_EDGE_PORT`** (default **8080**; the script also reads **`SURVEILLANCE_EDGE_HTTP_PORT`** from `.env`).
+
+Health check: **`http://<pi4-lan-ip>:8080/health`**.
+
+### Manual start (alternative)
 
 ```bash
 cd /path/to/edge-agent

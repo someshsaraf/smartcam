@@ -15,6 +15,8 @@ Layout:
 
 ## Installation
 
+You can run **`../start.sh controller --install`** from this tree’s parent directory (repo root) to perform the backend and frontend setup steps below in one go. See [Quick start](#quick-start-recommended) under Execution.
+
 **System prerequisites**
 
 - Python 3 with `pip` (on each device run `python3 -m venv .venv` inside `controller/backend` and use that environment).
@@ -52,17 +54,43 @@ npm install
 
 ## Execution
 
-**API**
+### Quick start (recommended)
 
-From `controller/backend`, with the same venv activated (if you use `.venv`) and `PYTHONPATH` including `../shared`:
+From the **repository root** on the Pi 5, one script starts the API and the dev UI. Edit **[`backend/.env`](backend/.env)** and **[`frontend/.env`](frontend/.env)** for your LAN IPs first.
 
 ```bash
-source .venv/bin/activate   # if using .venv from Installation
+cd /path/to/smartcam
+
+# First time (venv, pip, npm, MediaMTX binary):
+./start.sh controller --install
+
+# Every run (backend :8000 + Vite :5173); Ctrl+C stops both:
+./start.sh controller
+```
+
+| Option | Effect |
+|--------|--------|
+| `--install` / `-i` | Create `backend/.venv` (with `--system-site-packages` for `python3-hailort`), install Python/npm deps, fetch MediaMTX if missing |
+| `--backend-only` | Uvicorn only |
+| `--frontend-only` | Vite only |
+
+Optional env overrides: **`SMARTCAM_API_PORT`** (default **8000**), **`SMARTCAM_UI_PORT`** (default **5173**). The script prints LAN URLs (from `.env` or `hostname -I`). After start it runs [`backend/scripts/check_hailo.sh`](backend/scripts/check_hailo.sh) when the backend is up.
+
+Open the dashboard at **`http://<pi5-lan-ip>:5173/`**. API docs: **`http://<pi5-lan-ip>:8000/docs`**.
+
+### Manual start (alternative)
+
+**API** — from `controller/backend`, with `.venv` activated and `PYTHONPATH` including `../shared`:
+
+```bash
+source .venv/bin/activate
 export PYTHONPATH="$(pwd)/../shared"
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Edit **[`backend/.env`](backend/.env)** for your LAN IPs (loaded automatically via [`app/env_loader.py`](backend/app/env_loader.py); do not `source .env`).
+**Frontend** — see [Frontend (development)](#frontend-development) below.
+
+[`backend/.env`](backend/.env) is loaded automatically via [`app/env_loader.py`](backend/app/env_loader.py); do not `source .env` in the shell.
 
 Interactive OpenAPI docs are served at **`http://<host>:8000/docs`** (FastAPI default).
 
@@ -98,7 +126,7 @@ Diagnostics: **`GET /system/mosquitto`** and **`GET /system/recording`** (`mosqu
 
 **Frontend (development)**
 
-From `controller/frontend`:
+From `controller/frontend` (or use `./start.sh controller` from the repo root):
 
 ```bash
 npm install
