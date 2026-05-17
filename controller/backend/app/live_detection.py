@@ -17,6 +17,7 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
+from .hailo_yolov8_backend import person_record_confidence
 from .motion_recording import handle_person_detected
 from .rtsp_env import apply_rtsp_env
 
@@ -66,6 +67,20 @@ def _people_from_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for f in faces
         if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
     ]
+
+
+def _people_eligible_for_recording(people: list[dict[str, Any]]) -> bool:
+    """True when at least one person box meets the recording confidence threshold."""
+    rec_conf = person_record_confidence()
+    for p in people:
+        if not isinstance(p, dict):
+            continue
+        try:
+            if float(p.get("score", 0.0)) >= rec_conf:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 class _DelayedFrameBuffer:
@@ -314,7 +329,7 @@ class _CameraWorker(threading.Thread):
                     "person_detection_source": meta.get("person_detection_source"),
                 }
             )
-            if person_detected:
+            if _people_eligible_for_recording(people):
                 self._person_streak += 1
                 if self._person_streak >= self._person_trigger_min_frames:
                     handle_person_detected(
