@@ -15,7 +15,7 @@ from typing import Any, List, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import camera_store, live_detection, mediamtx_manager, mqtt_bridge
@@ -68,15 +68,33 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
 
 _CHUNK = 1024 * 1024
 
+# Headers iOS Safari needs for HTML5 MP4 playback (byte-range requests).
+_RECORDING_PASS_HEADERS = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "content-disposition",
+    }
+)
+
 
 def _iter_mp4_file(path: Path):
-    """Chunked stream without fixed Content-Length (file may still be growing)."""
+    """Chunked stream without fixed Content-Length (legacy; prefer FileResponse)."""
     with path.open("rb") as f:
         while True:
             chunk = f.read(_CHUNK)
             if not chunk:
                 break
             yield chunk
+
+
+def _recording_file_headers(filename: str) -> dict[str, str]:
+    return {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Accept-Ranges": "bytes",
+    }
 
 
 class CameraCreate(BaseModel):
@@ -597,7 +615,7 @@ def list_recordings_endpoint(cam_id: int) -> List[dict[str, Any]]:
 
 
 @app.get("/recordings/{cam_id}/files/{filename}")
-def get_recording_file(cam_id: int, filename: str):
+async def get_recording_file(cam_id: int, filename: str, request: Request):
     c = camera_store.get_camera(cam_id)
     if not c:
         raise HTTPException(status_code=404, detail="camera not found")
@@ -607,27 +625,45 @@ def get_recording_file(cam_id: int, filename: str):
     edge = camera_store.edge_base_url(c)
     if edge:
         url = f"{edge}/recordings/files/{filename}"
-
-        def gen():
-            try:
-                with httpx.stream("GET", url, timeout=120.0) as r:
-                    r.raise_for_status()
-                    for chunk in r.iter_bytes():
-                        yield chunk
-            except Exception as e:
-                logger.warning("edge stream failed: %s", e)
-                raise
-
-        return StreamingResponse(gen(), media_type="video/mp4")
+        forward_headers: dict[str, str] = {}
+        range_h = request.headers.get("range")
+        if range_h:
+            forward_headers["Range"] = range_h
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                req = client.build_request("GET", url, headers=forward_headers)
+                r = await client.send(req, stream=True)
+                if r.status_code >= 400:
+                    body = await r.aread()
+                    await r.aclose()
+                    detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                    raise HTTPException(status_code=r.status_code, detail=detail)
+                pass_headers = {
+                    k: v
+                    for k, v in r.headers.items()
+                    if k.lower() in _RECORDING_PASS_HEADERS
+                }
+                if "accept-ranges" not in {k.lower() for k in pass_headers}:
+                    pass_headers["Accept-Ranges"] = "bytes"
+                return StreamingResponse(
+                    r.aiter_bytes(),
+                    status_code=r.status_code,
+                    headers=pass_headers,
+                    media_type=r.headers.get("content-type", "video/mp4"),
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("edge recording stream failed: %s", e)
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     path = _recordings_dir(cam_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
-    return StreamingResponse(
-        _iter_mp4_file(path),
+    return FileResponse(
+        path,
         media_type="video/mp4",
-        headers=headers,
+        headers=_recording_file_headers(filename),
     )
 
 

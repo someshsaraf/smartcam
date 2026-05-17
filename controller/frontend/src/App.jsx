@@ -278,6 +278,57 @@ function recordingKey(r) {
   return `${r.camId}-${r.name}`;
 }
 
+/** Clip playback tuned for iOS Safari (byte-range + playsInline). */
+function ClipPlayer({ url }) {
+  const videoRef = useRef(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setError("");
+    const video = videoRef.current;
+    if (!video) return undefined;
+
+    const onError = () => {
+      const code = video.error?.code;
+      if (code === 4) {
+        setError("This clip format is not supported on this device.");
+      } else {
+        setError("Could not play clip. Try Refresh, then open again.");
+      }
+    };
+
+    const onCanPlay = () => {
+      video.play().catch(() => {
+        /* User can tap play; autoplay may be blocked */
+      });
+    };
+
+    video.addEventListener("error", onError);
+    video.addEventListener("canplay", onCanPlay);
+    video.load();
+
+    return () => {
+      video.removeEventListener("error", onError);
+      video.removeEventListener("canplay", onCanPlay);
+    };
+  }, [url]);
+
+  return (
+    <div>
+      <video
+        ref={videoRef}
+        key={url}
+        src={url}
+        controls
+        playsInline
+        preload="auto"
+        className="w-full rounded bg-black max-h-[75vh]"
+      />
+      {error ? <p className="text-xs text-red-400 mt-2">{error}</p> : null}
+    </div>
+  );
+}
+
 function IconDownload({ className = "w-3.5 h-3.5" }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -444,7 +495,7 @@ function RecordingsTimeline({
                 ✕
               </button>
             </div>
-            <video key={playUrl} className="w-full rounded bg-black max-h-[75vh]" src={playUrl} controls autoPlay />
+            <ClipPlayer url={playUrl} />
           </div>
         </div>
       ) : null}

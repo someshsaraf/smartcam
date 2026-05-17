@@ -15,7 +15,7 @@ from . import _shared_bootstrap  # noqa: F401
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .local_publisher import LocalPublisher
 from .worker import EdgeRecorder
@@ -241,11 +241,13 @@ def get_file(filename: str):
     path = _rec_root / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
-    return StreamingResponse(
-        _iter_mp4_file(path),
+    return FileResponse(
+        path,
         media_type="video/mp4",
-        headers=headers,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Accept-Ranges": "bytes",
+        },
     )
 
 
