@@ -1038,7 +1038,7 @@ function LiveTile({
       </div>
       ) : null}
       {!isThumb ? (
-      <motion.div className="mb-1 space-y-0.5">
+      <div className="mb-1 space-y-0.5">
         <p
           className={`text-[10px] font-mono leading-snug hidden sm:block ${
             personDebugPositive
@@ -1063,7 +1063,7 @@ function LiveTile({
             Person detected ({persons})
           </p>
         ) : null}
-      </motion.div>
+      </div>
       ) : null}
       {!isThumb && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
