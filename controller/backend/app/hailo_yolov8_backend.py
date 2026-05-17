@@ -43,6 +43,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _presence_confidence() -> float:
+    """Floor for person-in-frame (profile / dim light). Side poses often score < 0.90."""
+    return _env_float("SMARTCAM_PERSON_PRESENCE_CONFIDENCE", 0.62, 0.01, 0.99)
+
+
+def _overlay_min_confidence() -> float:
+    """Draw boxes at or above this score (defaults to presence, not 0.90)."""
+    raw = os.environ.get("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE")
+    if raw is not None and str(raw).strip() != "":
+        return _env_float("SMARTCAM_PERSON_OVERLAY_MIN_CONFIDENCE", 0.62, 0.01, 0.99)
+    return _presence_confidence()
+
+
 def _box_plausible(box: dict[str, Any]) -> bool:
     w = float(box.get("w", 0.0))
     h = float(box.get("h", 0.0))
@@ -443,15 +456,23 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
+        presence_conf = _presence_confidence()
+        overlay_min = _overlay_min_confidence()
+        # Legacy env kept for diagnostics; presence drives detection.
         self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
-        hold_conf = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.85, 0.01, 0.99)
-        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
+        hold_conf = _env_float(
+            "SMARTCAM_PERSON_HOLD_CONFIDENCE",
+            max(0.50, presence_conf - 0.10),
+            0.01,
+            0.99,
+        )
+        hold_sec = _env_float("SMARTCAM_PERSON_HOLD_SEC", 4.0, 0.0, 30.0)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
         boxes = [
             b
-            for b in _nms(self._parse_outputs(outputs, score_min=self.conf), self.nms_iou)
+            for b in _nms(self._parse_outputs(outputs, score_min=presence_conf), self.nms_iou)
             if _box_plausible(b)
         ]
         now = time.monotonic()
@@ -469,6 +490,7 @@ class HailoYolov8Detector:
         else:
             self._hold_boxes = []
             self._hold_until = 0.0
+        boxes = [b for b in boxes if float(b.get("score", 0.0)) >= overlay_min]
         if (
             not boxes
             and os.environ.get("SMARTCAM_HAILO_PARSE_DEBUG", "").strip().lower()
