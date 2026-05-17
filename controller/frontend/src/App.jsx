@@ -6,6 +6,7 @@ import {
   detectionOverlaySyncEnabled,
   HLS_BASE,
   MEDIAMTX_BASE,
+  preferWebRtcLive,
   WS_DETECTIONS,
   WS_RECORDING,
 } from "./envConfig";
@@ -1263,17 +1264,17 @@ function LiveTile({
       : typeof overlayDelayMs === "number" && overlayDelayMs >= 0
         ? overlayDelayMs
         : detectionOverlayDelayMs();
-  const [useIframeFallback, setUseIframeFallback] = useState(false);
+  const [useWebRtc, setUseWebRtc] = useState(preferWebRtcLive);
   const synced = useOverlaySyncedDetections(faces, personCount, {
     videoRef,
     hlsRef,
     baseDelayMs: baseOverlayDelay,
-    enabled: overlaySync && !useIframeFallback,
+    enabled: overlaySync && !useWebRtc,
   });
   const rawFaces = Array.isArray(faces) ? faces : [];
-  const drawFaces = overlaySync && !useIframeFallback ? synced.faces : rawFaces;
+  const drawFaces = overlaySync && !useWebRtc ? synced.faces : rawFaces;
   const drawPersonCount =
-    overlaySync && !useIframeFallback
+    overlaySync && !useWebRtc
       ? synced.personCount
       : typeof personCount === "number"
         ? personCount
@@ -1306,7 +1307,7 @@ function LiveTile({
   };
 
   useEffect(() => {
-    setUseIframeFallback(false);
+    setUseWebRtc(preferWebRtcLive());
     setStreamError("");
     setEdgeHint("");
     setHlsUrl(hlsProxyUrl);
@@ -1356,17 +1357,21 @@ function LiveTile({
   }, [cam.edge_base_url]);
 
   useEffect(() => {
-    if (useIframeFallback) return undefined;
+    if (useWebRtc) return undefined;
     const video = videoRef.current;
     if (!video) return undefined;
     let hls;
     let cancelled = false;
     let triedDirectHls = false;
 
-    const failToIframe = () => {
+    const failToWebRtc = () => {
       if (cancelled) return;
+      if (!preferWebRtcLive()) {
+        setStreamError("HLS playback failed.");
+        return;
+      }
       setStreamError("");
-      setUseIframeFallback(true);
+      setUseWebRtc(true);
       fetch(`${API}/cameras/${cam.id}/stream_health?probe_rtsp=false`)
         .then((r) => (r.ok ? r.json() : null))
         .then((h) => {
@@ -1385,7 +1390,7 @@ function LiveTile({
         setHlsUrl(hlsDirectUrl);
         return;
       }
-      failToIframe();
+      failToWebRtc();
     };
 
     const onPlaying = () => {
@@ -1431,14 +1436,14 @@ function LiveTile({
           return;
         }
         hls?.destroy();
-        failToIframe();
+        failToWebRtc();
       });
     } else if (canPlayNativeHls(video)) {
       hlsRef.current = null;
       video.src = hlsUrl;
     } else {
       setStreamError("HLS not supported in this browser — using WebRTC reader.");
-      setUseIframeFallback(true);
+      setUseWebRtc(true);
       return undefined;
     }
 
@@ -1451,13 +1456,13 @@ function LiveTile({
       video.removeAttribute("src");
       video.load();
     };
-  }, [cam.id, cam.url, hlsUrl, hlsProxyUrl, hlsDirectUrl, useIframeFallback]);
+  }, [cam.id, cam.url, hlsUrl, hlsProxyUrl, hlsDirectUrl, useWebRtc]);
 
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const container = wrapRef.current;
-    if (!video || !canvas || useIframeFallback) return undefined;
+    if (!video || !canvas || useWebRtc) return undefined;
     const ctx = canvas.getContext("2d");
     if (!ctx) return undefined;
 
@@ -1526,7 +1531,7 @@ function LiveTile({
       window.removeEventListener("orientationchange", paint);
       window.clearInterval(overlayTick);
     };
-  }, [drawFaces, useIframeFallback, cam.id, isMobile]);
+  }, [drawFaces, useWebRtc, cam.id, isMobile]);
 
   const isHero = layout === "hero";
   const isThumb = layout === "thumb";
@@ -1543,10 +1548,10 @@ function LiveTile({
         <div className="flex items-center gap-1.5 shrink-0">
           <span
             className={
-              edgeHint ? "text-red-400" : useIframeFallback ? "text-amber-400" : "text-green-400"
+              edgeHint ? "text-red-400" : useWebRtc ? "text-green-400" : "text-amber-400"
             }
           >
-            {edgeHint ? "NO SIGNAL" : useIframeFallback ? "WEBRTC" : "LIVE"}
+            {edgeHint ? "NO SIGNAL" : useWebRtc ? "LIVE" : "HLS"}
           </span>
         </div>
       </div>
@@ -1563,7 +1568,7 @@ function LiveTile({
                 ? "text-amber-400/90"
                 : "text-gray-500"
           }`}
-          title="Hailo YOLOv8n person detection (yolov8n.hef; triggers motion clip when mode is Motion)"
+          title="Hailo YOLOv8n on controller RTSP — triggers motion clip when recording mode is Motion"
         >
           {personDebugLine}
         </p>
@@ -1613,16 +1618,16 @@ function LiveTile({
             aria-label="Recording"
           />
         ) : null}
-        {useIframeFallback && personDetections(rawFaces).length > 0 ? (
+        {useWebRtc && personDetections(rawFaces).length > 0 ? (
           <div className="absolute top-10 left-2 right-2 z-20 rounded-md bg-blue-900/85 px-2 py-1 text-[10px] text-blue-100">
-            Person detected — approximate boxes (WebRTC mode).
+            Person detected — recording when mode is Motion.
           </div>
         ) : null}
         <div
           className="w-full h-full origin-center transition-transform duration-75"
           style={{ transform: `scale(${scale})` }}
         >
-          {useIframeFallback ? (
+          {useWebRtc ? (
             <div className="relative w-full h-full min-h-[140px]">
               <iframe
                 title={cam.name}
@@ -1640,7 +1645,7 @@ function LiveTile({
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
                   {edgeHint
                     ? "WebRTC reader — see message above."
-                    : "WebRTC reader. HLS unavailable for detection overlay."}
+                    : "WebRTC live view (low latency)."}
                 </div>
               ) : null}
             </div>
@@ -1711,9 +1716,9 @@ function LiveTile({
       {!isThumb ? (
       <p
         className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
-        title={useIframeFallback ? "WebRTC reader (no overlay)" : "HLS playlist for video + face overlay"}
+        title={useWebRtc ? "WebRTC reader (low latency)" : "HLS playlist for video + synced overlay"}
       >
-        {useIframeFallback ? streamUrl : hlsUrl}
+        {useWebRtc ? streamUrl : hlsUrl}
       </p>
       ) : null}
     </div>
