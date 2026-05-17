@@ -1,4 +1,4 @@
-/** Mobile-only layout components (shared glass header, sheets, manage). */
+/** Shared layout components (glass header, sheets, manage). */
 
 export function IconChevronLeft({ className = "w-5 h-5" }) {
   return (
@@ -18,7 +18,7 @@ export function IconClose({ className = "w-5 h-5" }) {
 
 export function MobilePageHeader({ title, subtitle, onBack, backLabel = "Back", actions = null }) {
   return (
-    <header className="md:hidden shrink-0 mobile-glass border-b border-white/5 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 pb-3">
+    <header className="shrink-0 mobile-glass border-b border-white/5 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 lg:px-6 pb-3">
       {onBack ? (
         <button
           type="button"
