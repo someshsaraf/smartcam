@@ -450,8 +450,10 @@ function EventsPanel({
   playingClip,
   onPlayClip,
   onClearPlay,
+  variant = "default",
   className = "",
 }) {
+  const isSidebar = variant === "sidebar";
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -594,12 +596,22 @@ function EventsPanel({
 
   return (
     <div
-      className={`rounded-xl border border-gray-800 bg-[#070c16] flex flex-col min-h-0 ${className}`}
+      className={`flex flex-col min-h-0 ${
+        isSidebar
+          ? "bg-transparent"
+          : "rounded-xl border border-gray-800 bg-[#070c16]"
+      } ${className}`}
     >
-      <div className="shrink-0 px-3 py-2 border-b border-gray-800 space-y-2">
+      <div
+        className={`shrink-0 space-y-2 ${
+          isSidebar ? "px-0 py-2 border-b border-gray-800" : "px-3 py-2 border-b border-gray-800"
+        }`}
+      >
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-gray-100">Events</h2>
+            <h2 className={`font-semibold text-gray-100 ${isSidebar ? "text-xs" : "text-sm"}`}>
+              Events
+            </h2>
             <p className="text-[10px] text-gray-500 truncate">
               {cameraName || `Camera ${cameraId}`}
               {filterActive ? " · filtered" : ""}
@@ -626,32 +638,42 @@ function EventsPanel({
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
-          <label className="text-gray-500 col-span-2">From</label>
+        <div
+          className={`text-[10px] ${isSidebar ? "flex flex-col gap-1.5" : "grid grid-cols-2 gap-x-2 gap-y-1"}`}
+        >
+          <label className={`text-gray-500 ${isSidebar ? "" : "col-span-2"}`}>From</label>
           <input
             type="date"
             value={filterFromDate}
             onChange={(e) => setFilterFromDate(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
           <input
             type="time"
             value={filterFromTime}
             onChange={(e) => setFilterFromTime(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
-          <label className="text-gray-500 col-span-2">To</label>
+          <label className={`text-gray-500 ${isSidebar ? "mt-0.5" : "col-span-2"}`}>To</label>
           <input
             type="date"
             value={filterToDate}
             onChange={(e) => setFilterToDate(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
           <input
             type="time"
             value={filterToTime}
             onChange={(e) => setFilterToTime(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -678,7 +700,11 @@ function EventsPanel({
         </div>
         {filterError ? <p className="text-[10px] text-red-400">{filterError}</p> : null}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+      <div
+        className={`flex-1 min-h-0 overflow-y-auto space-y-1 ${
+          isSidebar ? "px-0 py-2" : "p-2"
+        }`}
+      >
         {events.length === 0 ? (
           <p className="text-xs text-gray-500 p-2">
             {filterActive ? "No events in this date/time range." : "No events yet for this camera."}
@@ -724,9 +750,17 @@ function EventsPanel({
                         : "No linked recording"
                   }
                 >
-                  <div className="flex justify-between gap-2 items-start">
+                  <div
+                    className={
+                      isSidebar
+                        ? "flex flex-col gap-0.5 items-start"
+                        : "flex justify-between gap-2 items-start w-full"
+                    }
+                  >
                     <span className="font-medium text-indigo-300">{formatEventType(ev.event_type)}</span>
-                    <span className="text-gray-500 shrink-0">{formatEventTime(ev.ts)}</span>
+                    <span className={`text-gray-500 ${isSidebar ? "text-[9px]" : "shrink-0"}`}>
+                      {formatEventTime(ev.ts)}
+                    </span>
                   </div>
                   {clip ? (
                     <p className="text-gray-400 font-mono text-[10px] mt-0.5 truncate">{clip.name}</p>
@@ -2390,12 +2424,12 @@ export default function App() {
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
       <aside
-        className={`bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto border-r border-gray-800 min-h-0 ${
+        className={`bg-[#070c16] p-3 flex flex-col gap-3 border-r border-gray-800 min-h-0 ${
           isMobile
             ? mobileManageOpen
-              ? "flex flex-1 w-full fixed inset-0 z-40"
+              ? "flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto"
               : "hidden"
-            : "hidden md:flex w-56 lg:w-60 shrink-0"
+            : "hidden md:flex w-60 lg:w-72 shrink-0 overflow-hidden"
         }`}
       >
         {isMobile && mobileManageOpen ? (
@@ -2407,6 +2441,11 @@ export default function App() {
             ← Back to live
           </button>
         ) : null}
+        <div
+          className={`flex flex-col gap-3 ${
+            !isMobile ? "shrink-0 overflow-y-auto max-h-[28vh] min-h-0" : ""
+          }`}
+        >
         <h1 className="text-lg font-bold">Vigilance</h1>
         <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
 
@@ -2528,9 +2567,15 @@ export default function App() {
             ))}
           </div>
         ) : null}
+        </div>
 
-        <div>
-          <h3 className="text-xs text-gray-400 mb-2">Detected Cameras</h3>
+        <div className={isMobile ? "" : "shrink-0 flex flex-col"}>
+          <h3 className="text-xs text-gray-400 mb-2 shrink-0">Detected Cameras</h3>
+          <div
+            className={
+              isMobile ? "" : "min-h-[2.5rem] max-h-[11.5rem] overflow-y-auto shrink-0"
+            }
+          >
           {cams.map((c) => (
             <div
               key={c.id}
@@ -2577,7 +2622,22 @@ export default function App() {
               </div>
             </div>
           ))}
+          </div>
         </div>
+
+        {!isMobile ? (
+          <EventsPanel
+            variant="sidebar"
+            cameraId={activeCameraId}
+            cameraName={activeCamera?.name ?? ""}
+            recordings={recordingsForActiveCamera}
+            cameras={cams}
+            playingClip={playingClip}
+            onPlayClip={setPlayingClip}
+            onClearPlay={() => setPlayingClip(null)}
+            className="flex-1 min-h-0 mt-1 pt-1 border-t border-gray-800"
+          />
+        ) : null}
       </aside>
 
       <div
@@ -2726,7 +2786,7 @@ export default function App() {
         />
         )}
 
-        {(!isMobile || showEventsPanel) && (
+        {isMobile && showEventsPanel ? (
           <EventsPanel
             cameraId={activeCameraId}
             cameraName={activeCamera?.name ?? ""}
@@ -2735,11 +2795,9 @@ export default function App() {
             playingClip={playingClip}
             onPlayClip={setPlayingClip}
             onClearPlay={() => setPlayingClip(null)}
-            className={
-              isMobile ? "flex-1 min-h-0 m-2" : "shrink-0 h-64 mx-2 mb-2"
-            }
+            className="flex-1 min-h-0 m-2"
           />
-        )}
+        ) : null}
 
         {isMobile ? (
           <MobileBottomNav
