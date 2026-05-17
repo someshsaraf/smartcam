@@ -43,6 +43,23 @@ def h264_mobile_fragmented_mp4_args(*, preset: str = "veryfast") -> list[str]:
     ]
 
 
+def mp4_listable_fast(path: Path) -> bool:
+    """Cheap check for directory listing (no ffprobe). Playback may still run finalize-mobile."""
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size < 256:
+            return False
+    except OSError:
+        return False
+    try:
+        with path.open("rb") as f:
+            head = f.read(12)
+        return len(head) >= 8 and head[4:8] == b"ftyp"
+    except OSError:
+        return False
+
+
 def mp4_is_fragmented(path: Path) -> bool:
     """True when the file uses fMP4 moof/mdat (Safari often shows thumb but blank full-screen play)."""
     if not path.is_file():

@@ -64,7 +64,8 @@ Optional: **`SMARTCAM_API_PORT`** (default `8000`), **`SMARTCAM_UI_PORT`** (defa
 **MediaMTX (live tiles)**
 
 - Backend writes [`backend/data/mediamtx.generated.yml`](backend/data/mediamtx.generated.yml) from [`backend/data/cameras.json`](backend/data/cameras.json) and runs embedded MediaMTX (see [`backend/app/mediamtx_manager.py`](backend/app/mediamtx_manager.py)).
-- WebRTC UI: port **8889**; HLS: **8888**. Set **`VITE_MEDIAMTX_BASE`** / **`VITE_HLS_BASE`** in [`frontend/.env`](frontend/.env).
+- Live tiles default to **WebRTC** (port **8889**, low latency). HLS fallback: port **8888**. Set **`VITE_MEDIAMTX_BASE`** / **`VITE_HLS_BASE`** / **`VITE_LIVE_WEBRTC`** in [`frontend/.env`](frontend/.env).
+- **Person-triggered clips** are independent of the player: Hailo on controller RTSP calls the edge `POST /recordings/motion/trigger` when camera **recording mode** is **Motion** (`SMARTCAM_DETECTION_OVERLAY_DELAY_MS=0` recommended with WebRTC).
 - Diagnostics: `GET /system/mediamtx`
 
 **Edge cameras (mDNS)**
@@ -90,4 +91,5 @@ Diagnostics: `GET /system/mosquitto`, `GET /system/recording`
 | `VITE_API_URL` | Controller API, e.g. `http://<pi5>:8000` |
 | `VITE_HLS_BASE` | HLS, default same host port `8888` |
 | `VITE_MEDIAMTX_BASE` | WebRTC reader, default port `8889` |
+| `VITE_LIVE_WEBRTC` | `1` (default) = WebRTC tiles; `0` = HLS + synced overlays |
 | `VITE_WS_RECORDING_URL` / `VITE_WS_DETECTIONS_URL` | Optional; default derived from `VITE_API_URL` |

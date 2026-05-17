@@ -38,8 +38,8 @@ def _parse_positive_int(name: str, default: int, lo: int, hi: int) -> int:
 
 
 def _overlay_delay_ms() -> int:
-    """Run inference on RTSP frames this many ms behind live (aligns with HLS playback)."""
-    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 6500, 0, 15000)
+    """Run inference on RTSP frames this many ms behind live (0 = realtime; raise for HLS overlay sync)."""
+    return _parse_positive_int("SMARTCAM_DETECTION_OVERLAY_DELAY_MS", 0, 0, 15000)
 
 
 def _parse_float_env(name: str, default: float, lo: float, hi: float) -> float:

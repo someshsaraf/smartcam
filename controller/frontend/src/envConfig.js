@@ -69,3 +69,11 @@ export function detectionOverlaySyncEnabled() {
     .toLowerCase();
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
+
+/** Use MediaMTX WebRTC reader for live tiles (low latency). Set VITE_LIVE_WEBRTC=0 for HLS. */
+export function preferWebRtcLive() {
+  const v = String(import.meta.env.VITE_LIVE_WEBRTC ?? "1")
+    .trim()
+    .toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
