@@ -43,32 +43,39 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _person_display_confidence() -> float:
-    """Overlay/UI threshold (lower default helps low light and profile views)."""
+def _person_confidence_unified() -> float:
+    """Single person threshold for overlay, arming, and recording (default 90%)."""
     if os.environ.get("SMARTCAM_PERSON_DISPLAY_CONFIDENCE") is not None:
-        return _env_float("SMARTCAM_PERSON_DISPLAY_CONFIDENCE", 0.62, 0.01, 0.99)
+        return _env_float("SMARTCAM_PERSON_DISPLAY_CONFIDENCE", 0.90, 0.01, 0.99)
+    if os.environ.get("SMARTCAM_PERSON_RECORD_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_RECORD_CONFIDENCE", 0.90, 0.01, 0.99)
     if os.environ.get("SMARTCAM_PERSON_CONFIDENCE") is not None:
         return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
-    return 0.62
+    return 0.90
+
+
+def _person_display_confidence() -> float:
+    return _person_confidence_unified()
 
 
 def _person_record_confidence() -> float:
-    """Recording trigger threshold (higher than display to limit false clips)."""
-    if os.environ.get("SMARTCAM_PERSON_RECORD_CONFIDENCE") is not None:
-        return _env_float("SMARTCAM_PERSON_RECORD_CONFIDENCE", 0.88, 0.01, 0.99)
-    if os.environ.get("SMARTCAM_PERSON_CONFIDENCE") is not None:
-        return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
-    return 0.88
+    return _person_confidence_unified()
 
 
 def _person_hold_confidence() -> float:
-    """Minimum score to keep held boxes visible after a brief miss."""
-    return _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.50, 0.01, 0.99)
+    """Brief flicker hold after a >=90% hit; never below display threshold on screen."""
+    hold = _env_float("SMARTCAM_PERSON_HOLD_CONFIDENCE", 0.85, 0.01, 0.99)
+    return min(hold, _person_display_confidence())
 
 
 def person_record_confidence() -> float:
     """Public accessor for live_detection recording gate."""
     return _person_record_confidence()
+
+
+def person_display_confidence() -> float:
+    """Public accessor for UI threshold display."""
+    return _person_display_confidence()
 
 
 def _box_plausible(box: dict[str, Any]) -> bool:

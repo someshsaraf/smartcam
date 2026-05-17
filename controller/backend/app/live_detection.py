@@ -17,8 +17,8 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
-from .hailo_yolov8_backend import person_record_confidence
-from .motion_recording import handle_person_detected
+from .hailo_yolov8_backend import person_display_confidence, person_record_confidence
+from .motion_recording import handle_person_detected, motion_capture_busy
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -69,18 +69,22 @@ def _people_from_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _people_eligible_for_recording(people: list[dict[str, Any]]) -> bool:
-    """True when at least one person box meets the recording confidence threshold."""
-    rec_conf = person_record_confidence()
+def _max_person_score(people: list[dict[str, Any]]) -> float:
+    best = 0.0
     for p in people:
         if not isinstance(p, dict):
             continue
         try:
-            if float(p.get("score", 0.0)) >= rec_conf:
-                return True
+            best = max(best, float(p.get("score", 0.0)))
         except (TypeError, ValueError):
             continue
-    return False
+    return best
+
+
+def _people_eligible_for_recording(people: list[dict[str, Any]]) -> bool:
+    """True when at least one person box meets the recording confidence threshold."""
+    rec_conf = person_record_confidence()
+    return _max_person_score(people) >= rec_conf
 
 
 class _DelayedFrameBuffer:
@@ -314,8 +318,14 @@ class _CameraWorker(threading.Thread):
             meta = inference_debug_status()
             last_send = now
             person_detected = len(people) > 0
-            record_eligible = _people_eligible_for_recording(people)
-            if record_eligible:
+            max_score = _max_person_score(people)
+            record_eligible = max_score >= person_record_confidence()
+            edge = camera_store.edge_base_url(self._cam)
+            capture_busy = motion_capture_busy(cid, edge=edge) if edge else False
+            # Arm on visible person; require record threshold only on trigger frame.
+            if capture_busy:
+                self._person_streak = 0
+            elif person_detected:
                 self._person_streak += 1
             else:
                 self._person_streak = 0
@@ -328,7 +338,11 @@ class _CameraWorker(threading.Thread):
                     "face_count": len(faces),
                     "person_count": len(people),
                     "person_detected": person_detected,
-                    "person_record_eligible": record_eligible,
+                    "person_max_score": round(max_score, 4),
+                    "person_display_threshold": person_display_confidence(),
+                    "person_record_threshold": person_record_confidence(),
+                    "person_record_eligible": record_eligible and not capture_busy,
+                    "person_capture_busy": capture_busy,
                     "person_trigger_streak": self._person_streak,
                     "person_trigger_min_frames": self._person_trigger_min_frames,
                     "backend": meta.get("backend"),
@@ -338,7 +352,8 @@ class _CameraWorker(threading.Thread):
                 }
             )
             if (
-                record_eligible
+                not capture_busy
+                and record_eligible
                 and self._person_streak >= self._person_trigger_min_frames
             ):
                 handle_person_detected(

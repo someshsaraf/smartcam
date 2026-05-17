@@ -70,18 +70,49 @@ def fetch_edge_motion_status(edge: str, cam_id: int) -> dict[str, Any]:
 
 
 def motion_recording_in_progress(status: dict[str, Any]) -> bool:
-    """True while edge is actively capturing RTSP for a motion clip (not while saving only)."""
+    """True while edge is capturing the motion clip window (not while ffmpeg saving only)."""
     if not isinstance(status, dict):
         return False
     if bool(status.get("capture_active")):
         return True
     phase = str(status.get("phase") or "idle")
-    return phase in _CAPTURE_PHASES
+    if phase in _CAPTURE_PHASES:
+        return True
+    ends = float(status.get("ends_at") or 0.0)
+    if ends > time.time() and phase not in ("idle", "materializing"):
+        return True
+    return False
 
 
 _last_trigger_by_cam: dict[int, float] = {}
 _last_handle_by_cam: dict[int, float] = {}
 _trigger_lock = threading.Lock()
+_capture_block_until: dict[int, float] = {}
+
+
+def notify_motion_clip_accepted(cam_id: int, duration_seconds: int) -> None:
+    """Block re-trigger until the clip capture window ends (saving may continue)."""
+    dur = max(1.0, float(duration_seconds))
+    with _trigger_lock:
+        _capture_block_until[int(cam_id)] = time.time() + dur
+
+
+def motion_capture_busy(cam_id: int, *, edge: Optional[str] = None) -> bool:
+    """
+    True while the ~60s capture is in progress. False during materializing/saving so
+    a new clip may start while the previous MP4 is still being encoded.
+    """
+    cid = int(cam_id)
+    if edge:
+        st = fetch_edge_motion_status(edge, cid)
+        if motion_recording_in_progress(st):
+            return True
+        with _trigger_lock:
+            _capture_block_until.pop(cid, None)
+        return False
+    with _trigger_lock:
+        until = _capture_block_until.get(cid, 0.0)
+    return time.time() < until
 _TRIGGER_COOLDOWN_SEC = 2.0
 _HANDLE_MIN_INTERVAL_SEC = 0.35
 
@@ -203,7 +234,7 @@ def handle_person_detected(
         tag_list = _normalize_tags(tags)
         status = fetch_edge_motion_status(edge, cam_id)
 
-        if motion_recording_in_progress(status):
+        if motion_capture_busy(cam_id, edge=edge):
             logger.debug(
                 "motion clip skipped cam_id=%s (capture in progress phase=%s)",
                 cam_id,
@@ -233,6 +264,9 @@ def handle_person_detected(
             detection_frame=detection_frame,
         )
         if result.get("accepted"):
+            pre = int(settings.get("pre_record_seconds", 10))
+            post = int(settings.get("post_record_seconds", 50))
+            notify_motion_clip_accepted(cam_id, pre + post)
             st = fetch_edge_motion_status(edge, cam_id)
             rid = str(st.get("recording_id") or result.get("recording_id") or "")
             append_event(

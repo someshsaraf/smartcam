@@ -79,6 +79,53 @@ function personDetections(faces) {
   );
 }
 
+/** Format model score 0–1 as percentage string. */
+function formatConfidencePct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return n <= 1 ? `${Math.round(n * 1000) / 10}%` : `${n.toFixed(1)}%`;
+}
+
+/** Detection confidence for overlay label (backend sends 0–1). */
+function formatDetectionLabel(det) {
+  const score = formatConfidencePct(det?.score);
+  const label = det?.label ? String(det.label) : "person";
+  return score !== "—" ? `${label} ${score}` : label;
+}
+
+function PersonConfidenceBadge({ detectionInfo, detectionWsOpen, persons }) {
+  if (!detectionWsOpen) return null;
+  const thr =
+    typeof detectionInfo?.personRecordThreshold === "number"
+      ? detectionInfo.personRecordThreshold
+      : typeof detectionInfo?.personDisplayThreshold === "number"
+        ? detectionInfo.personDisplayThreshold
+        : 0.9;
+  const score =
+    typeof detectionInfo?.personMaxScore === "number" ? detectionInfo.personMaxScore : null;
+  const scoreTxt = score != null ? formatConfidencePct(score) : "—";
+  const thrTxt = formatConfidencePct(thr);
+  const meets = score != null && score >= thr;
+  return (
+    <div
+      className={`absolute top-2 left-2 z-20 rounded px-2 py-1 text-[10px] font-mono font-semibold leading-tight shadow-lg border ${
+        meets
+          ? "text-blue-100 bg-blue-950/90 border-blue-500/60"
+          : persons > 0
+            ? "text-amber-100 bg-black/85 border-amber-500/50"
+            : "text-gray-300 bg-black/80 border-gray-600/60"
+      }`}
+      title="Hailo person confidence vs detection threshold"
+    >
+      <span className="block text-[9px] uppercase tracking-wide opacity-80">Confidence</span>
+      <span>
+        {scoreTxt}
+        <span className="opacity-75"> / ≥{thrTxt}</span>
+      </span>
+    </div>
+  );
+}
+
 function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
   const [layout, setLayout] = useState(null);
   const people = personDetections(faces);
@@ -135,6 +182,7 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
         const topPct = (y / layout.containerH) * 100;
         const wPct = (w / layout.containerW) * 100;
         const hPct = (h / layout.containerH) * 100;
+        const label = formatDetectionLabel(f);
         return (
           <div
             key={`${i}-${leftPct}-${topPct}`}
@@ -145,7 +193,13 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
               width: `${wPct}%`,
               height: `${hPct}%`,
             }}
-          />
+          >
+            {label ? (
+              <span className="absolute left-0 bottom-full mb-0.5 max-w-[8rem] truncate rounded px-1 py-px text-[10px] font-mono font-semibold leading-tight text-blue-100 bg-black/80 border border-blue-500/40">
+                {label}
+              </span>
+            ) : null}
+          </div>
         );
       })}
     </div>
@@ -1286,30 +1340,32 @@ function formatPersonDebugLine(info, wsOpen, system) {
     const streak = typeof info.personTriggerStreak === "number" ? info.personTriggerStreak : 0;
     const need =
       typeof info.personTriggerMinFrames === "number" ? info.personTriggerMinFrames : 3;
-    if (info.personRecordEligible === false) {
-      return `Person test: YES — ${n} on screen (below record threshold)`;
+    const score =
+      typeof info.personMaxScore === "number" ? info.personMaxScore : null;
+    const recThr =
+      typeof info.personRecordThreshold === "number"
+        ? info.personRecordThreshold
+        : typeof info.personDisplayThreshold === "number"
+          ? info.personDisplayThreshold
+          : 0.9;
+    const scoreTxt = score != null ? formatConfidencePct(score) : "?";
+    const thrTxt = formatConfidencePct(recThr);
+    if (info.personCaptureBusy) {
+      return `Person test: YES — ${n} @ ${scoreTxt} · recording (${thrTxt} to trigger)`;
     }
-    if (streak >= need) {
-      return `Person test: YES — ${n} person(s) · triggering clip`;
+    if (streak >= need && info.personRecordEligible) {
+      return `Person test: YES — ${n} @ ${scoreTxt} · triggering clip`;
     }
-    return `Person test: YES — ${n} person(s) · arming ${streak}/${need}`;
+    if (streak > 0) {
+      const recOk = info.personRecordEligible ? "ok" : `need ${thrTxt}`;
+      return `Person test: YES — ${n} @ ${scoreTxt} · arming ${streak}/${need} (${recOk})`;
+    }
+    return `Person test: YES — ${n} @ ${scoreTxt} · arming 0/${need} (need ${thrTxt} to record)`;
   }
   if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
   return "Person test: no person in frame";
-}
-
-/** Detection confidence for overlay label (backend sends 0–1). */
-function formatDetectionLabel(det) {
-  const n = Number(det?.score);
-  const score = Number.isFinite(n)
-    ? n <= 1
-      ? `${Math.round(n * 1000) / 10}%`
-      : n.toFixed(2)
-    : "";
-  const label = det?.label ? String(det.label) : "face";
-  return score ? `${label} ${score}` : label;
 }
 
 function LiveTile({
@@ -1639,7 +1695,7 @@ function LiveTile({
       {!isThumb ? (
       <div className="mb-1 space-y-0.5">
         <p
-          className={`text-[10px] font-mono leading-snug hidden sm:block ${
+          className={`text-[10px] font-mono leading-snug ${
             personDebugPositive
               ? "text-blue-300 font-semibold"
               : personDebugLine.includes("—") ||
@@ -1691,6 +1747,13 @@ function LiveTile({
               }`
         }`}
       >
+        {!isThumb ? (
+          <PersonConfidenceBadge
+            detectionInfo={detectionInfo}
+            detectionWsOpen={detectionWsOpen}
+            persons={persons}
+          />
+        ) : null}
         {recording ? (
           <div
             className="absolute top-2 right-2 z-20 h-5 w-5 rounded-full bg-red-600 shadow-lg ring-2 ring-white/90"
@@ -2108,6 +2171,7 @@ export default function App() {
                 ? msg.person_count
                 : countPersonDetections(faces);
             const personDetected = Boolean(msg.person_detected) || personCount > 0;
+            const captureBusy = Boolean(msg.person_capture_busy);
             const recordEligible = Boolean(msg.person_record_eligible);
             setDetectionsById((prev) => ({
               ...prev,
@@ -2116,6 +2180,17 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected,
+                personMaxScore:
+                  typeof msg.person_max_score === "number" ? msg.person_max_score : null,
+                personDisplayThreshold:
+                  typeof msg.person_display_threshold === "number"
+                    ? msg.person_display_threshold
+                    : null,
+                personRecordThreshold:
+                  typeof msg.person_record_threshold === "number"
+                    ? msg.person_record_threshold
+                    : null,
+                personCaptureBusy: captureBusy,
                 personRecordEligible: recordEligible,
                 personTriggerStreak:
                   typeof msg.person_trigger_streak === "number"
