@@ -176,6 +176,8 @@ controller_start_backend() {
 controller_start_frontend() {
   [[ -d "$FRONTEND_ROOT/node_modules" ]] || die "Run: ./start.sh controller --install"
   cd "$FRONTEND_ROOT"
+  # Drop stale Vite pre-bundles so UI picks up App.jsx changes after git pull.
+  rm -rf node_modules/.vite 2>/dev/null || true
   local host
   host="$(lan_hint_from_env)"
   log "Controller UI: http://0.0.0.0:${CONTROLLER_UI_PORT} (open http://${host}:${CONTROLLER_UI_PORT}/)"
