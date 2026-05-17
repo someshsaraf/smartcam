@@ -22,6 +22,13 @@ _MAX_FACES = 32
 _HAAR: Optional[cv2.CascadeClassifier] = None
 _HAAR_ERROR_LOGGED = False
 _HAILO_FALLBACK_WARNED = False
+_SSD_FALLBACK_ACTIVE = False
+_SSD_DETECTOR: Any = None
+
+
+def _hailo_fallback_ssd_enabled() -> bool:
+    v = os.environ.get("SMARTCAM_HAILO_FALLBACK_SSD", "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 def _parse_backend() -> str:
@@ -135,17 +142,54 @@ def _person_roi(frame_shape: tuple[int, ...], p: dict[str, Any]) -> tuple[int, i
     return int((x - mx) * w), int((y - my) * h), int((x + bw + mx) * w), int((y + min(bh, bh * 0.62) + my) * h)
 
 
+def _detect_ssd_people_normalized(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
+    global _SSD_DETECTOR, _SSD_FALLBACK_ACTIVE
+    try:
+        from surveillance_shared.detector import Detector
+
+        if _SSD_DETECTOR is None:
+            _SSD_DETECTOR = Detector()
+        people = _SSD_DETECTOR.detect_people_normalized(frame_bgr)
+        if people:
+            _SSD_FALLBACK_ACTIVE = True
+        return people
+    except Exception as e:
+        logger.warning("OpenCV SSD person fallback failed: %s", e)
+        return []
+
+
 def _detect_hailo_person_face(frame_bgr: np.ndarray) -> List[dict[str, Any]]:
-    global _HAILO_FALLBACK_WARNED
+    global _HAILO_FALLBACK_WARNED, _SSD_FALLBACK_ACTIVE
     try:
         from .hailo_yolov8_backend import detect_people_normalized, get_detector
-        people = detect_people_normalized(frame_bgr)
+
         detector = get_detector()
-        if detector.error and not _HAILO_FALLBACK_WARNED:
-            logger.warning("Hailo backend unavailable (%s); person detection disabled", detector.error)
-            _HAILO_FALLBACK_WARNED = True
+        if detector.error:
+            if _hailo_fallback_ssd_enabled():
+                if not _HAILO_FALLBACK_WARNED:
+                    logger.warning(
+                        "Hailo unavailable (%s); using OpenCV MobileNet-SSD for person detection",
+                        detector.error,
+                    )
+                    _HAILO_FALLBACK_WARNED = True
+                return _detect_ssd_people_normalized(frame_bgr)
+            if not _HAILO_FALLBACK_WARNED:
+                logger.warning(
+                    "Hailo backend unavailable (%s); person detection disabled",
+                    detector.error,
+                )
+                _HAILO_FALLBACK_WARNED = True
             return []
+        people = detect_people_normalized(frame_bgr)
     except Exception as e:
+        if _hailo_fallback_ssd_enabled():
+            if not _HAILO_FALLBACK_WARNED:
+                logger.warning(
+                    "Hailo backend failed (%s); using OpenCV MobileNet-SSD for person detection",
+                    e,
+                )
+                _HAILO_FALLBACK_WARNED = True
+            return _detect_ssd_people_normalized(frame_bgr)
         if not _HAILO_FALLBACK_WARNED:
             logger.exception("Hailo backend failed; person detection disabled: %s", e)
             _HAILO_FALLBACK_WARNED = True
@@ -171,15 +215,22 @@ def inference_debug_status() -> dict[str, Any]:
         "backend": backend,
         "hailo_ready": False,
         "hailo_error": None,
+        "person_detection_source": None,
     }
     if backend != "hailo_person_face":
+        if backend == "opencv":
+            out["person_detection_source"] = "opencv_haar"
         return out
+    if _SSD_FALLBACK_ACTIVE:
+        out["person_detection_source"] = "opencv_ssd"
     try:
         from .hailo_yolov8_backend import get_detector
 
         det = get_detector()
         out["hailo_error"] = det.error
         out["hailo_ready"] = det.error is None
+        if det.error is None:
+            out["person_detection_source"] = "hailo_yolov8n"
     except Exception as e:
         out["hailo_error"] = str(e)
     return out

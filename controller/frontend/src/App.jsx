@@ -734,10 +734,22 @@ function formatPersonDebugLine(info, wsOpen) {
     return `Person test: syncing video (${age} / ${need} ms)…`;
   }
   if (info.error) return `Person test: — (${info.error})`;
-  if (info.hailoError) return `Person test: — (Hailo: ${info.hailoError})`;
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) return `Person test: YES — ${n} person(s)`;
+  if (n > 0) {
+    const viaSsd =
+      info.personDetectionSource === "opencv_ssd" && info.hailoError;
+    return viaSsd
+      ? `Person test: YES — ${n} person(s) (SSD fallback; Hailo unavailable)`
+      : `Person test: YES — ${n} person(s)`;
+  }
+  if (info.hailoError) {
+    const hint =
+      info.personDetectionSource === "opencv_ssd"
+        ? "SSD fallback active — no person in frame"
+        : info.hailoError;
+    return `Person test: — (Hailo: ${hint})`;
+  }
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
   return "Person test: no person in frame";
@@ -1545,6 +1557,7 @@ export default function App() {
                 faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
+                personDetectionSource: msg.person_detection_source || null,
                 backend: msg.backend || null,
                 status: msg.status || null,
                 bufferAgeMs:

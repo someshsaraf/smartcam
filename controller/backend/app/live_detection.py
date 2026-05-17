@@ -304,6 +304,7 @@ class _CameraWorker(threading.Thread):
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
+                    "person_detection_source": meta.get("person_detection_source"),
                 }
             )
             if person_detected and not self._prev_person_detected:
