@@ -237,6 +237,9 @@ def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
 
 def remove_invalid_mp4(path: Path) -> None:
     """Delete corrupt or non-iOS-playable MP4 if present."""
+    from .recording_thumbnails import remove_recording_thumbnail
+
+    remove_recording_thumbnail(path)
     try:
         if path.is_file() and not mp4_ios_playable(path):
             path.unlink()

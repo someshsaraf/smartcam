@@ -100,6 +100,7 @@ class MqttRecordingBridge:
         self._hub = RecordingWsHub()
         self._lock = threading.Lock()
         self._state: dict[int, dict[str, Any]] = {}
+        self._active_clip_rids: dict[int, set[str]] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._client: Optional[mqtt.Client] = None
@@ -174,11 +175,18 @@ class MqttRecordingBridge:
             return
 
         status = str(payload.get("status", "")).strip()
+        rid = str(payload.get("recording_id") or "").strip()
         with self._lock:
             prev = self._state.get(cid, {})
+            clip_refs = self._active_clip_rids.setdefault(cid, set())
             if status == "Stop":
+                if rid:
+                    clip_refs.discard(rid)
+                else:
+                    clip_refs.clear()
+                recording_on = len(clip_refs) > 0
                 self._state[cid] = {
-                    "recording": False,
+                    "recording": recording_on,
                     "status": "Stop",
                     "recording_id": payload.get("recording_id"),
                     "timestamp": payload.get("timestamp"),
@@ -186,8 +194,11 @@ class MqttRecordingBridge:
                     "local_path": payload.get("local_path"),
                 }
             elif status == "Start":
+                if rid:
+                    clip_refs.add(rid)
                 self._state[cid] = {
-                    "recording": self._recording_active_for_camera(cid, status, payload),
+                    "recording": self._recording_active_for_camera(cid, status, payload)
+                    or len(clip_refs) > 0,
                     "status": status,
                     "recording_id": payload.get("recording_id"),
                     "timestamp": payload.get("timestamp"),

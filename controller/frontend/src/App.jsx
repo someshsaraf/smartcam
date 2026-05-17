@@ -79,6 +79,20 @@ function personDetections(faces) {
   );
 }
 
+/** Format model score 0–1 as percentage string. */
+function formatConfidencePct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return n <= 1 ? `${Math.round(n * 1000) / 10}%` : `${n.toFixed(1)}%`;
+}
+
+/** Detection confidence for overlay label (backend sends 0–1). */
+function formatDetectionLabel(det) {
+  const score = formatConfidencePct(det?.score);
+  const label = det?.label ? String(det.label) : "person";
+  return score !== "—" ? `${label} ${score}` : label;
+}
+
 function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
   const [layout, setLayout] = useState(null);
   const people = personDetections(faces);
@@ -135,6 +149,7 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
         const topPct = (y / layout.containerH) * 100;
         const wPct = (w / layout.containerW) * 100;
         const hPct = (h / layout.containerH) * 100;
+        const label = formatDetectionLabel(f);
         return (
           <div
             key={`${i}-${leftPct}-${topPct}`}
@@ -145,7 +160,13 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
               width: `${wPct}%`,
               height: `${hPct}%`,
             }}
-          />
+          >
+            {label ? (
+              <span className="absolute left-0 bottom-full mb-0.5 max-w-[8rem] truncate rounded px-1 py-px text-[10px] font-mono font-semibold leading-tight text-blue-100 bg-black/80 border border-blue-500/40">
+                {label}
+              </span>
+            ) : null}
+          </div>
         );
       })}
     </div>
@@ -268,12 +289,25 @@ function recordingFileUrl(camId, name, edgeBaseUrl, cameras, opts = {}) {
   return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}`;
 }
 
-/** First-frame preview from clip metadata (same-origin API). */
-function RecordingThumbnail({ src, className = "" }) {
-  const ref = useRef(null);
+function recordingThumbnailUrl(camId, name) {
+  if (!isSetCameraId(camId) || !name) return "";
+  return `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}/thumbnail`;
+}
+
+/** JPEG preview from saved thumbnail; falls back to video metadata seek if missing. */
+function RecordingThumbnail({ camId, name, videoFallbackSrc, className = "" }) {
+  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const videoRef = useRef(null);
+  const thumbSrc = recordingThumbnailUrl(camId, name);
+
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    setUseVideoFallback(false);
+  }, [camId, name, thumbSrc]);
+
+  useEffect(() => {
+    if (useVideoFallback) return undefined;
+    const el = videoRef.current;
+    if (!el) return undefined;
     const seek = () => {
       const d = el.duration;
       const t = Number.isFinite(d) && d > 0 ? Math.min(0.5, d * 0.05) : 0.1;
@@ -286,11 +320,31 @@ function RecordingThumbnail({ src, className = "" }) {
     el.addEventListener("loadedmetadata", seek);
     if (el.readyState >= 1) seek();
     return () => el.removeEventListener("loadedmetadata", seek);
-  }, [src]);
+  }, [useVideoFallback, videoFallbackSrc]);
+
+  if (!useVideoFallback && thumbSrc) {
+    return (
+      <img
+        src={thumbSrc}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={() => {
+          if (!preferNativeHlsPlayback()) setUseVideoFallback(true);
+        }}
+        className={className}
+      />
+    );
+  }
+
+  if (!videoFallbackSrc) {
+    return <div className={`bg-gray-900 ${className}`} aria-hidden />;
+  }
+
   return (
     <video
-      ref={ref}
-      src={src}
+      ref={videoRef}
+      src={videoFallbackSrc}
       preload="metadata"
       muted
       playsInline
@@ -450,8 +504,10 @@ function EventsPanel({
   playingClip,
   onPlayClip,
   onClearPlay,
+  variant = "default",
   className = "",
 }) {
+  const isSidebar = variant === "sidebar";
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -594,12 +650,22 @@ function EventsPanel({
 
   return (
     <div
-      className={`rounded-xl border border-gray-800 bg-[#070c16] flex flex-col min-h-0 ${className}`}
+      className={`flex flex-col min-h-0 ${
+        isSidebar
+          ? "bg-transparent"
+          : "rounded-xl border border-gray-800 bg-[#070c16]"
+      } ${className}`}
     >
-      <div className="shrink-0 px-3 py-2 border-b border-gray-800 space-y-2">
+      <div
+        className={`shrink-0 space-y-2 ${
+          isSidebar ? "px-0 py-2 border-b border-gray-800" : "px-3 py-2 border-b border-gray-800"
+        }`}
+      >
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-gray-100">Events</h2>
+            <h2 className={`font-semibold text-gray-100 ${isSidebar ? "text-xs" : "text-sm"}`}>
+              Events
+            </h2>
             <p className="text-[10px] text-gray-500 truncate">
               {cameraName || `Camera ${cameraId}`}
               {filterActive ? " · filtered" : ""}
@@ -626,32 +692,42 @@ function EventsPanel({
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
-          <label className="text-gray-500 col-span-2">From</label>
+        <div
+          className={`text-[10px] ${isSidebar ? "flex flex-col gap-1.5" : "grid grid-cols-2 gap-x-2 gap-y-1"}`}
+        >
+          <label className={`text-gray-500 ${isSidebar ? "" : "col-span-2"}`}>From</label>
           <input
             type="date"
             value={filterFromDate}
             onChange={(e) => setFilterFromDate(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
           <input
             type="time"
             value={filterFromTime}
             onChange={(e) => setFilterFromTime(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
-          <label className="text-gray-500 col-span-2">To</label>
+          <label className={`text-gray-500 ${isSidebar ? "mt-0.5" : "col-span-2"}`}>To</label>
           <input
             type="date"
             value={filterToDate}
             onChange={(e) => setFilterToDate(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
           <input
             type="time"
             value={filterToTime}
             onChange={(e) => setFilterToTime(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
+              isSidebar ? "w-full" : ""
+            }`}
           />
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -678,7 +754,11 @@ function EventsPanel({
         </div>
         {filterError ? <p className="text-[10px] text-red-400">{filterError}</p> : null}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+      <div
+        className={`flex-1 min-h-0 overflow-y-auto space-y-1 ${
+          isSidebar ? "px-0 py-2" : "p-2"
+        }`}
+      >
         {events.length === 0 ? (
           <p className="text-xs text-gray-500 p-2">
             {filterActive ? "No events in this date/time range." : "No events yet for this camera."}
@@ -724,9 +804,17 @@ function EventsPanel({
                         : "No linked recording"
                   }
                 >
-                  <div className="flex justify-between gap-2 items-start">
+                  <div
+                    className={
+                      isSidebar
+                        ? "flex flex-col gap-0.5 items-start"
+                        : "flex justify-between gap-2 items-start w-full"
+                    }
+                  >
                     <span className="font-medium text-indigo-300">{formatEventType(ev.event_type)}</span>
-                    <span className="text-gray-500 shrink-0">{formatEventTime(ev.ts)}</span>
+                    <span className={`text-gray-500 ${isSidebar ? "text-[9px]" : "shrink-0"}`}>
+                      {formatEventTime(ev.ts)}
+                    </span>
                   </div>
                   {clip ? (
                     <p className="text-gray-400 font-mono text-[10px] mt-0.5 truncate">{clip.name}</p>
@@ -1133,7 +1221,9 @@ function RecordingsTimeline({
                         title="Play clip"
                       >
                         <RecordingThumbnail
-                          src={url}
+                          camId={r.camId}
+                          name={r.name}
+                          videoFallbackSrc={url}
                           className="w-full h-full object-cover pointer-events-none"
                         />
                       </button>
@@ -1213,23 +1303,36 @@ function formatPersonDebugLine(info, wsOpen, system) {
   const hailoErr = info.hailoError || system?.hailo_error || null;
   const n =
     typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) return `Person test: YES — ${n} person(s) (≥90%)`;
+  if (n > 0) {
+    const streak = typeof info.personTriggerStreak === "number" ? info.personTriggerStreak : 0;
+    const need =
+      typeof info.personTriggerMinFrames === "number" ? info.personTriggerMinFrames : 3;
+    const score =
+      typeof info.personMaxScore === "number" ? info.personMaxScore : null;
+    const recThr =
+      typeof info.personRecordThreshold === "number"
+        ? info.personRecordThreshold
+        : typeof info.personDisplayThreshold === "number"
+          ? info.personDisplayThreshold
+          : 0.9;
+    const scoreTxt = score != null ? formatConfidencePct(score) : "?";
+    const thrTxt = formatConfidencePct(recThr);
+    if (info.personCaptureBusy) {
+      return `Person test: YES — ${n} @ ${scoreTxt} · recording (${thrTxt} to trigger)`;
+    }
+    if (streak >= need && info.personRecordEligible) {
+      return `Person test: YES — ${n} @ ${scoreTxt} · triggering clip`;
+    }
+    if (streak > 0) {
+      const recOk = info.personRecordEligible ? "ok" : `need ${thrTxt}`;
+      return `Person test: YES — ${n} @ ${scoreTxt} · arming ${streak}/${need} (${recOk})`;
+    }
+    return `Person test: YES — ${n} @ ${scoreTxt} · arming 0/${need} (need ${thrTxt} to record)`;
+  }
   if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
   const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
   if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
   return "Person test: no person in frame";
-}
-
-/** Detection confidence for overlay label (backend sends 0–1). */
-function formatDetectionLabel(det) {
-  const n = Number(det?.score);
-  const score = Number.isFinite(n)
-    ? n <= 1
-      ? `${Math.round(n * 1000) / 10}%`
-      : n.toFixed(2)
-    : "";
-  const label = det?.label ? String(det.label) : "face";
-  return score ? `${label} ${score}` : label;
 }
 
 function LiveTile({
@@ -1559,7 +1662,7 @@ function LiveTile({
       {!isThumb ? (
       <div className="mb-1 space-y-0.5">
         <p
-          className={`text-[10px] font-mono leading-snug hidden sm:block ${
+          className={`text-[10px] font-mono leading-snug ${
             personDebugPositive
               ? "text-blue-300 font-semibold"
               : personDebugLine.includes("—") ||
@@ -1734,7 +1837,11 @@ export default function App() {
     quality: "medium",
     flip_180: false,
   });
-  const [connectionForm, setConnectionForm] = useState({ url: "", edge_base_url: "" });
+  const [connectionForm, setConnectionForm] = useState({
+    name: "",
+    url: "",
+    edge_base_url: "",
+  });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
@@ -1794,6 +1901,7 @@ export default function App() {
           name: r.name,
           size: r.size ?? 0,
           mtime: r.mtime ?? 0,
+          hasThumbnail: Boolean(r.hasThumbnail),
         }));
       flat.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
       setAllRecordings(flat);
@@ -2023,6 +2131,8 @@ export default function App() {
                 ? msg.person_count
                 : countPersonDetections(faces);
             const personDetected = Boolean(msg.person_detected) || personCount > 0;
+            const captureBusy = Boolean(msg.person_capture_busy);
+            const recordEligible = Boolean(msg.person_record_eligible);
             setDetectionsById((prev) => ({
               ...prev,
               [id]: {
@@ -2030,6 +2140,26 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected,
+                personMaxScore:
+                  typeof msg.person_max_score === "number" ? msg.person_max_score : null,
+                personDisplayThreshold:
+                  typeof msg.person_display_threshold === "number"
+                    ? msg.person_display_threshold
+                    : null,
+                personRecordThreshold:
+                  typeof msg.person_record_threshold === "number"
+                    ? msg.person_record_threshold
+                    : null,
+                personCaptureBusy: captureBusy,
+                personRecordEligible: recordEligible,
+                personTriggerStreak:
+                  typeof msg.person_trigger_streak === "number"
+                    ? msg.person_trigger_streak
+                    : 0,
+                personTriggerMinFrames:
+                  typeof msg.person_trigger_min_frames === "number"
+                    ? msg.person_trigger_min_frames
+                    : 3,
                 faceCount: typeof msg.face_count === "number" ? msg.face_count : faces.length,
                 error: msg.error || null,
                 hailoError: msg.hailo_error || null,
@@ -2115,6 +2245,7 @@ export default function App() {
   const openSettings = async (cam) => {
     setSettingsCam(cam);
     setConnectionForm({
+      name: cam.name || "",
       url: cam.url || "",
       edge_base_url: cam.edge_base_url || "",
     });
@@ -2153,8 +2284,16 @@ export default function App() {
     setSaving(true);
     try {
       const connBody = {};
+      const nameTrim = String(connectionForm.name || "").trim();
       const urlTrim = String(connectionForm.url || "").trim();
       const edgeTrim = String(connectionForm.edge_base_url || "").trim();
+      if (!nameTrim) {
+        alert("Camera name cannot be empty.");
+        return;
+      }
+      if (nameTrim !== (settingsCam.name || "").trim()) {
+        connBody.name = nameTrim;
+      }
       if (urlTrim && urlTrim !== (settingsCam.url || "")) {
         connBody.url = urlTrim;
       }
@@ -2170,7 +2309,7 @@ export default function App() {
         });
         if (!connRes.ok) {
           const err = await connRes.json().catch(() => ({}));
-          alert(err.detail || "Failed to update stream URL");
+          alert(err.detail || "Failed to update camera");
           return;
         }
       }
@@ -2351,7 +2490,8 @@ export default function App() {
       recording={
         (c.settings?.recording_mode || "motion") === "off"
           ? manualRecordingById[c.id] === true
-          : recordingActiveForCam(recordingById, c.id)
+          : recordingActiveForCam(recordingById, c.id) ||
+            motionClipIsActive(motionClipById[c.id])
       }
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}
@@ -2377,12 +2517,12 @@ export default function App() {
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
       <aside
-        className={`bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto border-r border-gray-800 min-h-0 ${
+        className={`bg-[#070c16] p-3 flex flex-col gap-3 border-r border-gray-800 min-h-0 ${
           isMobile
             ? mobileManageOpen
-              ? "flex flex-1 w-full fixed inset-0 z-40"
+              ? "flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto"
               : "hidden"
-            : "hidden md:flex w-56 lg:w-60 shrink-0"
+            : "hidden md:flex w-60 lg:w-72 shrink-0 overflow-hidden"
         }`}
       >
         {isMobile && mobileManageOpen ? (
@@ -2394,6 +2534,11 @@ export default function App() {
             ← Back to live
           </button>
         ) : null}
+        <div
+          className={`flex flex-col gap-3 ${
+            !isMobile ? "shrink-0 overflow-y-auto max-h-[28vh] min-h-0" : ""
+          }`}
+        >
         <h1 className="text-lg font-bold">Vigilance</h1>
         <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
 
@@ -2515,9 +2660,15 @@ export default function App() {
             ))}
           </div>
         ) : null}
+        </div>
 
-        <div>
-          <h3 className="text-xs text-gray-400 mb-2">Detected Cameras</h3>
+        <div className={isMobile ? "" : "shrink-0 flex flex-col"}>
+          <h3 className="text-xs text-gray-400 mb-2 shrink-0">Detected Cameras</h3>
+          <div
+            className={
+              isMobile ? "" : "min-h-[2.5rem] max-h-[11.5rem] overflow-y-auto shrink-0"
+            }
+          >
           {cams.map((c) => (
             <div
               key={c.id}
@@ -2564,7 +2715,22 @@ export default function App() {
               </div>
             </div>
           ))}
+          </div>
         </div>
+
+        {!isMobile ? (
+          <EventsPanel
+            variant="sidebar"
+            cameraId={activeCameraId}
+            cameraName={activeCamera?.name ?? ""}
+            recordings={recordingsForActiveCamera}
+            cameras={cams}
+            playingClip={playingClip}
+            onPlayClip={setPlayingClip}
+            onClearPlay={() => setPlayingClip(null)}
+            className="flex-1 min-h-0 mt-1 pt-1 border-t border-gray-800"
+          />
+        ) : null}
       </aside>
 
       <div
@@ -2713,7 +2879,7 @@ export default function App() {
         />
         )}
 
-        {(!isMobile || showEventsPanel) && (
+        {isMobile && showEventsPanel ? (
           <EventsPanel
             cameraId={activeCameraId}
             cameraName={activeCamera?.name ?? ""}
@@ -2722,11 +2888,9 @@ export default function App() {
             playingClip={playingClip}
             onPlayClip={setPlayingClip}
             onClearPlay={() => setPlayingClip(null)}
-            className={
-              isMobile ? "flex-1 min-h-0 m-2" : "shrink-0 h-64 mx-2 mb-2"
-            }
+            className="flex-1 min-h-0 m-2"
           />
-        )}
+        ) : null}
 
         {isMobile ? (
           <MobileBottomNav
@@ -2753,8 +2917,8 @@ export default function App() {
           <div className="bg-[#111827] rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 shadow-xl border border-gray-800">
             <div className="flex justify-between items-start mb-4">
               <div>
-                <h2 className="text-lg font-semibold">{settingsCam.name}</h2>
-                <p className="text-xs text-gray-400">{settingsCam.location}</p>
+                <h2 className="text-lg font-semibold">Camera settings</h2>
+                <p className="text-xs text-gray-400">{settingsCam.location || "No location"}</p>
                 {settingsCam.edge_base_url ? (
                   <p className="text-[10px] text-amber-400/90 mt-1">
                     Edge {settingsCam.edge_base_url} · MQTT id{" "}
@@ -2776,6 +2940,20 @@ export default function App() {
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Camera name</label>
+                <input
+                  type="text"
+                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                  value={connectionForm.name}
+                  onChange={(e) =>
+                    setConnectionForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  placeholder="e.g. Front door"
+                  maxLength={120}
+                />
+              </div>
+
               <div>
                 <label className="block text-xs text-gray-400 mb-1">RTSP URL (MediaMTX pull source)</label>
                 <input

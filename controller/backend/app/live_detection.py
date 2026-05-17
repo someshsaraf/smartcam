@@ -17,7 +17,8 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
-from .motion_recording import handle_person_detected
+from .hailo_yolov8_backend import person_display_confidence, person_record_confidence
+from .motion_recording import handle_person_detected, motion_capture_busy
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -55,12 +56,35 @@ def _person_hold_sec() -> float:
     return _parse_float_env("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
 
 
+def _person_trigger_min_frames() -> int:
+    """Consecutive person-positive inference frames required before starting a clip."""
+    return _parse_positive_int("SMARTCAM_PERSON_TRIGGER_MIN_FRAMES", 5, 1, 30)
+
+
 def _people_from_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         f
         for f in faces
         if isinstance(f, dict) and str(f.get("label", "")).lower() == "person"
     ]
+
+
+def _max_person_score(people: list[dict[str, Any]]) -> float:
+    best = 0.0
+    for p in people:
+        if not isinstance(p, dict):
+            continue
+        try:
+            best = max(best, float(p.get("score", 0.0)))
+        except (TypeError, ValueError):
+            continue
+    return best
+
+
+def _people_eligible_for_recording(people: list[dict[str, Any]]) -> bool:
+    """True when at least one person box meets the recording confidence threshold."""
+    rec_conf = person_record_confidence()
+    return _max_person_score(people) >= rec_conf
 
 
 class _DelayedFrameBuffer:
@@ -174,6 +198,8 @@ class _CameraWorker(threading.Thread):
         self._person_hold_sec = _person_hold_sec()
         self._held_snapshot: Optional[tuple[float, list[dict[str, Any]], list[dict[str, Any]]]] = None
         self._prev_person_detected = False
+        self._person_streak = 0
+        self._person_trigger_min_frames = _person_trigger_min_frames()
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -292,6 +318,17 @@ class _CameraWorker(threading.Thread):
             meta = inference_debug_status()
             last_send = now
             person_detected = len(people) > 0
+            max_score = _max_person_score(people)
+            record_eligible = max_score >= person_record_confidence()
+            edge = camera_store.edge_base_url(self._cam)
+            capture_busy = motion_capture_busy(cid, edge=edge) if edge else False
+            # Arm on visible person; require record threshold only on trigger frame.
+            if capture_busy:
+                self._person_streak = 0
+            elif person_detected:
+                self._person_streak += 1
+            else:
+                self._person_streak = 0
             self._hub.broadcast_json(
                 {
                     "type": "detections",
@@ -301,18 +338,32 @@ class _CameraWorker(threading.Thread):
                     "face_count": len(faces),
                     "person_count": len(people),
                     "person_detected": person_detected,
+                    "person_max_score": round(max_score, 4),
+                    "person_display_threshold": person_display_confidence(),
+                    "person_record_threshold": person_record_confidence(),
+                    "person_record_eligible": record_eligible and not capture_busy,
+                    "person_capture_busy": capture_busy,
+                    "person_trigger_streak": self._person_streak,
+                    "person_trigger_min_frames": self._person_trigger_min_frames,
                     "backend": meta.get("backend"),
                     "hailo_ready": meta.get("hailo_ready"),
                     "hailo_error": meta.get("hailo_error") or infer_error,
                     "person_detection_source": meta.get("person_detection_source"),
                 }
             )
-            if person_detected:
+            if (
+                not capture_busy
+                and record_eligible
+                and self._person_streak >= self._person_trigger_min_frames
+            ):
                 handle_person_detected(
                     cid,
                     tags=["person"],
                     person_count=len(people),
+                    person_detected_at=time.time(),
+                    detection_frame=infer_frame,
                 )
+                self._person_streak = 0
             self._prev_person_detected = person_detected
 
         if cap is not None:

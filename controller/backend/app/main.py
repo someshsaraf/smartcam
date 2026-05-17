@@ -64,6 +64,11 @@ from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     mp4_ios_playable,
     mp4_probe_ok,
 )
+from surveillance_shared.recording_thumbnails import (  # noqa: E402
+    ensure_recording_thumbnail,
+    recording_thumbnail_path,
+    remove_recording_thumbnail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +151,31 @@ def _edge_recording_cache_key(edge: str, filename: str) -> str:
     return f"{edge.rstrip('/')}\0{filename}"
 
 
+def _edge_http_error(edge: str, exc: Exception) -> HTTPException:
+    """Map httpx connectivity failures to a client-visible 502/504."""
+    base = str(edge or "").strip().rstrip("/") or "(no edge URL)"
+    if isinstance(exc, httpx.ConnectError):
+        return HTTPException(
+            status_code=502,
+            detail=(
+                f"Cannot reach edge camera at {base}. "
+                "Check that the Pi edge agent is running and edge_base_url in camera settings is correct."
+            ),
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(
+            status_code=504,
+            detail=f"Edge camera at {base} timed out.",
+        )
+    if isinstance(exc, httpx.HTTPError):
+        return HTTPException(status_code=502, detail=f"Edge request failed ({base}): {exc}")
+    return HTTPException(status_code=502, detail=str(exc))
+
+
 async def _ensure_edge_recording_mobile_playable(edge: str, filename: str) -> None:
     """
     Ensure edge MP4 is iOS/Android-safe before proxying (edge GET returns 422 otherwise).
-  """
+    """
     key = _edge_recording_cache_key(edge, filename)
     with _EDGE_MOBILE_READY_LOCK:
         if key in _EDGE_MOBILE_READY:
@@ -161,42 +187,47 @@ async def _ensure_edge_recording_mobile_playable(edge: str, filename: str) -> No
     probe_timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
     finalize_timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 
-    async with httpx.AsyncClient(timeout=probe_timeout) as client:
-        r = await client.get(file_url, headers={"Range": "bytes=0-1"})
-        if r.status_code in (200, 206):
-            await r.aclose()
-            with _EDGE_MOBILE_READY_LOCK:
-                _EDGE_MOBILE_READY.add(key)
-            return
-        if r.status_code != 422:
-            body = await r.aread()
-            await r.aclose()
-            detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
-            raise HTTPException(status_code=r.status_code, detail=detail)
+    try:
+        async with httpx.AsyncClient(timeout=probe_timeout) as client:
+            r = await client.get(file_url, headers={"Range": "bytes=0-1"})
+            if r.status_code in (200, 206):
+                await r.aclose()
+                with _EDGE_MOBILE_READY_LOCK:
+                    _EDGE_MOBILE_READY.add(key)
+                return
+            if r.status_code != 422:
+                body = await r.aread()
+                await r.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r.reason_phrase
+                raise HTTPException(status_code=r.status_code, detail=detail)
 
-    async with httpx.AsyncClient(timeout=finalize_timeout) as client:
-        fr = await client.post(finalize_url)
-        if fr.status_code >= 400:
-            detail = fr.text
-            try:
-                body = fr.json()
-                if isinstance(body, dict) and body.get("detail") is not None:
-                    detail = str(body["detail"])
-            except Exception:
-                pass
-            raise HTTPException(status_code=fr.status_code, detail=detail)
+        async with httpx.AsyncClient(timeout=finalize_timeout) as client:
+            fr = await client.post(finalize_url)
+            if fr.status_code >= 400:
+                detail = fr.text
+                try:
+                    body = fr.json()
+                    if isinstance(body, dict) and body.get("detail") is not None:
+                        detail = str(body["detail"])
+                except Exception:
+                    pass
+                raise HTTPException(status_code=fr.status_code, detail=detail)
 
-    async with httpx.AsyncClient(timeout=probe_timeout) as client:
-        r2 = await client.get(file_url, headers={"Range": "bytes=0-1"})
-        if r2.status_code not in (200, 206):
-            body = await r2.aread()
+        async with httpx.AsyncClient(timeout=probe_timeout) as client:
+            r2 = await client.get(file_url, headers={"Range": "bytes=0-1"})
+            if r2.status_code not in (200, 206):
+                body = await r2.aread()
+                await r2.aclose()
+                detail = body.decode(errors="replace")[:500] if body else r2.reason_phrase
+                raise HTTPException(status_code=r2.status_code, detail=detail)
             await r2.aclose()
-            detail = body.decode(errors="replace")[:500] if body else r2.reason_phrase
-            raise HTTPException(status_code=r2.status_code, detail=detail)
-        await r2.aclose()
 
-    with _EDGE_MOBILE_READY_LOCK:
-        _EDGE_MOBILE_READY.add(key)
+        with _EDGE_MOBILE_READY_LOCK:
+            _EDGE_MOBILE_READY.add(key)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _edge_http_error(edge, e) from e
 
 
 async def _stream_edge_recording_body(
@@ -339,7 +370,7 @@ def get_selected_camera_endpoint():
 
 @app.patch("/cameras/{cam_id}")
 def patch_camera(cam_id: int, body: CameraPatch):
-    """Update RTSP URL / edge HTTP base (e.g. when a Pi 4 gets a new LAN IP)."""
+    """Update name, RTSP URL, or edge HTTP base (e.g. when a Pi 4 gets a new LAN IP)."""
     patch = body.model_dump(exclude_unset=True)
     if not patch:
         c = camera_store.get_camera(cam_id)
@@ -915,6 +946,7 @@ def list_all_recordings_endpoint(
                 "name": r["name"],
                 "size": r["size"],
                 "mtime": r["mtime"],
+                "hasThumbnail": bool(r.get("has_thumbnail")),
             }
         )
     return {
@@ -962,6 +994,52 @@ def list_recordings_endpoint(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@app.get("/recordings/{cam_id}/files/{filename}/thumbnail")
+async def get_recording_thumbnail(cam_id: int, filename: str):
+    """JPEG clip preview (edge or local disk; generated on demand if missing)."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    if not _SAFE_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}/thumbnail"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(url)
+                if r.status_code >= 400:
+                    detail = r.text[:500] if r.text else r.reason_phrase
+                    raise HTTPException(status_code=r.status_code, detail=detail)
+                return Response(
+                    content=r.content,
+                    media_type=r.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _edge_http_error(edge, e) from e
+
+    mp4 = _recordings_dir(cam_id) / filename
+    if not mp4.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    if not mp4_probe_ok(mp4):
+        raise HTTPException(status_code=422, detail="recording incomplete or corrupt")
+    st = c.get("settings") or {}
+    pre_s = int(st.get("pre_record_seconds", 10))
+    seek = max(0.1, float(max(1, pre_s)) - 0.5)
+    if not ensure_recording_thumbnail(mp4, seek_seconds=seek):
+        raise HTTPException(status_code=404, detail="thumbnail unavailable")
+    thumb = recording_thumbnail_path(mp4)
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/recordings/{cam_id}/files/{filename}")
 async def get_recording_file(cam_id: int, filename: str, request: Request):
     """Stream clip bytes (200/206). Never redirect — Safari/iOS breaks on 307 for video."""
@@ -973,8 +1051,13 @@ async def get_recording_file(cam_id: int, filename: str, request: Request):
 
     edge = camera_store.edge_base_url(c)
     if edge:
-        await _ensure_edge_recording_mobile_playable(edge, filename)
-        url = f"{edge.rstrip('/')}/recordings/files/{filename}"
+        try:
+            await _ensure_edge_recording_mobile_playable(edge, filename)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _edge_http_error(edge, e) from e
+        url = f"{edge.rstrip('/')}/recordings/files/{filename}?playback=1"
         forward_headers: dict[str, str] = {}
         range_h = request.headers.get("range")
         if range_h:
@@ -1154,6 +1237,7 @@ def delete_recording_file(cam_id: int, filename: str):
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     try:
+        remove_recording_thumbnail(path)
         path.unlink()
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1172,6 +1256,7 @@ def _delete_all_local(cam_id: int) -> dict[str, Any]:
             if not _SAFE_NAME.match(p.name):
                 continue
             try:
+                remove_recording_thumbnail(p)
                 p.unlink()
                 deleted += 1
             except OSError:
