@@ -55,6 +55,11 @@ def _person_hold_sec() -> float:
     return _parse_float_env("SMARTCAM_PERSON_HOLD_SEC", 2.5, 0.0, 30.0)
 
 
+def _person_trigger_min_frames() -> int:
+    """Consecutive person-positive inference frames required before starting a clip."""
+    return _parse_positive_int("SMARTCAM_PERSON_TRIGGER_MIN_FRAMES", 5, 1, 30)
+
+
 def _people_from_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         f
@@ -174,6 +179,8 @@ class _CameraWorker(threading.Thread):
         self._person_hold_sec = _person_hold_sec()
         self._held_snapshot: Optional[tuple[float, list[dict[str, Any]], list[dict[str, Any]]]] = None
         self._prev_person_detected = False
+        self._person_streak = 0
+        self._person_trigger_min_frames = _person_trigger_min_frames()
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -308,12 +315,18 @@ class _CameraWorker(threading.Thread):
                 }
             )
             if person_detected:
-                handle_person_detected(
-                    cid,
-                    tags=["person"],
-                    person_count=len(people),
-                    detection_frame=infer_frame,
-                )
+                self._person_streak += 1
+                if self._person_streak >= self._person_trigger_min_frames:
+                    handle_person_detected(
+                        cid,
+                        tags=["person"],
+                        person_count=len(people),
+                        person_detected_at=time.time(),
+                        detection_frame=infer_frame,
+                    )
+                    self._person_streak = 0
+            else:
+                self._person_streak = 0
             self._prev_person_detected = person_detected
 
         if cap is not None:

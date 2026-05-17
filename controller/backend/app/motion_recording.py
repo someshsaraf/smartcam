@@ -127,13 +127,18 @@ def _trigger_motion_clip(
     *,
     tags: list[str],
     source: str,
+    person_detected_at: float,
     detection_frame: Optional[Any] = None,
 ) -> dict[str, Any]:
     pre = int(settings.get("pre_record_seconds", 10))
     post = int(settings.get("post_record_seconds", 50))
+    pre = max(1, min(120, pre))
+    post = max(1, min(600, post))
+    duration = pre + post
     body: dict[str, Any] = {
-        "pre_record_seconds": pre,
-        "post_record_seconds": post,
+        "person_detected_at": float(person_detected_at),
+        "duration_seconds": duration,
+        "pre_roll_seconds": pre,
         "objects_detected": tags,
         "source": source,
     }
@@ -168,6 +173,7 @@ def handle_person_detected(
     tags: Optional[list[str]] = None,
     person_count: int = 1,
     source: str = "person_detection",
+    person_detected_at: Optional[float] = None,
     detection_frame: Optional[Any] = None,
 ) -> None:
     """
@@ -207,12 +213,18 @@ def handle_person_detected(
                 return
             _last_trigger_by_cam[cam_id] = now
 
+        detected_at = (
+            float(person_detected_at)
+            if person_detected_at is not None
+            else time.time()
+        )
         result = _trigger_motion_clip(
             cam_id,
             edge,
             settings,
             tags=tag_list,
             source=source,
+            person_detected_at=detected_at,
             detection_frame=detection_frame,
         )
         if result.get("accepted"):
@@ -226,6 +238,8 @@ def handle_person_detected(
                 detail={
                     "pre_seconds": st.get("pre_seconds"),
                     "post_seconds": st.get("post_seconds"),
+                    "duration_seconds": st.get("duration_seconds"),
+                    "person_detected_at": detected_at,
                     "objects_detected": tag_list,
                     "source": source,
                 },

@@ -1,5 +1,5 @@
 """
-Pi 4 edge recording worker: motion (SSD + clips) or continuous (ffmpeg segment).
+Pi 4 edge recording worker: controller-triggered motion clips (rolling buffer) or continuous ffmpeg.
 Publishes MQTT JSON on ``surveillance/cameras/{id}/recording``.
 """
 
@@ -24,7 +24,6 @@ from .agent_debug import agent_log
 
 import cv2
 
-from surveillance_shared.detector import Detector  # noqa: E402
 from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     finalize_mp4_for_mobile,
     h264_mobile_fragmented_mp4_args,
@@ -65,8 +64,26 @@ SEGMENT_SECONDS = 600
 # Match LocalPublisher PRESETS (local_publisher.py) so RTSP reads keep up with the
 # rpiCamera encoder; reading slower causes MediaMTX "reader is too slow, discarding frames".
 QUALITY_CAPTURE_FPS = {"low": 15.0, "medium": 25.0, "high": 25.0}
-DETECT_EVERY_N_FRAMES = 3
 COOLDOWN_SEC = 2.0
+_DEFAULT_MOTION_BUFFER_SEC = 30.0
+
+
+def _motion_buffer_seconds() -> float:
+    raw = os.environ.get("EDGE_MOTION_BUFFER_SECONDS", "30").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = _DEFAULT_MOTION_BUFFER_SEC
+    return max(10.0, min(120.0, v))
+
+
+def _motion_clock_skew_max_sec() -> float:
+    raw = os.environ.get("EDGE_MOTION_CLOCK_SKEW_MAX_SEC", "3").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 3.0
+    return max(0.5, min(30.0, v))
 
 
 def _utc_iso() -> str:
@@ -142,7 +159,7 @@ class EdgeRecorder:
         self._pm_buf_lock = threading.Lock()
         self._pm_active = False
         self._pm_status: dict[str, Any] = {}
-        self._pm_buf: collections.deque[bytes] = collections.deque()
+        self._pm_buf: collections.deque[tuple[float, bytes]] = collections.deque()
         self._pm_buffer_thread: Optional[threading.Thread] = None
         self._last_external_clip_trigger = 0.0
         self._external_clip_cooldown_until = 0.0
@@ -296,7 +313,7 @@ class EdgeRecorder:
             elif mode == "continuous":
                 self._run_continuous_session(st)
             else:
-                self._run_motion_session(st)
+                self._run_motion_idle_session()
             time.sleep(0.5)
 
     def _run_off_session(self) -> None:
@@ -360,6 +377,9 @@ class EdgeRecorder:
     def trigger_motion_clip(
         self,
         *,
+        person_detected_at: Optional[float] = None,
+        duration_seconds: Optional[int] = None,
+        pre_roll_seconds: Optional[int] = None,
         pre_seconds: Optional[int] = None,
         post_seconds: Optional[int] = None,
         objects_detected: Optional[list[str]] = None,
@@ -373,10 +393,28 @@ class EdgeRecorder:
                 **self.motion_clip_status(),
             }
 
-        pre_s = int(pre_seconds if pre_seconds is not None else settings.get("pre_record_seconds", 10))
-        post_s = int(post_seconds if post_seconds is not None else settings.get("post_record_seconds", 50))
+        pre_s = int(
+            pre_roll_seconds
+            if pre_roll_seconds is not None
+            else (pre_seconds if pre_seconds is not None else settings.get("pre_record_seconds", 10))
+        )
+        post_s = int(
+            post_seconds if post_seconds is not None else settings.get("post_record_seconds", 50)
+        )
         pre_s = max(1, min(120, pre_s))
         post_s = max(1, min(600, post_s))
+        duration_s = int(duration_seconds if duration_seconds is not None else (pre_s + post_s))
+        duration_s = max(pre_s + 1, min(600, duration_s))
+
+        detected_at = float(person_detected_at if person_detected_at is not None else time.time())
+        recv = time.time()
+        if abs(recv - detected_at) > _motion_clock_skew_max_sec():
+            print(
+                "[edge] motion clip: controller/edge clock skew",
+                round(abs(recv - detected_at), 2),
+                "s; using receive time for person_detected_at",
+            )
+            detected_at = recv
 
         tags: list[str] = []
         if isinstance(objects_detected, list):
@@ -417,13 +455,17 @@ class EdgeRecorder:
             self._last_external_clip_trigger = now
             rid = f"evt_{int(time.time() * 1000)}"
             self._pm_active = True
-            clip_end = now + float(pre_s) + float(post_s)
+            clip_start = detected_at - float(pre_s)
+            clip_end = clip_start + float(duration_s)
             self._pm_status = {
                 "active": True,
                 "recording_id": rid,
                 "phase": "starting",
                 "pre_seconds": pre_s,
-                "post_seconds": post_s,
+                "post_seconds": max(0, duration_s - pre_s),
+                "duration_seconds": duration_s,
+                "person_detected_at": detected_at,
+                "clip_start_at": clip_start,
                 "ends_at": clip_end,
                 "remaining_seconds": max(0, int(clip_end - now)),
                 "filename": None,
@@ -435,7 +477,7 @@ class EdgeRecorder:
 
         threading.Thread(
             target=self._start_external_motion_clip,
-            args=(rid, pre_s, post_s, tags),
+            args=(rid, detected_at, pre_s, duration_s, tags),
             name=f"motion-clip-{rid}",
             daemon=True,
         ).start()
@@ -444,17 +486,33 @@ class EdgeRecorder:
     def _start_external_motion_clip(
         self,
         rid: str,
-        pre_seconds: int,
-        post_seconds: int,
+        person_detected_at: float,
+        pre_roll_seconds: int,
+        duration_seconds: int,
         tags: list[str],
     ) -> None:
-        """Copy pre-roll and record clip off the HTTP thread (buffer copy can be large)."""
+        """Time-window clip off the HTTP thread (buffer slice can be large)."""
+        self._run_external_motion_clip(
+            rid,
+            person_detected_at,
+            pre_roll_seconds,
+            duration_seconds,
+            tags,
+        )
+
+    def _buffer_frames_in_range(self, start: float, until: float) -> list[bytes]:
+        if until < start:
+            return []
         with self._pm_buf_lock:
-            pre_frames = list(self._pm_buf)
-        self._run_external_motion_clip(rid, pre_frames, pre_seconds, post_seconds, tags)
+            frames = [blob for ts, blob in self._pm_buf if start <= ts <= until]
+        return frames
+
+    def _clear_motion_buffer(self) -> None:
+        with self._pm_buf_lock:
+            self._pm_buf.clear()
 
     def _run_motion_clip_buffer(self) -> None:
-        """Ring buffer for pre-roll when controller person detection triggers motion clips."""
+        """Rolling JPEG buffer (default 30s) for controller-triggered pre-roll."""
         cap: Optional[cv2.VideoCapture] = None
         while not self._stop.is_set():
             st = self.snapshot_settings()
@@ -464,10 +522,10 @@ class EdgeRecorder:
                     cap = None
                 time.sleep(0.5)
                 continue
-            pre_s = int(st.get("pre_record_seconds", 10))
             flip = bool(st.get("flip_180", False))
             fps = _fps_for_quality(st.get("quality"))
-            maxlen = max(1, int(pre_s * fps))
+            buffer_sec = _motion_buffer_seconds()
+            maxlen = max(1, int(buffer_sec * fps))
             period = 1.0 / fps
 
             if cap is None or not cap.isOpened():
@@ -488,15 +546,25 @@ class EdgeRecorder:
                 continue
 
             frame = _flip_if_needed(frame, flip)
-            enc_ok, jpg = cv2.imencode(
-                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
-            )
-            if enc_ok:
-                blob = jpg.tobytes()
-                with self._pm_buf_lock:
-                    if self._pm_buf.maxlen != maxlen:
-                        self._pm_buf = collections.deque(list(self._pm_buf)[-maxlen:], maxlen=maxlen)
-                    self._pm_buf.append(blob)
+            with self._pm_lock:
+                recording = self._pm_active
+            if not recording:
+                enc_ok, jpg = cv2.imencode(
+                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+                )
+                if enc_ok:
+                    now_ts = time.time()
+                    blob = jpg.tobytes()
+                    cutoff = now_ts - buffer_sec
+                    with self._pm_buf_lock:
+                        if self._pm_buf.maxlen != maxlen:
+                            self._pm_buf = collections.deque(
+                                list(self._pm_buf)[-maxlen:],
+                                maxlen=maxlen,
+                            )
+                        while self._pm_buf and self._pm_buf[0][0] < cutoff:
+                            self._pm_buf.popleft()
+                        self._pm_buf.append((now_ts, blob))
 
             elapsed = time.perf_counter() - loop_t0
             time.sleep(max(0.0, period - elapsed))
@@ -507,9 +575,9 @@ class EdgeRecorder:
     def _run_external_motion_clip(
         self,
         rid: str,
-        pre_jpegs: list[bytes],
-        pre_seconds: int,
-        post_seconds: int,
+        person_detected_at: float,
+        pre_roll_seconds: int,
+        duration_seconds: int,
         tags: list[str],
     ) -> None:
         ff = shutil.which("ffmpeg")
@@ -519,6 +587,9 @@ class EdgeRecorder:
         out_mp4 = out_dir / f"evt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         flip = bool(self.snapshot_settings().get("flip_180", False))
         read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
+        clip_start = float(person_detected_at) - float(pre_roll_seconds)
+        clip_end = clip_start + float(duration_seconds)
+        pre_jpegs = self._buffer_frames_in_range(clip_start, float(person_detected_at))
 
         try:
             if not ff:
@@ -541,12 +612,18 @@ class EdgeRecorder:
                 "H1",
                 "worker.py:_run_external_motion_clip",
                 "clip_start",
-                {"rid": rid, "pre_s": pre_seconds, "post_s": post_seconds},
+                {
+                    "rid": rid,
+                    "pre_roll_s": pre_roll_seconds,
+                    "duration_s": duration_seconds,
+                    "detected_at": person_detected_at,
+                    "buffered_frames": len(pre_jpegs),
+                },
             )
 
             cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
             _configure_rtsp_capture(cap)
-            end = time.time() + post_seconds
+            end = clip_end
             with self._pm_lock:
                 self._pm_status["phase"] = "post_roll"
                 self._pm_status["ends_at"] = end
@@ -584,7 +661,7 @@ class EdgeRecorder:
                 "H1",
                 "worker.py:_run_external_motion_clip",
                 "capture_stop_published",
-                {"rid": rid, "frames": idx, "post_s": post_seconds},
+                {"rid": rid, "frames": idx, "duration_s": duration_seconds},
             )
 
             if idx == 0:
@@ -632,7 +709,7 @@ class EdgeRecorder:
                 out_mp4,
                 detection_jpeg=detection_jpeg,
                 pre_jpegs=pre_jpegs,
-                pre_seconds=pre_seconds,
+                pre_seconds=pre_roll_seconds,
             )
 
             with self._pm_lock:
@@ -658,13 +735,15 @@ class EdgeRecorder:
                     "active": False,
                     "phase": "idle",
                     "remaining_seconds": 0,
-                    "pre_seconds": pre_seconds,
-                    "post_seconds": post_seconds,
+                    "pre_seconds": pre_roll_seconds,
+                    "post_seconds": max(0, duration_seconds - pre_roll_seconds),
+                    "duration_seconds": duration_seconds,
                     "recording_id": rid,
                     "filename": saved_fn,
                     "objects_detected": tags,
                 }
                 self._pm_active = False
+            self._clear_motion_buffer()
             try:
                 shutil.rmtree(tmp, ignore_errors=True)
             except Exception:
@@ -893,247 +972,11 @@ class EdgeRecorder:
             filename=stop_filename or None,
         )
 
-    def _run_motion_session(self, st: dict[str, Any]) -> None:
+    def _run_motion_idle_session(self) -> None:
+        """Motion mode: only the rolling buffer thread runs; clips come from the controller."""
         self._terminate_ffmpeg()
-        ff = shutil.which("ffmpeg")
-        if not ff:
-            time.sleep(5)
-            return
-
-        detector = Detector()
-        cap: Optional[cv2.VideoCapture] = None
-        last_clip_end = 0.0
-
         while not self._stop.is_set():
             cur = self.snapshot_settings()
-            if cur.get("recording_mode") == "continuous":
-                if cap is not None:
-                    cap.release()
+            if cur.get("recording_mode") != "motion":
                 return
-            if cur.get("recording_mode") == "off":
-                if cap is not None:
-                    cap.release()
-                    cap = None
-                return
-
-            if cap is None or not cap.isOpened():
-                cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
-                _configure_rtsp_capture(cap)
-
-            pre_s = int(cur.get("pre_record_seconds", 10))
-            post_s = int(cur.get("post_record_seconds", 50))
-            flip = bool(cur.get("flip_180", False))
-            capture_fps = _fps_for_quality(cur.get("quality"))
-            maxlen = max(1, int(pre_s * capture_fps))
-            buf: collections.deque[bytes] = collections.deque(maxlen=maxlen)
-            frame_i = 0
-
-            while not self._stop.is_set():
-                cur = self.snapshot_settings()
-                if cur.get("recording_mode") != "motion":
-                    break
-
-                if cap is None or not cap.isOpened():
-                    break
-
-                loop_t0 = time.perf_counter()
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    if cap is not None:
-                        cap.release()
-                    cap = None
-                    break
-
-                frame = _flip_if_needed(frame, flip)
-                enc_ok, jpg = cv2.imencode(
-                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
-                )
-                if not enc_ok:
-                    continue
-                buf.append(jpg.tobytes())
-
-                now = time.time()
-                interesting = False
-                tags: list[str] = []
-                if frame_i % DETECT_EVERY_N_FRAMES == 0:
-                    interesting, tags = detector.detect_interesting_with_tags(frame)
-                frame_i += 1
-
-                if interesting and (now - last_clip_end) >= COOLDOWN_SEC:
-                    pre_frames = list(buf)
-                    self._materialize_event(
-                        ff=ff,
-                        pre_jpegs=pre_frames,
-                        cap=cap,
-                        post_seconds=post_s,
-                        detector=detector,
-                        flip=flip,
-                        tags=tags,
-                    )
-                    last_clip_end = time.time()
-                    buf.clear()
-
-                capture_fps = _fps_for_quality(cur.get("quality"))
-                period = 1.0 / capture_fps
-                elapsed = time.perf_counter() - loop_t0
-                time.sleep(max(0.0, period - elapsed))
-
-    def _materialize_event(
-        self,
-        *,
-        ff: str,
-        pre_jpegs: list[bytes],
-        cap: cv2.VideoCapture,
-        post_seconds: int,
-        detector: Detector,
-        flip: bool,
-        tags: list[str],
-    ) -> None:
-        if time.time() < self._external_clip_cooldown_until:
-            agent_log(
-                "H3",
-                "worker.py:_materialize_event",
-                "skipped_ssd_cooldown",
-                {"until": self._external_clip_cooldown_until},
-            )
-            return
-        if self.motion_clip_busy():
-            return
-        with self._clip_busy_lock:
-            if self._clip_busy:
-                return
-            self._clip_busy = True
-        rid = f"evt_{int(time.time() * 1000)}"
-        out_dir = self._recordings_root
-        out_dir.mkdir(parents=True, exist_ok=True)
-        tmp = out_dir / f"_tmp_{rid}"
-        tmp.mkdir(parents=True, exist_ok=False)
-        out_mp4 = out_dir / f"evt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        try:
-            idx = 0
-            for blob in pre_jpegs:
-                (tmp / f"{idx:05d}.jpg").write_bytes(blob)
-                idx += 1
-
-            read_fps = _fps_for_quality(self.snapshot_settings().get("quality"))
-
-            self._publish(
-                status="Start",
-                recording_id=rid,
-                objects_detected=tags,
-                local_path=out_mp4.resolve().as_posix(),
-            )
-            agent_log(
-                "H3",
-                "worker.py:_materialize_event",
-                "ssd_clip_start",
-                {"rid": rid, "post_s": post_seconds},
-            )
-
-            end = time.time() + post_seconds
-            post_i = 0
-            extend_post = os.environ.get("EDGE_MOTION_EXTEND_POST_ROLL", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-            while time.time() < end and not self._stop.is_set():
-                cur = self.snapshot_settings()
-                if cur.get("recording_mode") != "motion":
-                    break
-                loop_t0 = time.perf_counter()
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    break
-                frame = _flip_if_needed(frame, flip)
-                now = time.time()
-                if extend_post and post_i % DETECT_EVERY_N_FRAMES == 0:
-                    hit, _ = detector.detect_interesting_with_tags(frame)
-                    if hit:
-                        end = time.time() + post_seconds
-                enc_ok, jpg = cv2.imencode(
-                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
-                )
-                if enc_ok:
-                    (tmp / f"{idx:05d}.jpg").write_bytes(jpg.tobytes())
-                    idx += 1
-                post_i += 1
-                read_fps = _fps_for_quality(cur.get("quality"))
-                read_period = 1.0 / read_fps
-                elapsed = time.perf_counter() - loop_t0
-                time.sleep(max(0.0, read_period - elapsed))
-
-            self._publish(status="Stop", recording_id=rid, local_path="")
-            agent_log(
-                "H3",
-                "worker.py:_materialize_event",
-                "ssd_capture_stop_published",
-                {"rid": rid, "frames": idx, "extend_post": extend_post},
-            )
-
-            if idx == 0:
-                return
-
-            cmd = [
-                ff,
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "warning",
-                "-framerate",
-                str(max(1, int(round(read_fps)))),
-                "-i",
-                str(tmp / "%05d.jpg"),
-                *h264_mobile_output_args(preset="veryfast"),
-                str(out_mp4),
-            ]
-            r = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=600,
-            )
-            if r.returncode != 0:
-                print("[edge] ffmpeg clip failed:", (r.stderr or "")[-400:])
-                remove_invalid_mp4(out_mp4)
-                return
-            if not finalize_mp4_for_mobile(out_mp4):
-                print("[edge] motion clip finalize failed:", out_mp4.name)
-            if not mp4_ios_playable(out_mp4):
-                print("[edge] motion clip not iOS-playable, removing:", out_mp4.name)
-                remove_invalid_mp4(out_mp4)
-                return
-
-            pre_s = int(self.snapshot_settings().get("pre_record_seconds", 10))
-            _write_clip_thumbnail(
-                out_mp4,
-                pre_jpegs=pre_jpegs,
-                pre_seconds=pre_s,
-            )
-
-            self._publish(
-                status="Stop",
-                recording_id=rid,
-                objects_detected=tags,
-                local_path=out_mp4.resolve().as_posix(),
-                filename=out_mp4.name,
-            )
-        except Exception as e:
-            print("[edge] materialize failed:", e)
-            self._publish(status="Stop", recording_id=rid, local_path="")
-        finally:
-            with self._clip_busy_lock:
-                self._clip_busy = False
-            agent_log(
-                "H3",
-                "worker.py:_materialize_event",
-                "ssd_clip_finished",
-                {"rid": rid},
-            )
-            try:
-                shutil.rmtree(tmp, ignore_errors=True)
-            except Exception:
-                pass
+            time.sleep(0.5)

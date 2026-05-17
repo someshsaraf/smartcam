@@ -426,13 +426,23 @@ _THUMB_B64_MAX_BYTES = 512_000
 def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
     pre = None
     post = None
+    pre_roll = None
+    duration = None
+    detected_at: Optional[float] = None
     tags: Optional[list[str]] = None
     thumbnail_jpeg: Optional[bytes] = None
     if isinstance(body, dict):
+        if body.get("pre_roll_seconds") is not None:
+            pre_roll = int(body["pre_roll_seconds"])
         if body.get("pre_record_seconds") is not None:
             pre = int(body["pre_record_seconds"])
         if body.get("post_record_seconds") is not None:
             post = int(body["post_record_seconds"])
+        if body.get("duration_seconds") is not None:
+            duration = int(body["duration_seconds"])
+        raw_at = body.get("person_detected_at")
+        if raw_at is not None:
+            detected_at = float(raw_at)
         raw_tags = body.get("objects_detected")
         if isinstance(raw_tags, list):
             tags = [str(t) for t in raw_tags if t is not None]
@@ -447,6 +457,9 @@ def _parse_motion_clip_body(body: Optional[dict[str, Any]]) -> dict[str, Any]:
             except (binascii.Error, ValueError) as e:
                 raise ValueError(f"invalid thumbnail_jpeg_b64: {e}") from e
     return {
+        "person_detected_at": detected_at,
+        "duration_seconds": duration,
+        "pre_roll_seconds": pre_roll,
         "pre_seconds": pre,
         "post_seconds": post,
         "objects_detected": tags,
@@ -462,8 +475,11 @@ async def motion_clip_trigger(body: Optional[dict[str, Any]] = None):
     try:
         return await asyncio.to_thread(
             _recorder.trigger_motion_clip,
-            pre_seconds=parsed["pre_seconds"],
-            post_seconds=parsed["post_seconds"],
+            person_detected_at=parsed.get("person_detected_at"),
+            duration_seconds=parsed.get("duration_seconds"),
+            pre_roll_seconds=parsed.get("pre_roll_seconds"),
+            pre_seconds=parsed.get("pre_seconds"),
+            post_seconds=parsed.get("post_seconds"),
             objects_detected=parsed["objects_detected"],
             thumbnail_jpeg=parsed.get("thumbnail_jpeg"),
         )
