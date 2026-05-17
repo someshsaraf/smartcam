@@ -174,7 +174,7 @@ class HailoYolov8Detector:
         raw_hef = os.environ.get("SMARTCAM_HAILO_HEF_PATH", _default_hef_path())
         self.hef_path, hef_err = _resolve_hef_path(raw_hef)
         self.input_size = _env_int("SMARTCAM_HAILO_INPUT_SIZE", 640, 64, 2048)
-        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.80, 0.01, 0.99)
+        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
         self.nms_iou = _env_float("SMARTCAM_PERSON_NMS_IOU", 0.45, 0.01, 0.99)
         self.min_box_px = _env_int("SMARTCAM_PERSON_MIN_BOX_PX", 24, 1, 4096)
         self.max_detections = _env_int("SMARTCAM_PERSON_MAX_DETECTIONS", 24, 1, 256)
@@ -316,7 +316,7 @@ class HailoYolov8Detector:
         h, w = frame_bgr.shape[:2]
         if h < 2 or w < 2:
             return []
-        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.80, 0.01, 0.99)
+        self.conf = _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
         outputs = self._infer(frame_bgr)
         if outputs is None:
             return []
