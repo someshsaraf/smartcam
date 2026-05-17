@@ -25,7 +25,6 @@ import cv2
 from surveillance_shared.detector import Detector  # noqa: E402
 from surveillance_shared.ffmpeg_mobile import (  # noqa: E402
     finalize_mp4_for_mobile,
-    h264_mobile_live_mux_flags,
     h264_mobile_output_args,
     h264_mobile_video_args,
 )
@@ -277,7 +276,7 @@ class EdgeRecorder:
             ]
             if st.get("flip_180"):
                 cmd.extend(["-vf", "vflip,hflip"])
-            cmd.extend(h264_mobile_live_mux_flags())
+            cmd.extend(h264_mobile_output_args(preset="veryfast"))
             cmd.append(str(out_path))
             try:
                 proc = subprocess.Popen(
@@ -324,6 +323,7 @@ class EdgeRecorder:
                 except Exception:
                     pass
         if out_path is not None and out_path.is_file():
+            time.sleep(0.3)
             if not finalize_mp4_for_mobile(out_path):
                 print("[edge] manual clip finalize failed:", out_path.name)
         self._publish(

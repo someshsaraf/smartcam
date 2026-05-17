@@ -740,6 +740,42 @@ def delete_recording_file(cam_id: int, filename: str):
     return {"ok": True}
 
 
+@app.delete("/recordings/{cam_id}/files")
+def delete_all_recording_files(cam_id: int):
+    """Delete every clip for this camera (edge proxy or local recordings dir)."""
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+
+    edge = camera_store.edge_base_url(c)
+    if edge:
+        try:
+            r = httpx.delete(f"{edge}/recordings/all", timeout=120.0)
+            r.raise_for_status()
+            data = r.json() if r.content else {}
+            deleted = int(data.get("deleted", 0)) if isinstance(data, dict) else 0
+            return {"ok": True, "deleted": deleted}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    d = _recordings_dir(cam_id)
+    deleted = 0
+    if d.is_dir():
+        for p in d.glob("*.mp4"):
+            if p.name.startswith("_") or p.name.startswith("."):
+                continue
+            if not _SAFE_NAME.match(p.name):
+                continue
+            try:
+                p.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    return {"ok": True, "deleted": deleted}
+
+
 # =========================
 # Health / diagnostics
 # =========================

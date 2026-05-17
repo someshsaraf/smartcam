@@ -29,11 +29,6 @@ def h264_mobile_output_args(*, preset: str = "veryfast") -> list[str]:
     return [*h264_mobile_video_args(preset=preset), "-movflags", "+faststart"]
 
 
-def h264_mobile_live_mux_flags() -> list[str]:
-    """Mux flags while ffmpeg is still writing (stop will remux to faststart)."""
-    return ["-movflags", "+frag_keyframe+empty_moov+default_base_moof"]
-
-
 def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
     """
     Ensure MP4 has moov at the start and a baseline H.264 stream mobile browsers accept.
@@ -84,8 +79,10 @@ def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
         if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size >= 64:
             tmp.replace(path)
             return True
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        if r.returncode != 0 and r.stderr:
+            print("[ffmpeg_mobile] remux failed:", r.stderr.strip()[-300:])
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("[ffmpeg_mobile] remux error:", e)
     finally:
         _cleanup_tmp()
 
@@ -112,8 +109,10 @@ def finalize_mp4_for_mobile(path: Path, *, timeout: float = 300.0) -> bool:
         if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size >= 64:
             tmp.replace(path)
             return True
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        if r.returncode != 0 and r.stderr:
+            print("[ffmpeg_mobile] re-encode failed:", r.stderr.strip()[-300:])
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("[ffmpeg_mobile] re-encode error:", e)
     finally:
         _cleanup_tmp()
 

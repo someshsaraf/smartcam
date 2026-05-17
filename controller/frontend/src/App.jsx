@@ -227,10 +227,58 @@ function bentoTileClass(index, total) {
   return "";
 }
 
+async function readApiError(res) {
+  try {
+    const j = await res.json();
+    if (typeof j?.detail === "string") return j.detail;
+    if (Array.isArray(j?.detail)) {
+      return j.detail.map((d) => (typeof d === "string" ? d : d?.msg || String(d))).join("; ");
+    }
+    if (j?.detail != null) return String(j.detail);
+    return res.statusText || `HTTP ${res.status}`;
+  } catch {
+    return res.statusText || `HTTP ${res.status}`;
+  }
+}
+
+function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb }) {
+  const others = cameras.filter((c) => !cameraIdsMatch(c.id, activeId));
+  if (others.length === 0) return null;
+  return (
+    <div
+      className="flex gap-2 overflow-x-auto pb-1 shrink-0 snap-x snap-mandatory"
+      aria-label="Other camera feeds"
+    >
+      {others.map((c) => (
+        <div
+          key={c.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(c.id)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onSelect(c.id);
+            }
+          }}
+          className="shrink-0 w-[7.5rem] snap-start cursor-pointer group"
+          title={`Switch to ${c.name}`}
+        >
+          <div className="rounded-lg overflow-hidden ring-1 ring-gray-700 group-hover:ring-indigo-500/70 aspect-video bg-black pointer-events-none">
+            {renderThumb(c)}
+          </div>
+          <p className="text-[10px] text-gray-400 truncate mt-1 px-0.5 group-hover:text-gray-200">
+            {c.name}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MobileBottomNav({ tab, onTab, clipCount }) {
   const tabs = [
     { id: "live", label: "Live" },
-    { id: "cameras", label: "Cameras" },
     { id: "clips", label: clipCount > 0 ? `Clips (${clipCount})` : "Clips" },
   ];
   return (
@@ -281,6 +329,7 @@ function recordingKey(r) {
 /** Clip playback tuned for iOS Safari (byte-range + playsInline). */
 function ClipPlayer({ url, camId, filename, onRepaired }) {
   const videoRef = useRef(null);
+  const autoRepairRef = useRef(false);
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [playToken, setPlayToken] = useState(0);
@@ -289,15 +338,46 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
     setPlayToken((t) => t + 1);
   }, []);
 
+  const repairClip = useCallback(async () => {
+    if (!isSetCameraId(camId) || !filename) return false;
+    setRepairing(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `${API}/recordings/${camId}/files/${encodeURIComponent(filename)}/finalize-mobile`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(typeof body.detail === "string" ? body.detail : "Repair failed");
+        return false;
+      }
+      reloadVideo();
+      if (typeof onRepaired === "function") onRepaired();
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setRepairing(false);
+    }
+  }, [camId, filename, onRepaired, reloadVideo]);
+
   useEffect(() => {
+    autoRepairRef.current = false;
     setError("");
     const video = videoRef.current;
     if (!video) return undefined;
 
     const onError = () => {
+      if (!autoRepairRef.current && isSetCameraId(camId) && filename) {
+        autoRepairRef.current = true;
+        repairClip();
+        return;
+      }
       const code = video.error?.code;
       if (code === 4) {
-        setError("This clip format is not supported on this device.");
+        setError("This clip cannot be played. Try Convert clip or record again.");
       } else {
         setError("Could not play clip.");
       }
@@ -317,30 +397,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
       video.removeEventListener("error", onError);
       video.removeEventListener("canplay", onCanPlay);
     };
-  }, [url, playToken]);
-
-  const repairClip = async () => {
-    if (!isSetCameraId(camId) || !filename) return;
-    setRepairing(true);
-    setError("");
-    try {
-      const res = await fetch(
-        `${API}/recordings/${camId}/files/${encodeURIComponent(filename)}/finalize-mobile`,
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(typeof body.detail === "string" ? body.detail : "Repair failed");
-        return;
-      }
-      reloadVideo();
-      if (typeof onRepaired === "function") onRepaired();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRepairing(false);
-    }
-  };
+  }, [url, playToken, camId, filename, repairClip]);
 
   return (
     <div>
@@ -362,7 +419,7 @@ function ClipPlayer({ url, camId, filename, onRepaired }) {
             onClick={repairClip}
             className="text-xs px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white"
           >
-            {repairing ? "Converting for mobile…" : "Convert for iOS/Android"}
+            {repairing ? "Converting clip…" : "Convert clip"}
           </button>
         </div>
       ) : null}
@@ -393,10 +450,12 @@ function RecordingsTimeline({
   hasCameras,
   onRefresh,
   onDelete,
+  onDeleteAll,
   variant = "dock",
   className = "",
 }) {
   const [playing, setPlaying] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const isPage = variant === "page";
 
   const playUrl = playing ? recordingFileUrl(playing.camId, playing.name) : "";
@@ -418,14 +477,34 @@ function RecordingsTimeline({
               {activeCameraName || "No camera selected"}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={loading || !hasCameras}
-            onClick={onRefresh}
-            className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-200 shrink-0"
-          >
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {recordings.length > 0 && typeof onDeleteAll === "function" ? (
+              <button
+                type="button"
+                disabled={loading || deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    const ok = await onDeleteAll();
+                    if (ok) setPlaying(null);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                className="text-[10px] px-2 py-1 rounded border border-red-900/60 text-red-300 hover:bg-red-950/40 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Delete all
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={loading || deleting || !hasCameras}
+              onClick={onRefresh}
+              className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-200"
+            >
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         </div>
         <div
           className={`flex-1 min-h-0 px-3 py-2 ${
@@ -483,12 +562,19 @@ function RecordingsTimeline({
                         </a>
                         <button
                           type="button"
-                          onClick={(e) => {
+                          disabled={deleting}
+                          onClick={async (e) => {
                             e.stopPropagation();
                             if (isPlaying) setPlaying(null);
-                            onDelete(r.camId, r.name);
+                            setDeleting(true);
+                            try {
+                              const ok = await onDelete(r.camId, r.name);
+                              if (!ok && isPlaying) setPlaying(r);
+                            } finally {
+                              setDeleting(false);
+                            }
                           }}
-                          className="p-1 rounded bg-black/75 text-red-300 hover:bg-red-950/90 hover:text-red-200 border border-red-900/50"
+                          className="p-1 rounded bg-black/75 text-red-300 hover:bg-red-950/90 hover:text-red-200 border border-red-900/50 disabled:opacity-40"
                           title="Delete"
                           aria-label="Delete clip"
                         >
@@ -880,9 +966,15 @@ function LiveTile({
   }, [drawFaces, useIframeFallback, cam.id, isMobile]);
 
   const isHero = layout === "hero";
+  const isThumb = layout === "thumb";
 
   return (
-    <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0 h-full">
+    <div
+      className={`bg-[#111827] flex flex-col min-h-0 h-full ${
+        isThumb ? "rounded-none p-0" : "rounded-xl p-2"
+      }`}
+    >
+      {!isThumb ? (
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -895,6 +987,8 @@ function LiveTile({
           </span>
         </div>
       </div>
+      ) : null}
+      {!isThumb ? (
       <p
         className={`hidden sm:block text-[10px] mb-1 font-mono leading-snug ${
           personDebugPositive
@@ -907,12 +1001,13 @@ function LiveTile({
       >
         {personDebugLine}
       </p>
-      {isMobile && persons > 0 ? (
+      ) : null}
+      {!isThumb && isMobile && persons > 0 ? (
         <p className="sm:hidden text-[10px] mb-1 text-blue-300 font-semibold">
           Person detected ({persons})
         </p>
       ) : null}
-      {edgeHint && (
+      {!isThumb && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
           {cam.url ? (
@@ -922,17 +1017,21 @@ function LiveTile({
             </>
           ) : null}
         </p>
-      )}
+      ) : null}
       <div
         ref={wrapRef}
-        className={`relative flex-1 rounded-lg bg-black overflow-hidden touch-none ${
-          isHero
-            ? isMobile
-              ? "min-h-[42dvh] max-h-[68dvh]"
-              : "min-h-[200px] max-h-none"
-            : isMobile
-              ? "min-h-[28dvh] max-h-[40dvh]"
-              : "min-h-[100px] max-h-[200px]"
+        className={`relative flex-1 bg-black overflow-hidden touch-none ${
+          isThumb
+            ? "rounded-none min-h-0 h-full"
+            : `rounded-lg ${
+                isHero
+                  ? isMobile
+                    ? "min-h-[42dvh] max-h-[68dvh]"
+                    : "min-h-[200px] max-h-none"
+                  : isMobile
+                    ? "min-h-[28dvh] max-h-[40dvh]"
+                    : "min-h-[100px] max-h-[200px]"
+              }`
         }`}
       >
         {recording ? (
@@ -990,6 +1089,7 @@ function LiveTile({
             </div>
           )}
         </div>
+        {!isThumb ? (
         <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto items-center">
           {showManual ? (
             <button
@@ -1034,13 +1134,16 @@ function LiveTile({
             Fullscreen
           </button>
         </div>
+        ) : null}
       </div>
+      {!isThumb ? (
       <p
         className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
         title={useIframeFallback ? "WebRTC reader (no overlay)" : "HLS playlist for video + face overlay"}
       >
         {useIframeFallback ? streamUrl : hlsUrl}
       </p>
+      ) : null}
     </div>
   );
 }
@@ -1075,6 +1178,7 @@ export default function App() {
   const [detectionSystem, setDetectionSystem] = useState(null);
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState("live");
+  const [mobileManageOpen, setMobileManageOpen] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -1526,16 +1630,26 @@ export default function App() {
   };
 
   const deleteRecordingFor = async (camId, name) => {
-    if (!window.confirm(`Delete ${name}?`)) return;
-    const res = await fetch(
-      `${API}/recordings/${camId}/files/${encodeURIComponent(name)}`,
-      { method: "DELETE" }
-    );
-    if (!res.ok) {
-      alert("Delete failed");
-      return;
+    if (!isSetCameraId(camId) || !name) return false;
+    if (!window.confirm(`Delete ${name}?`)) return false;
+    try {
+      const res = await fetch(
+        `${API}/recordings/${encodeURIComponent(String(camId))}/files/${encodeURIComponent(name)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        alert(await readApiError(res));
+        return false;
+      }
+      setAllRecordings((prev) =>
+        prev.filter((r) => !(cameraIdsMatch(r.camId, camId) && r.name === name))
+      );
+      await loadAllRecordings(cams);
+      return true;
+    } catch (e) {
+      alert(String(e));
+      return false;
     }
-    await loadAllRecordings(cams);
   };
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
@@ -1546,10 +1660,39 @@ export default function App() {
   const recordingsForActiveCamera = isSetCameraId(effectiveActiveCameraId)
     ? allRecordings.filter((r) => cameraIdsMatch(r.camId, effectiveActiveCameraId))
     : [];
+
+  const deleteAllRecordingsForActiveCamera = async () => {
+    if (!isSetCameraId(effectiveActiveCameraId)) return false;
+    const n = recordingsForActiveCamera.length;
+    if (n === 0) return false;
+    const label = activeCamera?.name || "this camera";
+    if (!window.confirm(`Delete all ${n} clip${n === 1 ? "" : "s"} for ${label}?`)) return false;
+    try {
+      const res = await fetch(
+        `${API}/recordings/${encodeURIComponent(String(effectiveActiveCameraId))}/files`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        alert(await readApiError(res));
+        return false;
+      }
+      setAllRecordings((prev) =>
+        prev.filter((r) => !cameraIdsMatch(r.camId, effectiveActiveCameraId))
+      );
+      await loadAllRecordings(cams);
+      return true;
+    } catch (e) {
+      alert(String(e));
+      return false;
+    }
+  };
   const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
   const showLivePanel = !isMobile || mobileTab === "live";
-  const showCamerasPanel = isMobile && mobileTab === "cameras";
   const showClipsPanel = isMobile && mobileTab === "clips";
+
+  useEffect(() => {
+    if (mobileTab === "cameras") setMobileTab("live");
+  }, [mobileTab]);
 
   const renderLiveTile = (c, layout) => (
     <LiveTile
@@ -1581,12 +1724,21 @@ export default function App() {
       <aside
         className={`bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto border-r border-gray-800 min-h-0 ${
           isMobile
-            ? showCamerasPanel
-              ? "flex flex-1 w-full"
+            ? mobileManageOpen
+              ? "flex flex-1 w-full fixed inset-0 z-40"
               : "hidden"
             : "hidden md:flex w-56 lg:w-60 shrink-0"
         }`}
       >
+        {isMobile && mobileManageOpen ? (
+          <button
+            type="button"
+            onClick={() => setMobileManageOpen(false)}
+            className="text-sm text-indigo-300 hover:text-indigo-100 text-left mb-1"
+          >
+            ← Back to live
+          </button>
+        ) : null}
         <h1 className="text-lg font-bold">Vigilance</h1>
         <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
 
@@ -1753,9 +1905,32 @@ export default function App() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      <div
+        className={`flex-1 flex flex-col min-w-0 min-h-0 ${
+          isMobile && mobileManageOpen ? "hidden" : ""
+        }`}
+      >
         {showLivePanel ? (
         <>
+        {isMobile ? (
+          <div className="flex gap-2 px-3 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
+            <button
+              type="button"
+              disabled={detecting}
+              onClick={detectCameras}
+              className="flex-1 text-xs py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {detecting ? "Detecting…" : "Detect cameras"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileManageOpen(true)}
+              className="flex-1 text-xs py-2 rounded border border-gray-600 text-gray-200 hover:bg-gray-800"
+            >
+              Manage
+            </button>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
           <span className="text-xs font-medium text-gray-200">
             {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
@@ -1806,29 +1981,17 @@ export default function App() {
             </p>
           ) : isMobile ? (
             <div className="flex flex-col flex-1 min-h-0 gap-2">
-              {liveCams.length > 1 ? (
-                <div className="flex gap-2 overflow-x-auto pb-1 shrink-0">
-                  {liveCams.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setActiveCameraId(c.id)}
-                      className={`shrink-0 px-3 py-1.5 rounded-full text-xs border ${
-                        cameraIdsMatch(activeCameraId, c.id)
-                          ? "border-indigo-500 bg-indigo-500/20 text-indigo-100"
-                          : "border-gray-700 text-gray-300"
-                      }`}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
               {mobileLiveCam ? (
                 <div className="flex-1 min-h-0 rounded-xl ring-1 ring-gray-800">
                   {renderLiveTile(mobileLiveCam, "hero")}
                 </div>
               ) : null}
+              <LiveCameraThumbStrip
+                cameras={liveCams}
+                activeId={effectiveActiveCameraId}
+                onSelect={setActiveCameraId}
+                renderThumb={(c) => renderLiveTile(c, "thumb")}
+              />
             </div>
           ) : (
             <div
@@ -1879,6 +2042,7 @@ export default function App() {
           hasCameras={cams.length > 0}
           onRefresh={() => loadAllRecordings(cams)}
           onDelete={deleteRecordingFor}
+          onDeleteAll={deleteAllRecordingsForActiveCamera}
           variant={isMobile ? "page" : "dock"}
         />
         )}

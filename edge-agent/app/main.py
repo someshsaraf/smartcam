@@ -277,6 +277,25 @@ def delete_file(filename: str):
     return {"ok": True}
 
 
+@app.delete("/recordings/all")
+def delete_all_files():
+    """Remove every safe .mp4 clip in the edge recordings directory."""
+    root = _rec_root
+    root.mkdir(parents=True, exist_ok=True)
+    deleted = 0
+    for p in root.glob("*.mp4"):
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        if not _SAFE_NAME.match(p.name):
+            continue
+        try:
+            p.unlink()
+            deleted += 1
+        except OSError:
+            pass
+    return {"ok": True, "deleted": deleted}
+
+
 @app.post("/recordings/manual/start")
 def manual_record_start():
     if _recorder is None:
