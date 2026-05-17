@@ -17,7 +17,7 @@ import numpy as np
 from . import camera_store
 from . import mediamtx_manager
 from .face_backend import detect_faces_normalized, inference_debug_status
-from .motion_recording import schedule_motion_clip_trigger
+from .motion_recording import handle_person_detected
 from .rtsp_env import apply_rtsp_env
 
 apply_rtsp_env()
@@ -307,8 +307,12 @@ class _CameraWorker(threading.Thread):
                     "person_detection_source": meta.get("person_detection_source"),
                 }
             )
-            if person_detected and not self._prev_person_detected:
-                schedule_motion_clip_trigger(cid, tags=["person"])
+            if person_detected:
+                handle_person_detected(
+                    cid,
+                    tags=["person"],
+                    person_count=len(people),
+                )
             self._prev_person_detected = person_detected
 
         if cap is not None:

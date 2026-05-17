@@ -204,8 +204,15 @@ function motionClipRemainingSec(status) {
   return null;
 }
 
+function motionClipIsActive(status) {
+  if (!status || typeof status !== "object") return false;
+  if (status.active) return true;
+  const phase = status.phase;
+  return phase === "starting" || phase === "post_roll" || phase === "materializing";
+}
+
 function formatMotionClipLine(status, settings) {
-  if (!status?.active) return null;
+  if (!motionClipIsActive(status)) return null;
   const pre = settings?.pre_record_seconds ?? status.pre_seconds ?? 10;
   const post = settings?.post_record_seconds ?? status.post_seconds ?? 50;
   if (status.phase === "materializing") return "Motion clip: saving…";
@@ -225,7 +232,9 @@ function useMotionClipCountdownTicker(motionClipById) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const hasCountdown = Object.values(motionClipById || {}).some(
-      (st) => st?.active && (st.phase === "post_roll" || st.phase === "starting")
+      (st) =>
+        motionClipIsActive(st) &&
+        (st.phase === "post_roll" || st.phase === "starting" || st.phase === "materializing")
     );
     if (!hasCountdown) return undefined;
     const iv = window.setInterval(() => setTick((n) => n + 1), 1000);
@@ -342,10 +351,123 @@ function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb }) {
   );
 }
 
-function MobileBottomNav({ tab, onTab, clipCount }) {
+const EVENT_TYPE_LABELS = {
+  person_detected: "Person detected",
+  recording_started: "Recording started",
+  recording_completed: "Clip saved",
+  recording_start_declined: "Recording declined",
+  recording_stopped: "Recording stopped",
+  mqtt_recording_start: "MQTT start",
+};
+
+function formatEventType(eventType) {
+  const t = String(eventType || "");
+  return EVENT_TYPE_LABELS[t] || t.replace(/_/g, " ");
+}
+
+function formatEventTime(ts) {
+  if (!ts) return "—";
+  try {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return ts;
+    return d.toLocaleString();
+  } catch {
+    return ts;
+  }
+}
+
+function EventsPanel({ cameraId, cameraName, className = "" }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!isSetCameraId(cameraId)) {
+      setEvents([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/cameras/${encodeURIComponent(String(cameraId))}/events?limit=150`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setEvents(Array.isArray(data.events) ? data.events : []);
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }, [cameraId]);
+
+  useEffect(() => {
+    load();
+    const iv = window.setInterval(load, 3000);
+    return () => window.clearInterval(iv);
+  }, [load]);
+
+  if (!isSetCameraId(cameraId)) {
+    return (
+      <div className={`rounded-xl border border-gray-800 bg-[#070c16] p-4 text-sm text-gray-500 ${className}`}>
+        Select a camera to view events.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`rounded-xl border border-gray-800 bg-[#070c16] flex flex-col min-h-0 ${className}`}
+    >
+      <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-800">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-100">Events</h2>
+          <p className="text-[10px] text-gray-500">{cameraName || `Camera ${cameraId}`}</p>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50"
+        >
+          {loading ? "…" : "Refresh"}
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+        {events.length === 0 ? (
+          <p className="text-xs text-gray-500 p-2">No events yet for this camera.</p>
+        ) : (
+          events.map((ev) => (
+            <div
+              key={ev.id}
+              className="rounded-lg bg-[#111827] border border-gray-800/80 px-2 py-1.5 text-[11px]"
+            >
+              <div className="flex justify-between gap-2 items-start">
+                <span className="font-medium text-indigo-300">{formatEventType(ev.event_type)}</span>
+                <span className="text-gray-500 shrink-0">{formatEventTime(ev.ts)}</span>
+              </div>
+              {ev.recording_id ? (
+                <p className="text-gray-500 font-mono text-[10px] mt-0.5 truncate">{ev.recording_id}</p>
+              ) : null}
+              {ev.filename ? (
+                <p className="text-gray-400 font-mono text-[10px] truncate">{ev.filename}</p>
+              ) : null}
+              {ev.detail?.reason ? (
+                <p className="text-amber-400/90 text-[10px] mt-0.5">Reason: {String(ev.detail.reason)}</p>
+              ) : null}
+              {typeof ev.person_count === "number" && ev.event_type === "person_detected" ? (
+                <p className="text-gray-500 text-[10px]">Person count: {ev.person_count}</p>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MobileBottomNav({ tab, onTab, clipCount, eventCount }) {
   const tabs = [
     { id: "live", label: "Live" },
     { id: "clips", label: clipCount > 0 ? `Clips (${clipCount})` : "Clips" },
+    { id: "events", label: eventCount > 0 ? `Events (${eventCount})` : "Events" },
   ];
   return (
     <nav
@@ -1397,14 +1519,22 @@ export default function App() {
           const st = await res.json();
           if (cancelled || !st || typeof st !== "object") continue;
           setMotionClipById((prev) => {
-            const wasActive = Boolean(prev[c.id]?.active);
+            const prevSt = prev[c.id];
+            const wasActive = motionClipIsActive(prevSt);
+            const nowActive = motionClipIsActive(st);
             const next = { ...prev, [c.id]: st };
-            if (wasActive && !st.active) {
+            if (wasActive && !nowActive) {
               loadAllRecordingsRef.current(camsRef.current);
               window.setTimeout(
                 () => loadAllRecordingsRef.current(camsRef.current),
                 1500
               );
+              window.setTimeout(
+                () => loadAllRecordingsRef.current(camsRef.current),
+                5000
+              );
+            } else if (st.filename && st.filename !== prevSt?.filename) {
+              loadAllRecordingsRef.current(camsRef.current);
             }
             return next;
           });
@@ -1860,6 +1990,7 @@ export default function App() {
   useMotionClipCountdownTicker(motionClipById);
   const showLivePanel = !isMobile || mobileTab === "live";
   const showClipsPanel = isMobile && mobileTab === "clips";
+  const showEventsPanel = isMobile && mobileTab === "events";
 
   useEffect(() => {
     if (mobileTab === "cameras") setMobileTab("live");
@@ -2230,6 +2361,16 @@ export default function App() {
           onDeleteAll={deleteAllRecordingsForActiveCamera}
           variant={isMobile ? "page" : "dock"}
         />
+        )}
+
+        {(!isMobile || showEventsPanel) && (
+          <EventsPanel
+            cameraId={activeCameraId}
+            cameraName={activeCamera?.name ?? ""}
+            className={
+              isMobile ? "flex-1 min-h-0 m-2" : "shrink-0 h-44 mx-2 mb-2"
+            }
+          />
         )}
 
         {isMobile ? (

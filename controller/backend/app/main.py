@@ -30,6 +30,7 @@ from .mosquitto_manager import ensure_broker_started
 from .mosquitto_manager import status_dict as mosquitto_status_dict
 from .mosquitto_manager import stop_managed_broker
 from ._shared_path import ensure_shared_on_path
+from .events_store import list_events
 from .motion_recording import (
     cache_motion_status,
     fetch_edge_motion_status,
@@ -626,6 +627,18 @@ def camera_manual_record_status(cam_id: int):
     except Exception:
         pass
     return {"active": False, "filename": None}
+
+
+@app.get("/cameras/{cam_id}/events")
+def camera_events(cam_id: int, limit: int = 200, offset: int = 0):
+    c = camera_store.get_camera(cam_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="camera not found")
+    try:
+        rows = list_events(int(cam_id), limit=limit, offset=offset)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"camera_id": int(cam_id), "events": rows, "count": len(rows)}
 
 
 # =========================

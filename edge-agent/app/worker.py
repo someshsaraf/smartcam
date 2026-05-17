@@ -311,7 +311,8 @@ class EdgeRecorder:
 
     def motion_clip_status(self) -> dict[str, Any]:
         with self._pm_lock:
-            if not self._pm_active:
+            phase = str(self._pm_status.get("phase") or "idle")
+            if not self._pm_active and phase not in ("materializing",):
                 return {
                     "active": False,
                     "phase": "idle",
@@ -324,7 +325,10 @@ class EdgeRecorder:
                 }
             st = dict(self._pm_status)
             ends = float(st.get("ends_at") or 0.0)
-            st["remaining_seconds"] = max(0, int(ends - time.time()))
+            if phase == "materializing":
+                st["remaining_seconds"] = 0
+            else:
+                st["remaining_seconds"] = max(0, int(ends - time.time()))
             st["active"] = True
             return st
 
@@ -545,7 +549,6 @@ class EdgeRecorder:
                 self._pm_status["phase"] = "materializing"
                 self._pm_status["remaining_seconds"] = 0
                 self._pm_status["ends_at"] = time.time()
-                self._pm_active = False
 
             self._publish(status="Stop", recording_id=rid, local_path="")
             agent_log(
@@ -556,6 +559,7 @@ class EdgeRecorder:
             )
 
             if idx == 0:
+                print("[edge] motion clip: no frames captured (pre+post empty)")
                 return
 
             cmd = [
@@ -617,7 +621,9 @@ class EdgeRecorder:
                     "post_seconds": post_seconds,
                     "recording_id": rid,
                     "filename": saved_fn,
+                    "objects_detected": tags,
                 }
+                self._pm_active = False
             try:
                 shutil.rmtree(tmp, ignore_errors=True)
             except Exception:
