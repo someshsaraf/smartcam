@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vigilance — Layout previews (from current UI)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0b1220;
+      --chrome: #070c16;
+      --surface: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --dim: #6b7280;
+      --indigo: #4f46e5;
+      --indigo-hover: #6366f1;
+      --live: #4ade80;
+      --rec: #ef4444;
+      --person: #93c5fd;
+      --person-border: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      background: #030712;
+      color: var(--text);
+      padding: 1.5rem;
+    }
+    .page-head { max-width: 1280px; margin: 0 auto 1.5rem; }
+    .page-head h1 { font-size: 1.5rem; font-weight: 700; }
+    .page-head p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; line-height: 1.5; max-width: 720px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .option-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .option-head {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .option-head h2 { font-size: 1rem; font-weight: 600; }
+    .option-head p { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; line-height: 1.35; }
+    .badge {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 5px;
+      background: rgba(99, 102, 241, 0.2);
+      color: #a5b4fc;
+      flex-shrink: 0;
+    }
+    .badge.current { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+    .mock-frame {
+      padding: 0.6rem;
+      background: #020617;
+    }
+    /* scaled app shell — matches real Vigilance proportions */
+    .app {
+      display: flex;
+      height: 320px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 9px;
+      position: relative;
+    }
+    .sidebar {
+      width: 118px;
+      background: var(--chrome);
+      border-right: 1px solid var(--border);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .sidebar h3.logo {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .sidebar .sub { font-size: 7px; color: var(--dim); line-height: 1.2; }
+    .debug-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px;
+      font-size: 7px;
+      line-height: 1.35;
+    }
+    .debug-card .title { font-weight: 600; color: #d1d5db; margin-bottom: 3px; font-size: 7.5px; }
+    .debug-card .ok { color: var(--live); }
+    .debug-card .dim { color: var(--muted); }
+    .debug-card .val { color: #e5e7eb; }
+    .btn-detect {
+      background: var(--indigo);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 5px 6px;
+      font-size: 8px;
+      font-weight: 500;
+      text-align: center;
+    }
+    .cam-list-title { font-size: 7px; color: var(--muted); margin-top: 2px; }
+    .cam-row {
+      background: var(--surface);
+      border-radius: 5px;
+      padding: 4px 5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8px;
+    }
+    .center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .api-bar {
+      border-bottom: 1px solid var(--border);
+      padding: 4px 8px;
+      font-size: 6px;
+      color: var(--dim);
+      font-family: ui-monospace, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .live-area {
+      flex: 1;
+      padding: 6px;
+      overflow: auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-content: flex-start;
+    }
+    .live-tile {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 5px;
+      flex: 1 1 140px;
+      min-width: 120px;
+      max-width: 100%;
+    }
+    .live-tile.hero { flex: 1 1 100%; max-width: 100%; }
+    .live-tile.hero .video-wrap { min-height: 120px; }
+    .tile-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 8px;
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    .live-badge { color: var(--live); font-size: 7px; font-weight: 600; }
+    .person-line {
+      font-size: 7px;
+      font-family: ui-monospace, monospace;
+      color: #93c5fd;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+    .video-wrap {
+      position: relative;
+      background: #000;
+      border-radius: 6px;
+      min-height: 72px;
+      overflow: hidden;
+      background-image: url("preview-assets/current-ui-reference.png");
+      background-size: cover;
+      background-position: center 30%;
+    }
+    .bbox {
+      position: absolute;
+      left: 8%;
+      top: 12%;
+      width: 42%;
+      height: 72%;
+      border: 1.5px solid var(--person-border);
+      border-radius: 2px;
+    }
+    .bbox-label {
+      position: absolute;
+      top: -10px;
+      left: 0;
+      font-size: 6px;
+      background: rgba(0,0,0,0.75);
+      color: var(--person);
+      padding: 1px 3px;
+      border-radius: 2px;
+    }
+    .rec-ring {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--rec);
+      border: 1.5px solid rgba(255,255,255,0.9);
+    }
+    .controls {
+      position: absolute;
+      bottom: 3px;
+      left: 3px;
+      right: 3px;
+      display: flex;
+      gap: 2px;
+      flex-wrap: wrap;
+    }
+    .controls span {
+      background: rgba(55, 65, 81, 0.9);
+      color: #e5e7eb;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 6px;
+    }
+    .stream-url {
+      font-size: 6px;
+      color: var(--dim);
+      font-family: monospace;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .recordings {
+      width: 130px;
+      background: var(--chrome);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .recordings.drawer {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      z-index: 5;
+      box-shadow: -8px 0 24px rgba(0,0,0,0.5);
+    }
+    .rec-head {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8px;
+      font-weight: 600;
+    }
+    .rec-head button {
+      font-size: 6px;
+      background: #374151;
+      color: #e5e7eb;
+      border: none;
+      border-radius: 3px;
+      padding: 2px 5px;
+    }
+    .rec-list { flex: 1; overflow-y: auto; }
+    .rec-item {
+      display: flex;
+      gap: 5px;
+      padding: 5px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .rec-thumb {
+      width: 48px;
+      height: 32px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      background: #000;
+      background-image: url("preview-assets/current-ui-reference.png");
+      background-size: cover;
+      background-position: center;
+      border: 1px solid var(--border);
+    }
+    .rec-meta { flex: 1; min-width: 0; font-size: 6.5px; }
+    .rec-meta .name { font-weight: 600; color: #e5e7eb; }
+    .rec-meta .time { color: var(--muted); }
+    .rec-meta .file { color: var(--dim); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rec-actions { margin-top: 2px; }
+    .rec-actions a { color: #60a5fa; margin-right: 4px; text-decoration: none; }
+    .rec-actions .del { color: #f87171; }
+    /* layout variants */
+    .app.tabs-only .recordings { display: none; }
+    .app.tabs-only .sidebar { display: none; }
+    .app.tabs-only .top-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--chrome);
+      font-size: 8px;
+    }
+    .app.tabs-only .top-tabs span {
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: var(--muted);
+    }
+    .app.tabs-only .top-tabs span.on {
+      background: rgba(99, 102, 241, 0.2);
+      color: #c7d2fe;
+    }
+    .app.tabs-only .live-area.grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .app.focus .sidebar { width: 32px; padding: 6px 4px; }
+    .app.focus .sidebar > *:not(.rail-icons) { display: none; }
+    .rail-icons { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+    .rail-icons i {
+      width: 12px; height: 12px; border-radius: 3px;
+      background: var(--surface); border: 1px solid var(--border);
+    }
+    .app.focus .live-tile:not(.hero) { display: none; }
+    .app.focus .filmstrip {
+      display: flex;
+      gap: 4px;
+      padding: 0 6px 6px;
+    }
+    .app.focus .filmstrip .mini {
+      flex: 1;
+      height: 36px;
+      border-radius: 4px;
+      background-image: url("preview-assets/current-ui-reference.png");
+      background-size: cover;
+      border: 1px solid var(--border);
+    }
+    .app.bento .live-area {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      grid-template-rows: 1fr 1fr auto;
+      gap: 5px;
+    }
+    .app.bento .live-tile.hero { grid-row: span 2; }
+    .app.bento .timeline {
+      grid-column: span 2;
+      display: flex;
+      gap: 4px;
+      padding: 4px 0 0;
+      border-top: 1px solid var(--border);
+    }
+    .app.bento .timeline .rec-thumb { width: 40px; height: 28px; }
+    .app.bento .recordings { display: none; }
+    .app.refined .debug-card { display: none; }
+    .app.refined .status-bar {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--chrome);
+    }
+    .chip {
+      font-size: 6px;
+      padding: 2px 5px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .chip.ok { color: var(--live); border-color: rgba(74, 222, 128, 0.3); }
+    .option-foot {
+      padding: 0.65rem 1rem;
+      font-size: 0.72rem;
+      color: var(--dim);
+      border-top: 1px solid var(--border);
+    }
+    .full-width { grid-column: 1 / -1; }
+    .hint {
+      text-align: center;
+      max-width: 1280px;
+      margin: 1.25rem auto 0;
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0.75rem;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+    }
+    .hint code { color: #a5b4fc; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <header class="page-head">
+    <h1>Vigilance layout previews</h1>
+    <p>
+      Based on your <strong>current UI</strong> (left debug panel, live tile with person box, right recordings).
+      Each option keeps the same features — only layout and hierarchy change. Open this file in a browser and pick
+      <strong>Current</strong> (keep as-is), <strong>A</strong>, <strong>B</strong>, <strong>C</strong>, or <strong>D</strong>.
+    </p>
+  </header>
+
+  <div class="grid">
+    <!-- CURRENT -->
+    <article class="option-card full-width">
+      <header class="option-head">
+        <div>
+          <h2>Current — your UI today</h2>
+          <p>3-column: debug sidebar · live grid · recordings list. This is the screenshot you shared.</p>
+        </div>
+        <span class="badge current">Baseline</span>
+      </header>
+      <div class="mock-frame">
+        <div class="app">
+          <aside class="sidebar">
+            <h3 class="logo">Vigilance</h3>
+            <p class="sub">Controller UI · up to 6 live tiles</p>
+            <div class="debug-card">
+              <div class="title">Person detection (debug)</div>
+              <div><span class="dim">WebSocket:</span> <span class="ok">connected</span></div>
+              <div><span class="dim">Hailo:</span> <span class="val">ready</span></div>
+              <div><span class="dim">Inference delay:</span> <span class="val">6500 ms</span></div>
+              <div style="margin-top:3px;border-top:1px solid var(--border);padding-top:3px">
+                <span class="dim">Vigilance Edge:</span> <span class="val">Person test: YES</span>
+              </div>
+            </div>
+            <button type="button" class="btn-detect">Detect cameras</button>
+            <p class="cam-list-title">Detected Cameras</p>
+            <div class="cam-row"><span>Vigilance Edge</span><span>⚙ ✕</span></div>
+          </aside>
+          <main class="center">
+            <div class="api-bar">http://192.168.2.139:8000 · ws/detections · ws/recording</div>
+            <div class="live-area">
+              <div class="live-tile">
+                <div class="tile-head"><span>Vigilance Edge</span><span class="live-badge">LIVE</span></div>
+                <p class="person-line">Person test: YES — 1 person(s)</p>
+                <div class="video-wrap">
+                  <div class="bbox"><span class="bbox-label">person 90.7%</span></div>
+                  <span class="rec-ring"></span>
+                  <div class="controls"><span>● Rec</span><span>−</span><span>+</span><span>1×</span><span>Full</span></div>
+                </div>
+                <p class="stream-url">…/camera1/index.m3u8</p>
+              </div>
+            </div>
+          </main>
+          <aside class="recordings">
+            <div class="rec-head"><span>Recordings</span><button type="button">Refresh</button></div>
+            <div class="rec-list">
+              <div class="rec-item">
+                <div class="rec-thumb"></div>
+                <div class="rec-meta">
+                  <div class="name">Vigilance Edge</div>
+                  <div class="time">5/17/2026, 9:34:23 AM · 2.4 MB</div>
+                  <div class="file">evt_20260517.mp4</div>
+                  <div class="rec-actions"><a href="#">Play</a><a href="#">Save</a><a href="#" class="del">Delete</a></div>
+                </div>
+              </div>
+              <div class="rec-item">
+                <div class="rec-thumb"></div>
+                <div class="rec-meta">
+                  <div class="name">Vigilance Edge</div>
+                  <div class="time">5/17/2026, 9:12:01 AM</div>
+                  <div class="rec-actions"><a href="#">Play</a><a href="#">Save</a><a href="#" class="del">Delete</a></div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="option-foot">No change — baseline for comparison.</p>
+    </article>
+
+    <!-- A -->
+    <article class="option-card">
+      <header class="option-head">
+        <div>
+          <h2>A — Refined command center</h2>
+          <p>Same 3 columns; debug tucked into status chips; hero-sized live tile when one camera.</p>
+        </div>
+        <span class="badge">Option A</span>
+      </header>
+      <div class="mock-frame">
+        <div class="app refined">
+          <aside class="sidebar">
+            <h3 class="logo">Vigilance</h3>
+            <button type="button" class="btn-detect">Detect cameras</button>
+            <p class="cam-list-title">Cameras</p>
+            <div class="cam-row"><span>Vigilance Edge</span><span>⚙</span></div>
+          </aside>
+          <main class="center">
+            <div class="status-bar">
+              <span class="chip ok">WS connected</span>
+              <span class="chip ok">Hailo ready</span>
+              <span class="chip">6500 ms delay</span>
+              <span class="chip" style="color:#93c5fd">1 person</span>
+            </div>
+            <div class="live-area">
+              <div class="live-tile hero">
+                <div class="tile-head"><span>Vigilance Edge</span><span class="live-badge">LIVE</span></div>
+                <p class="person-line">Person test: YES — 1 person(s)</p>
+                <div class="video-wrap">
+                  <div class="bbox"><span class="bbox-label">person 90.7%</span></div>
+                  <div class="controls"><span>● Rec</span><span>Full</span></div>
+                </div>
+              </div>
+            </div>
+          </main>
+          <aside class="recordings">
+            <div class="rec-head"><span>Recordings</span><button type="button">Refresh</button></div>
+            <div class="rec-list">
+              <div class="rec-item"><div class="rec-thumb"></div><div class="rec-meta"><div class="name">Vigilance Edge</div><div class="time">9:34 AM</div><div class="rec-actions"><a href="#">Play</a></div></div></div>
+              <div class="rec-item"><div class="rec-thumb"></div><div class="rec-meta"><div class="name">Vigilance Edge</div><div class="time">9:12 AM</div><div class="rec-actions"><a href="#">Play</a></div></div></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="option-foot"><strong>Best if:</strong> you want minimal change + cleaner header.</p>
+    </article>
+
+    <!-- B -->
+    <article class="option-card">
+      <header class="option-head">
+        <div>
+          <h2>B — Focus + clips drawer</h2>
+          <p>Large primary stream; recordings slide in from the right when needed.</p>
+        </div>
+        <span class="badge">Option B</span>
+      </header>
+      <div class="mock-frame">
+        <div class="app focus">
+          <aside class="sidebar">
+            <div class="rail-icons"><i></i><i></i><i></i></div>
+            <h3 class="logo">Vigilance</h3>
+            <button type="button" class="btn-detect">Detect</button>
+            <div class="cam-row"><span>Edge</span></div>
+          </aside>
+          <main class="center">
+            <div class="api-bar" style="color:#e5e7eb;font-weight:600">Vigilance Edge · LIVE</div>
+            <div class="live-area" style="flex-direction:column;padding-bottom:0">
+              <div class="live-tile hero" style="flex:1">
+                <p class="person-line">Person test: YES — 1 person(s)</p>
+                <div class="video-wrap" style="min-height:140px">
+                  <div class="bbox"><span class="bbox-label">person 90.7%</span></div>
+                  <span class="rec-ring"></span>
+                  <div class="controls"><span>● Rec</span><span>−</span><span>+</span><span>Full</span></div>
+                </div>
+              </div>
+              <div class="filmstrip">
+                <div class="mini"></div><div class="mini"></div><div class="mini"></div>
+              </div>
+            </div>
+          </main>
+          <aside class="recordings drawer">
+            <div class="rec-head"><span>Clips</span><button type="button">✕</button></div>
+            <div class="rec-list">
+              <div class="rec-item"><div class="rec-thumb"></div><div class="rec-meta"><div class="name">Edge</div><div class="rec-actions"><a href="#">Play</a></div></div></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="option-foot"><strong>Best if:</strong> you mostly watch one camera full-screen.</p>
+    </article>
+
+    <!-- C -->
+    <article class="option-card">
+      <header class="option-head">
+        <div>
+          <h2>C — Tabs (Live · Recordings · Cameras)</h2>
+          <p>Full-width views; recordings become a grid with larger thumbnails.</p>
+        </div>
+        <span class="badge">Option C</span>
+      </header>
+      <div class="mock-frame">
+        <div class="app tabs-only">
+          <main class="center" style="width:100%">
+            <div class="top-tabs">
+              <span style="font-weight:700;margin-right:8px">Vigilance</span>
+              <span class="on">Live</span>
+              <span>Recordings</span>
+              <span>Cameras</span>
+              <span class="chip ok" style="margin-left:auto">● connected</span>
+            </div>
+            <div class="live-area grid-2">
+              <div class="live-tile">
+                <div class="tile-head"><span>Vigilance Edge</span><span class="live-badge">LIVE</span></div>
+                <div class="video-wrap" style="min-height:80px">
+                  <div class="bbox"><span class="bbox-label">person</span></div>
+                </div>
+                <p class="person-line" style="margin-top:3px">Person: YES</p>
+              </div>
+              <div class="live-tile" style="opacity:0.35;border:1px dashed var(--border)">
+                <div class="tile-head"><span style="color:var(--dim)">+ Add camera</span></div>
+                <div class="video-wrap" style="min-height:80px;background:#0f172a"></div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <p class="option-foot"><strong>Best if:</strong> you want a clean product-style app.</p>
+    </article>
+
+    <!-- D -->
+    <article class="option-card">
+      <header class="option-head">
+        <div>
+          <h2>D — Bento + clip timeline</h2>
+          <p>Large hero tile, smaller secondary feeds, clips in a bottom filmstrip.</p>
+        </div>
+        <span class="badge">Option D</span>
+      </header>
+      <div class="mock-frame">
+        <div class="app bento">
+          <aside class="sidebar" style="width:90px">
+            <h3 class="logo">Vigilance</h3>
+            <button type="button" class="btn-detect">Detect</button>
+            <div class="cam-row"><span>Edge</span></div>
+          </aside>
+          <main class="center">
+            <div class="status-bar">
+              <span class="chip">3 cameras</span>
+              <span class="chip ok">1 person detected</span>
+            </div>
+            <div class="live-area">
+              <div class="live-tile hero">
+                <div class="tile-head"><span>Vigilance Edge</span><span class="live-badge">LIVE</span></div>
+                <div class="video-wrap" style="min-height:100px">
+                  <div class="bbox"><span class="bbox-label">person 90.7%</span></div>
+                </div>
+              </div>
+              <div class="live-tile"><div class="video-wrap" style="min-height:48px;background:#1e293b"></div></div>
+              <div class="live-tile"><div class="video-wrap" style="min-height:48px;background:#1e293b"></div></div>
+              <div class="timeline">
+                <div class="rec-thumb"></div><div class="rec-thumb"></div><div class="rec-thumb"></div><div class="rec-thumb"></div><div class="rec-thumb"></div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <p class="option-foot"><strong>Best if:</strong> you want dashboard-style overview density.</p>
+    </article>
+  </div>
+
+  <p class="hint">
+    Open <code>controller/frontend/layout-previews.html</code> in your browser ·
+    Reply with <strong>Current</strong>, <strong>A</strong>, <strong>B</strong>, <strong>C</strong>, or <strong>D</strong>
+  </p>
+</body>
+</html>

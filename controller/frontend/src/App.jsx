@@ -82,7 +82,19 @@ function RecordingThumbnail({ src, className = "" }) {
   );
 }
 
-function RecordingsSidebar({
+/** Bento grid cell placement for layout D (index 0 = hero). */
+function bentoTileClass(index, total) {
+  if (total <= 1) return "col-span-3 row-span-2";
+  if (index === 0) return "col-start-1 row-start-1 row-span-2";
+  if (index === 1) return "col-start-2 row-start-1";
+  if (index === 2) return "col-start-3 row-start-1";
+  if (index === 3) return "col-start-2 row-start-2";
+  if (index === 4) return "col-start-3 row-start-2";
+  if (index === 5) return "col-span-3 row-start-3";
+  return "";
+}
+
+function RecordingsTimeline({
   recordings,
   loading,
   hasCameras,
@@ -95,79 +107,82 @@ function RecordingsSidebar({
 
   return (
     <>
-      <aside className="w-72 xl:w-80 shrink-0 border-l border-gray-800 bg-[#070c16] flex flex-col min-h-0">
-        <div className="px-3 py-3 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
-          <h2 className="text-sm font-semibold text-gray-200">Recordings</h2>
-          <button
-            type="button"
-            disabled={loading || !hasCameras}
-            onClick={onRefresh}
-            className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Refresh
-          </button>
+      <section
+        className="shrink-0 border-t border-gray-800 bg-[#070c16] flex flex-col max-h-[200px] min-h-[120px]"
+        aria-label="Recordings timeline"
+      >
+        <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
+          <h2 className="text-xs font-semibold text-gray-200">Recent clips</h2>
+          <div className="flex items-center gap-2">
+            {loading ? <span className="text-[10px] text-gray-500">Loading…</span> : null}
+            <button
+              type="button"
+              disabled={loading || !hasCameras}
+              onClick={onRefresh}
+              className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
-
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 px-3 py-2">
           {!hasCameras ? (
-            <p className="text-xs text-gray-500 p-3">Add a camera to see recordings.</p>
-          ) : loading && recordings.length === 0 ? (
-            <p className="text-xs text-gray-500 p-3">Loading…</p>
-          ) : recordings.length === 0 ? (
-            <p className="text-xs text-gray-500 p-3">No clips yet.</p>
+            <p className="text-xs text-gray-500 py-2">Add a camera to see recordings.</p>
+          ) : recordings.length === 0 && !loading ? (
+            <p className="text-xs text-gray-500 py-2">No clips yet.</p>
           ) : (
-            <ul className="divide-y divide-gray-800">
+            <ul className="flex gap-3 pb-1">
               {recordings.map((r) => {
                 const url = recordingFileUrl(r.camId, r.name);
                 const active = playing?.camId === r.camId && playing?.name === r.name;
                 return (
-                  <li key={`${r.camId}-${r.name}`}>
-                    <div
-                      className={`flex gap-2 p-2 hover:bg-[#111827]/80 ${active ? "bg-[#111827]" : ""}`}
+                  <li
+                    key={`${r.camId}-${r.name}`}
+                    className={`shrink-0 w-[11rem] rounded-lg border p-1.5 flex flex-col gap-1 ${
+                      active
+                        ? "border-indigo-500 bg-[#111827]"
+                        : "border-gray-800 bg-[#111827]/60 hover:border-gray-600"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setPlaying(r)}
+                      className="w-full aspect-video rounded overflow-hidden bg-black border border-gray-700 hover:border-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      title="Play clip"
                     >
+                      <RecordingThumbnail
+                        src={url}
+                        className="w-full h-full object-cover pointer-events-none"
+                      />
+                    </button>
+                    <div className="min-w-0 text-[10px] px-0.5">
+                      <p className="font-medium text-gray-200 truncate" title={r.camName}>
+                        {r.camName}
+                      </p>
+                      <p className="text-gray-500 truncate">{formatTime(r.mtime)}</p>
+                      <p className="text-gray-600">{formatBytes(r.size)}</p>
+                    </div>
+                    <div className="flex gap-2 text-[10px] px-0.5">
                       <button
                         type="button"
                         onClick={() => setPlaying(r)}
-                        className="shrink-0 w-[7.5rem] aspect-video rounded overflow-hidden bg-black border border-gray-700 hover:border-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        title="Play clip"
+                        className="text-blue-400 hover:underline"
                       >
-                        <RecordingThumbnail
-                          src={url}
-                          className="w-full h-full object-cover pointer-events-none"
-                        />
+                        Play
                       </button>
-                      <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-[10px]">
-                        <span className="font-medium text-gray-200 truncate" title={r.camName}>
-                          {r.camName}
-                        </span>
-                        <span className="text-gray-500">{formatTime(r.mtime)}</span>
-                        <span className="text-gray-600">{formatBytes(r.size)}</span>
-                        <p className="font-mono text-gray-500 truncate" title={r.name}>
-                          {r.name}
-                        </p>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          <button
-                            type="button"
-                            onClick={() => setPlaying(r)}
-                            className="text-blue-400 hover:underline"
-                          >
-                            Play
-                          </button>
-                          <a href={url} download={r.name} className="text-gray-400 hover:underline">
-                            Save
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (active) setPlaying(null);
-                              onDelete(r.camId, r.name);
-                            }}
-                            className="text-red-400 hover:underline"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
+                      <a href={url} download={r.name} className="text-gray-400 hover:underline">
+                        Save
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (active) setPlaying(null);
+                          onDelete(r.camId, r.name);
+                        }}
+                        className="text-red-400 hover:underline"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </li>
                 );
@@ -175,7 +190,7 @@ function RecordingsSidebar({
             </ul>
           )}
         </div>
-      </aside>
+      </section>
 
       {playing ? (
         <div
@@ -263,6 +278,7 @@ function LiveTile({
   detectionInfo,
   detectionWsOpen,
   overlayDelayMs,
+  layout = "default",
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
@@ -510,8 +526,10 @@ function LiveTile({
     };
   }, [drawFaces, useIframeFallback, cam.id]);
 
+  const isHero = layout === "hero";
+
   return (
-    <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0">
+    <div className="bg-[#111827] rounded-xl p-2 flex flex-col min-h-0 h-full">
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -549,7 +567,9 @@ function LiveTile({
       )}
       <div
         ref={wrapRef}
-        className="relative flex-1 min-h-[140px] max-h-[280px] rounded-lg bg-black overflow-hidden touch-none"
+        className={`relative flex-1 rounded-lg bg-black overflow-hidden touch-none ${
+          isHero ? "min-h-[200px] max-h-none" : "min-h-[100px] max-h-[200px]"
+        }`}
       >
         {recording ? (
           <div
@@ -672,6 +692,7 @@ export default function App() {
   const [connectionForm, setConnectionForm] = useState({ url: "", edge_base_url: "" });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
@@ -1067,10 +1088,18 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#0b1220] text-white">
-      <div className="w-72 bg-[#070c16] p-4 flex flex-col gap-4 overflow-y-auto shrink-0">
-        <h1 className="text-xl font-bold">Vigilance</h1>
-        <p className="text-[10px] text-gray-500">Controller UI · up to {MAX_LIVE_TILES} live tiles</p>
+      <div className="w-56 lg:w-60 bg-[#070c16] p-3 flex flex-col gap-3 overflow-y-auto shrink-0 border-r border-gray-800">
+        <h1 className="text-lg font-bold">Vigilance</h1>
+        <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
 
+        <button
+          type="button"
+          onClick={() => setShowDebugPanel((v) => !v)}
+          className="text-[10px] text-left text-gray-400 hover:text-gray-200"
+        >
+          {showDebugPanel ? "▼" : "▶"} Detection diagnostics
+        </button>
+        {showDebugPanel ? (
         <div className="rounded-lg border border-gray-700 bg-[#111827] p-2 text-[10px] space-y-1.5">
           <p className="font-semibold text-gray-300">Person detection (debug)</p>
           <p className={detectionWsOpen ? "text-green-400" : "text-amber-400"}>
@@ -1118,6 +1147,7 @@ export default function App() {
             </div>
           ) : null}
         </div>
+        ) : null}
 
         <button
           type="button"
@@ -1205,31 +1235,61 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-center px-4 py-2 border-b border-gray-800 gap-2">
-          <code className="text-[10px] text-gray-500 truncate">{API}</code>
-          <div className="hidden sm:flex flex-col items-end gap-0.5 min-w-0 max-w-[50%]">
-            <code className="text-[10px] text-gray-500 truncate w-full text-right" title="Face detection WS">
-              {WS_DETECTIONS}
-            </code>
-            <code className="text-[10px] text-gray-500 truncate w-full text-right" title="Recording state WS">
-              {WS_RECORDING}
-            </code>
-          </div>
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
+          <span className="text-xs font-medium text-gray-200">
+            {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
+          </span>
+          <span
+            className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              detectionWsOpen
+                ? "border-green-500/40 text-green-400 bg-green-500/10"
+                : "border-amber-500/40 text-amber-400 bg-amber-500/10"
+            }`}
+          >
+            WS {detectionWsOpen ? "connected" : "disconnected"}
+          </span>
+          <span
+            className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              detectionSystem?.hailo_ready
+                ? "border-green-500/40 text-green-400 bg-green-500/10"
+                : "border-gray-600 text-gray-400 bg-gray-800/50"
+            }`}
+          >
+            Hailo {detectionSystem?.hailo_ready ? "ready" : "off"}
+          </span>
+          {liveCams.some((c) => {
+            const n =
+              detectionsById[c.id]?.personCount ??
+              countPersonDetections(detectionsById[c.id]?.faces);
+            return n > 0;
+          }) ? (
+            <span className="text-[10px] px-2 py-0.5 rounded-full border border-blue-500/40 text-blue-300 bg-blue-500/10">
+              Person detected
+            </span>
+          ) : null}
+          <span className="text-[10px] text-gray-500 ml-auto hidden lg:inline font-mono truncate max-w-[40%]">
+            {API}
+          </span>
         </div>
 
-        <div className="flex-1 p-3 overflow-auto min-h-0">
+        <div className="flex-1 p-3 min-h-0 overflow-hidden flex flex-col">
           {liveCams.length === 0 ? (
             <p className="text-gray-500 text-sm p-4">
               No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
               backend restarts until removed.
             </p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
-                {liveCams.map((c) => (
+            <div
+              className={`grid flex-1 min-h-0 gap-3 grid-cols-3 ${
+                liveCams.length > 4 ? "grid-rows-3" : "grid-rows-2"
+              }`}
+            >
+              {liveCams.map((c, i) => (
+                <div key={c.id} className={`min-h-0 min-w-0 ${bentoTileClass(i, liveCams.length)}`}>
                   <LiveTile
-                    key={c.id}
                     cam={c}
+                    layout={i === 0 ? "hero" : "default"}
                     recording={
                       (c.settings?.recording_mode || "motion") === "off"
                         ? manualRecordingById[c.id] === true
@@ -1248,19 +1308,20 @@ export default function App() {
                         : undefined
                     }
                   />
-                ))}
+                </div>
+              ))}
             </div>
           )}
         </div>
-      </div>
 
-      <RecordingsSidebar
-        recordings={allRecordings}
-        loading={recordingsLoading}
-        hasCameras={cams.length > 0}
-        onRefresh={() => loadAllRecordings(cams)}
-        onDelete={deleteRecordingFor}
-      />
+        <RecordingsTimeline
+          recordings={allRecordings}
+          loading={recordingsLoading}
+          hasCameras={cams.length > 0}
+          onRefresh={() => loadAllRecordings(cams)}
+          onDelete={deleteRecordingFor}
+        />
+      </div>
 
       {settingsCam && (
         <div
@@ -1416,7 +1477,7 @@ export default function App() {
               </button>
 
               <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-3">
-                Clips from all cameras are listed in the <span className="text-gray-400">Recordings</span> panel on the right.
+                Clips from all cameras appear in the <span className="text-gray-400">Recent clips</span> timeline at the bottom of the dashboard.
               </p>
             </div>
           </div>
