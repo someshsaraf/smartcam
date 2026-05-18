@@ -158,20 +158,43 @@ body {
   .dashboard-video-chip {
     @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/90 backdrop-blur-sm border border-white/10;
   }
+  .live-quick-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+  @media (min-width: 640px) {
+    .live-quick-actions {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 1024px) {
+    .live-quick-actions {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.625rem;
+    }
+  }
   .dashboard-quick-action {
-    @apply flex flex-col items-start gap-1 rounded-lg border border-white/[0.06] bg-[#0f141f] px-3 py-2 text-left transition-colors hover:border-indigo-500/25 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply flex flex-col items-start gap-1 rounded-xl border border-white/[0.06] bg-[#0f141f] px-2.5 py-2 text-left transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed min-w-0;
+  }
+  .dashboard-quick-action-label {
+    @apply text-[13px] font-semibold text-gray-100 leading-tight;
+  }
+  .dashboard-quick-action-hint {
+    @apply text-[11px] text-gray-500 leading-tight;
   }
   .dashboard-quick-action-icon-wrap {
-    @apply flex h-8 w-8 items-center justify-center rounded-md border border-white/[0.08] bg-[#161d2c];
+    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c];
   }
   .dashboard-quick-action-icon-wrap-amber {
-    @apply text-amber-300 bg-amber-950/40 border-amber-500/20;
+    @apply bg-amber-950/30 border-amber-500/20;
   }
   .dashboard-quick-action-icon-wrap-red {
-    @apply text-red-300 bg-red-950/40 border-red-500/25;
+    @apply bg-red-950/30 border-red-500/25;
   }
   .dashboard-insight-icon {
-    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600/25 border border-indigo-500/30;
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 border border-indigo-500/25;
   }
   .dashboard-quick-action-active {
     @apply border-red-500/40 bg-red-950/20;

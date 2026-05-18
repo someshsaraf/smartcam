@@ -7,27 +7,33 @@ import {
   ArrowsPointingOutIcon,
   Bars3Icon,
   BellIcon,
-  CameraIcon as CameraIconOutline,
-  MicrophoneIcon as MicrophoneIconOutline,
-  SpeakerWaveIcon as SpeakerWaveIconOutline,
-  WifiIcon,
-} from "@heroicons/react/24/outline";
-import {
   BoltIcon,
   BugAntIcon,
   CameraIcon,
   FilmIcon,
   LightBulbIcon,
-  MegaphoneIcon,
   MicrophoneIcon,
   PlayCircleIcon,
   ShieldCheckIcon,
+  SpeakerWaveIcon,
   Squares2X2Icon,
-  StopCircleIcon,
   TruckIcon,
   UserGroupIcon,
   UserIcon,
   VideoCameraIcon,
+  WifiIcon,
+} from "@heroicons/react/24/outline";
+import {
+  BoltIcon as BoltIconSolid,
+  BugAntIcon as BugAntIconSolid,
+  FilmIcon as FilmIconSolid,
+  PlayCircleIcon as PlayCircleIconSolid,
+  ShieldCheckIcon as ShieldCheckIconSolid,
+  Squares2X2Icon as Squares2X2IconSolid,
+  TruckIcon as TruckIconSolid,
+  UserGroupIcon as UserGroupIconSolid,
+  UserIcon as UserIconSolid,
+  VideoCameraIcon as VideoCameraIconSolid,
 } from "@heroicons/react/24/solid";
 
 const NAV_ITEMS = [
@@ -40,20 +46,20 @@ const NAV_ITEMS = [
 function NavIcon({ name, className = "w-5 h-5" }) {
   switch (name) {
     case "live":
-      return <VideoCameraIcon className={className} aria-hidden />;
+      return <VideoCameraIconSolid className={className} aria-hidden />;
     case "playback":
-      return <PlayCircleIcon className={className} aria-hidden />;
+      return <PlayCircleIconSolid className={className} aria-hidden />;
     case "events":
-      return <BoltIcon className={className} aria-hidden />;
+      return <BoltIconSolid className={className} aria-hidden />;
     case "devices":
-      return <Squares2X2Icon className={className} aria-hidden />;
+      return <Squares2X2IconSolid className={className} aria-hidden />;
     default:
       return null;
   }
 }
 
 function ShieldLogo({ className = "w-5 h-5" }) {
-  return <ShieldCheckIcon className={className} aria-hidden />;
+  return <ShieldCheckIconSolid className={className} aria-hidden />;
 }
 
 function LiveClock() {
@@ -284,25 +290,25 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
       className={`dashboard-quick-action ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
     >
       <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
-      <span className="font-semibold text-xs text-gray-100">{label}</span>
-      <span className="text-[10px] text-gray-500 leading-snug">{hint}</span>
+      <span className="dashboard-quick-action-label">{label}</span>
+      <span className="dashboard-quick-action-hint">{hint}</span>
     </button>
   );
 }
 
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
-  const iconClass = "w-5 h-5";
+  const iconClass = "w-4 h-4";
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 shrink-0">
+    <div className="live-quick-actions">
       <QuickActionButton
-        icon={<MicrophoneIcon className={`${iconClass} text-indigo-300`} aria-hidden />}
+        icon={<MicrophoneIcon className={`${iconClass} text-indigo-400`} strokeWidth={1.5} aria-hidden />}
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
       />
       <QuickActionButton
-        icon={<CameraIcon className={`${iconClass} text-indigo-300`} aria-hidden />}
+        icon={<CameraIcon className={`${iconClass} text-indigo-400`} strokeWidth={1.5} aria-hidden />}
         label="Snapshot"
         hint="Capture image"
         onClick={onSnapshot}
@@ -310,8 +316,8 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
       />
       <QuickActionButton
         icon={
-          <StopCircleIcon
-            className={`${iconClass} ${recording ? "text-red-400 animate-pulse" : "text-red-500"}`}
+          <span
+            className={`h-2 w-2 rounded-full ${recording ? "bg-red-400 animate-pulse" : "bg-red-500"}`}
             aria-hidden
           />
         }
@@ -324,7 +330,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="red"
       />
       <QuickActionButton
-        icon={<MegaphoneIcon className={`${iconClass} text-amber-300`} aria-hidden />}
+        icon={<BellIcon className={`${iconClass} text-amber-400`} strokeWidth={1.5} aria-hidden />}
         label="Siren"
         hint="Trigger alarm"
         onClick={onSiren}
@@ -332,7 +338,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="amber"
       />
       <QuickActionButton
-        icon={<LightBulbIcon className={`${iconClass} text-amber-300`} aria-hidden />}
+        icon={<LightBulbIcon className={`${iconClass} text-amber-400`} strokeWidth={1.5} aria-hidden />}
         label="Light"
         hint="Toggle light"
         onClick={onLight}
@@ -344,34 +350,34 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
 }
 
 function InsightIcon({ type }) {
-  const c = "w-5 h-5 text-indigo-300";
+  const c = "w-4 h-4 text-indigo-300";
   switch (type) {
     case "people":
-      return <UserGroupIcon className={c} aria-hidden />;
+      return <UserGroupIconSolid className={c} aria-hidden />;
     case "vehicles":
-      return <TruckIcon className={c} aria-hidden />;
+      return <TruckIconSolid className={c} aria-hidden />;
     case "animals":
-      return <BugAntIcon className={c} aria-hidden />;
+      return <BugAntIconSolid className={c} aria-hidden />;
     default:
-      return <FilmIcon className={c} aria-hidden />;
+      return <FilmIconSolid className={c} aria-hidden />;
   }
 }
 
 function TimelineEventIcon({ live, kind }) {
-  const c = "w-4 h-4";
+  const c = "w-3.5 h-3.5";
   if (live || kind === "live") {
-    return <VideoCameraIcon className={c} aria-hidden />;
+    return <VideoCameraIconSolid className={c} aria-hidden />;
   }
   if (kind === "vehicle") {
-    return <TruckIcon className={c} aria-hidden />;
+    return <TruckIconSolid className={c} aria-hidden />;
   }
   if (kind === "motion") {
-    return <BoltIcon className={c} aria-hidden />;
+    return <BoltIconSolid className={c} aria-hidden />;
   }
   if (kind === "recording") {
-    return <FilmIcon className={c} aria-hidden />;
+    return <FilmIconSolid className={c} aria-hidden />;
   }
-  return <UserIcon className={c} aria-hidden />;
+  return <UserIconSolid className={c} aria-hidden />;
 }
 
 export function CameraInsights({
@@ -561,13 +567,13 @@ export function LiveDashboardPage({
               <LiveClock />
               <span className="flex gap-1.5 pointer-events-none opacity-80">
                 <span className="dashboard-video-chip" aria-hidden>
-                  <CameraIconOutline className="w-3.5 h-3.5" />
+                  <CameraIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <MicrophoneIconOutline className="w-3.5 h-3.5" />
+                  <MicrophoneIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <SpeakerWaveIconOutline className="w-3.5 h-3.5" />
+                  <SpeakerWaveIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
                 </span>
               </span>
             </div>
