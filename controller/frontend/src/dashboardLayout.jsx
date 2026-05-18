@@ -6,26 +6,29 @@ import { useEffect, useState } from "react";
 import {
   ArrowsPointingOutIcon,
   Bars3Icon,
-  BellAlertIcon,
   BellIcon,
+  CameraIcon as CameraIconOutline,
+  MicrophoneIcon as MicrophoneIconOutline,
+  SpeakerWaveIcon as SpeakerWaveIconOutline,
+  WifiIcon,
+} from "@heroicons/react/24/outline";
+import {
   BoltIcon,
   BugAntIcon,
   CameraIcon,
   FilmIcon,
   LightBulbIcon,
+  MegaphoneIcon,
   MicrophoneIcon,
   PlayCircleIcon,
   ShieldCheckIcon,
-  SpeakerWaveIcon,
   Squares2X2Icon,
   StopCircleIcon,
   TruckIcon,
   UserGroupIcon,
   UserIcon,
   VideoCameraIcon,
-  WifiIcon,
-} from "@heroicons/react/24/outline";
-import { StopCircleIcon as StopCircleIconSolid } from "@heroicons/react/24/solid";
+} from "@heroicons/react/24/solid";
 
 const NAV_ITEMS = [
   { id: "live", label: "Live View", icon: "live" },
@@ -288,18 +291,18 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
 }
 
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
-  const iconClass = "w-4 h-4";
+  const iconClass = "w-5 h-5";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 shrink-0">
       <QuickActionButton
-        icon={<MicrophoneIcon className={iconClass} aria-hidden />}
+        icon={<MicrophoneIcon className={`${iconClass} text-indigo-300`} aria-hidden />}
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
       />
       <QuickActionButton
-        icon={<CameraIcon className={iconClass} aria-hidden />}
+        icon={<CameraIcon className={`${iconClass} text-indigo-300`} aria-hidden />}
         label="Snapshot"
         hint="Capture image"
         onClick={onSnapshot}
@@ -307,11 +310,10 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
       />
       <QuickActionButton
         icon={
-          recording ? (
-            <StopCircleIconSolid className={`${iconClass} text-red-400 animate-pulse`} aria-hidden />
-          ) : (
-            <StopCircleIcon className={`${iconClass} text-red-500`} aria-hidden />
-          )
+          <StopCircleIcon
+            className={`${iconClass} ${recording ? "text-red-400 animate-pulse" : "text-red-500"}`}
+            aria-hidden
+          />
         }
         label={recording ? "Recording" : "Record"}
         hint={recording ? "Stop clip" : "Start recording"}
@@ -322,7 +324,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="red"
       />
       <QuickActionButton
-        icon={<BellAlertIcon className={iconClass} aria-hidden />}
+        icon={<MegaphoneIcon className={`${iconClass} text-amber-300`} aria-hidden />}
         label="Siren"
         hint="Trigger alarm"
         onClick={onSiren}
@@ -330,7 +332,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="amber"
       />
       <QuickActionButton
-        icon={<LightBulbIcon className={iconClass} aria-hidden />}
+        icon={<LightBulbIcon className={`${iconClass} text-amber-300`} aria-hidden />}
         label="Light"
         hint="Toggle light"
         onClick={onLight}
@@ -342,7 +344,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
 }
 
 function InsightIcon({ type }) {
-  const c = "w-4 h-4";
+  const c = "w-5 h-5 text-indigo-300";
   switch (type) {
     case "people":
       return <UserGroupIcon className={c} aria-hidden />;
@@ -356,7 +358,7 @@ function InsightIcon({ type }) {
 }
 
 function TimelineEventIcon({ live, kind }) {
-  const c = "w-3.5 h-3.5";
+  const c = "w-4 h-4";
   if (live || kind === "live") {
     return <VideoCameraIcon className={c} aria-hidden />;
   }
@@ -559,13 +561,13 @@ export function LiveDashboardPage({
               <LiveClock />
               <span className="flex gap-1.5 pointer-events-none opacity-80">
                 <span className="dashboard-video-chip" aria-hidden>
-                  <CameraIcon className="w-3.5 h-3.5" />
+                  <CameraIconOutline className="w-3.5 h-3.5" />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <MicrophoneIcon className="w-3.5 h-3.5" />
+                  <MicrophoneIconOutline className="w-3.5 h-3.5" />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <SpeakerWaveIcon className="w-3.5 h-3.5" />
+                  <SpeakerWaveIconOutline className="w-3.5 h-3.5" />
                 </span>
               </span>
             </div>

@@ -162,7 +162,7 @@ body {
     @apply flex flex-col items-start gap-1 rounded-lg border border-white/[0.06] bg-[#0f141f] px-3 py-2 text-left transition-colors hover:border-indigo-500/25 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed;
   }
   .dashboard-quick-action-icon-wrap {
-    @apply flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-[#161d2c] text-indigo-300;
+    @apply flex h-8 w-8 items-center justify-center rounded-md border border-white/[0.08] bg-[#161d2c];
   }
   .dashboard-quick-action-icon-wrap-amber {
     @apply text-amber-300 bg-amber-950/40 border-amber-500/20;
@@ -171,7 +171,7 @@ body {
     @apply text-red-300 bg-red-950/40 border-red-500/25;
   }
   .dashboard-insight-icon {
-    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-300 border border-indigo-500/25;
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600/25 border border-indigo-500/30;
   }
   .dashboard-quick-action-active {
     @apply border-red-500/40 bg-red-950/20;
