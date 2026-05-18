@@ -1247,10 +1247,11 @@ function AppHeader({
           <button
             type="button"
             onClick={onManage}
-            className="p-2.5 rounded-full border border-white/10 text-gray-200 active:bg-white/10"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-full border border-white/10 text-gray-200 active:bg-white/10"
             aria-label="Manage cameras"
           >
-            <IconSettings className="w-5 h-5" />
+            <IconSettings className="w-4 h-4 shrink-0" />
+            <span>Manage</span>
           </button>
         </div>
       </div>
@@ -2757,13 +2758,24 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
       {manageOpen ? (
-        <aside className="flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto bg-[#0b1220] px-4 lg:px-8 lg:max-w-md lg:ml-auto lg:border-l border-white/10 pb-[max(5rem,env(safe-area-inset-bottom))]">
+        <aside className="fixed inset-0 z-40 flex flex-col bg-[#0b1220]">
           <MobilePageHeader
             title="Manage cameras"
             subtitle={`${cams.length} configured · up to ${MAX_LIVE_TILES} live`}
             onBack={() => setManageOpen(false)}
             backLabel="Back to live"
+            actions={
+              <button
+                type="button"
+                disabled={detecting}
+                onClick={detectCameras}
+                className="text-xs font-medium px-3 py-2 rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-50 whitespace-nowrap"
+              >
+                {detecting ? "…" : "Find"}
+              </button>
+            }
           />
+          <div className="flex-1 overflow-y-auto w-full max-w-2xl mx-auto px-4 lg:px-6 pb-[max(5rem,env(safe-area-inset-bottom))]">
           <div className="flex flex-col gap-3">
             <button type="button" onClick={() => setShowDebugPanel((v) => !v)} className="text-[10px] text-left text-gray-400 hover:text-gray-200">
               {showDebugPanel ? "▼" : "▶"} Detection diagnostics
@@ -2799,9 +2811,6 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-            <button type="button" disabled={detecting} onClick={detectCameras} className="mobile-btn-primary w-full">
-              {detecting ? "Detecting… (~3s)" : "Detect cameras"}
-            </button>
             {discoveredEdges.length > 0 ? (
               <div className="flex flex-col gap-2">
                 {discoveredEdges.map((e, i) => (
@@ -2842,12 +2851,23 @@ export default function App() {
                 }`}
               >
                 <span className="truncate flex-1">{c.name}</span>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button type="button" onClick={(e) => { e.stopPropagation(); openSettings(c); }} className="text-gray-300 hover:text-white px-1" title="Camera settings">⚙</button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openSettings(c);
+                    }}
+                    className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-white/15 text-gray-200 hover:bg-white/10"
+                    title="Camera settings"
+                  >
+                    Settings
+                  </button>
                   <button type="button" onClick={(e) => { e.stopPropagation(); deleteCamera(c); }} className="text-red-400 hover:text-red-300 px-1 text-xs" title="Remove camera">✕</button>
                 </div>
               </div>
             ))}
+          </div>
           </div>
         </aside>
       ) : null}
