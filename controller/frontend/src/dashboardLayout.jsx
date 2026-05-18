@@ -669,12 +669,12 @@ export function LiveDashboardPage({
         }
         subActions={
           <>
-            <select className="dashboard-select dashboard-select-sm" defaultValue="high" aria-label="Stream quality">
+            <select className="dashboard-select dashboard-select-sm hidden lg:inline-flex" defaultValue="high" aria-label="Stream quality">
               <option value="high">High Quality 1080p</option>
               <option value="medium">Medium 720p</option>
               <option value="low">Low 480p</option>
             </select>
-            <span className="dashboard-zoom-group" role="group" aria-label="Zoom">
+            <span className="dashboard-zoom-group hidden lg:inline-flex" role="group" aria-label="Zoom">
               <button
                 type="button"
                 onClick={handleZoomOut}
