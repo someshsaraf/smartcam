@@ -75,16 +75,16 @@ body {
     @apply flex-1 min-h-0 overflow-y-auto overflow-x-hidden;
   }
   .live-view-inner {
-    @apply flex flex-col gap-3 px-4 lg:px-8 py-3 lg:py-4 pb-5 max-w-[1680px] w-full mx-auto;
+    @apply flex flex-col gap-4 px-4 lg:px-6 py-4 pb-6 max-w-[1440px] w-full mx-auto;
   }
   .live-dashboard-page {
     @apply flex flex-col flex-1 min-h-0;
   }
   @media (min-width: 1024px) {
     .live-view-inner {
-      gap: 0.625rem;
-      padding-top: 0.625rem;
-      padding-bottom: 0.875rem;
+      gap: 1rem;
+      padding-top: 1rem;
+      padding-bottom: 1.25rem;
     }
     .live-view-bottom-grid {
       display: grid;
@@ -93,7 +93,7 @@ body {
       align-items: stretch;
     }
     .live-view-bottom-grid .dashboard-panel {
-      min-height: 0;
+      min-height: 220px;
     }
   }
   .dashboard-btn-sm {
@@ -141,18 +141,20 @@ body {
   .dashboard-video-shell-live {
     width: 100%;
     aspect-ratio: 16 / 9;
-    max-height: min(36vh, 400px);
+    max-height: min(38vh, 420px);
     min-height: 200px;
   }
   @media (min-width: 1024px) {
+    /* Mock proportions: video ≈ 16/9, capped so quick actions + 3-panel row fit on one page. */
     .dashboard-video-shell-live {
-      max-height: clamp(220px, 38vh, 440px);
-      min-height: 200px;
+      aspect-ratio: 16 / 9;
+      max-height: min(52vh, 460px);
+      min-height: 240px;
     }
   }
   @media (min-width: 1024px) and (min-height: 900px) {
     .dashboard-video-shell-live {
-      max-height: clamp(240px, 42vh, 480px);
+      max-height: min(50vh, 500px);
     }
   }
   .dashboard-video-chip {
@@ -161,7 +163,7 @@ body {
   .live-quick-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
+    gap: 0.625rem;
     flex-shrink: 0;
   }
   @media (min-width: 640px) {
@@ -172,20 +174,21 @@ body {
   @media (min-width: 1024px) {
     .live-quick-actions {
       grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 0.625rem;
+      gap: 0.75rem;
     }
   }
+  /* Mock tile: icon top-left, title + subtitle below, comfortable padding (~165×72). */
   .dashboard-quick-action {
-    @apply flex flex-col items-start gap-1 rounded-xl border border-white/[0.06] bg-[#0f141f] px-2.5 py-2 text-left transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed min-w-0;
+    @apply flex flex-col items-start gap-2 rounded-xl border border-white/[0.06] bg-[#0f141f] px-4 py-3 text-left transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed min-w-0;
   }
   .dashboard-quick-action-label {
-    @apply text-[13px] font-semibold text-gray-100 leading-tight;
+    @apply text-sm font-semibold text-gray-100 leading-tight;
   }
   .dashboard-quick-action-hint {
     @apply text-[11px] text-gray-500 leading-tight;
   }
   .dashboard-quick-action-icon-wrap {
-    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c];
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c];
   }
   .dashboard-quick-action-icon-wrap-violet {
     @apply bg-violet-900/30 border-violet-500/25;
