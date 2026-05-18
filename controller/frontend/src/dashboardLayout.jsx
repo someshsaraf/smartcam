@@ -246,7 +246,17 @@ function StatusPill({ variant, children }) {
   );
 }
 
-function QuickActionButton({ icon, label, hint, onClick, disabled, active, danger }) {
+function QuickActionIconWrap({ children, tone = "indigo" }) {
+  const toneClass =
+    tone === "amber"
+      ? "dashboard-quick-action-icon-wrap dashboard-quick-action-icon-wrap-amber"
+      : tone === "red"
+        ? "dashboard-quick-action-icon-wrap dashboard-quick-action-icon-wrap-red"
+        : "dashboard-quick-action-icon-wrap";
+  return <span className={toneClass}>{children}</span>;
+}
+
+function QuickActionButton({ icon, label, hint, onClick, disabled, active, danger, iconTone = "indigo" }) {
   return (
     <button
       type="button"
@@ -254,45 +264,130 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
       disabled={disabled}
       className={`dashboard-quick-action ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
     >
-      <span className="dashboard-quick-action-icon">{icon}</span>
-      <span className="font-medium text-sm text-gray-100">{label}</span>
-      <span className="text-[11px] text-gray-500">{hint}</span>
+      <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
+      <span className="font-semibold text-sm text-gray-100">{label}</span>
+      <span className="text-[11px] text-gray-500 leading-snug">{hint}</span>
     </button>
   );
 }
 
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
+  const iconClass = "w-[18px] h-[18px]";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 shrink-0">
       <QuickActionButton
-        icon="🎙"
+        icon={
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M12 14a3 3 0 003-3V6a3 3 0 10-6 0v5a3 3 0 003 3z" />
+            <path d="M6 14h12v2a4 4 0 01-4 4h-4a4 4 0 01-4-4v-2z" strokeLinecap="round" />
+          </svg>
+        }
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
       />
-      <QuickActionButton icon="📷" label="Snapshot" hint="Capture image" onClick={onSnapshot} disabled={!onSnapshot} />
       <QuickActionButton
-        icon={<span className={`h-2.5 w-2.5 rounded-full ${recording ? "bg-red-500 animate-pulse" : "bg-red-500/80"}`} />}
+        icon={
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M4 8h4l2-3h4l2 3h4v11H4V8z" strokeLinejoin="round" />
+            <circle cx="12" cy="13" r="3" />
+          </svg>
+        }
+        label="Snapshot"
+        hint="Capture image"
+        onClick={onSnapshot}
+        disabled={!onSnapshot}
+      />
+      <QuickActionButton
+        icon={<span className={`h-2.5 w-2.5 rounded-full ${recording ? "bg-red-400 animate-pulse" : "bg-red-500"}`} />}
         label={recording ? "Recording" : "Record"}
         hint={recording ? "Stop clip" : "Start recording"}
         onClick={onRecord}
         disabled={recordDisabled}
         active={recording}
         danger
+        iconTone="red"
       />
-      <QuickActionButton icon="🔔" label="Siren" hint="Trigger alarm" onClick={onSiren} disabled={!onSiren} />
-      <QuickActionButton icon="💡" label="Light" hint="Toggle light" onClick={onLight} disabled={!onLight} />
+      <QuickActionButton
+        icon={
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M14 10V6a2 2 0 00-4 0v4M6 10h12l-1 10H7L6 10z" strokeLinejoin="round" />
+          </svg>
+        }
+        label="Siren"
+        hint="Trigger alarm"
+        onClick={onSiren}
+        disabled={!onSiren}
+        iconTone="amber"
+      />
+      <QuickActionButton
+        icon={
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M9 18h6M10 22h4M12 2v2M5 8l1.5 1.5M19 8L17.5 9.5M4 14h16a2 2 0 002-2 8 8 0 00-8-8H10a8 8 0 00-8 8 2 2 0 002 2z" strokeLinecap="round" />
+          </svg>
+        }
+        label="Light"
+        hint="Toggle light"
+        onClick={onLight}
+        disabled={!onLight}
+        iconTone="amber"
+      />
     </div>
   );
 }
 
-const INSIGHT_ICONS = {
-  people: "🚶",
-  vehicle: "🚗",
-  animal: "🐾",
-  recordings: "🎬",
-};
+function InsightIcon({ type }) {
+  const c = "w-4 h-4";
+  switch (type) {
+    case "people":
+      return (
+        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <circle cx="12" cy="7" r="3" />
+          <path d="M6 20v-1a6 6 0 0112 0v1" strokeLinecap="round" />
+        </svg>
+      );
+    case "vehicles":
+      return (
+        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M6 16h12M6 16l-1-4h14l-1 4M8 16v2M16 16v2M7 12l1-4h8l1 4" strokeLinejoin="round" />
+        </svg>
+      );
+    case "animals":
+      return (
+        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <circle cx="8" cy="9" r="2" />
+          <circle cx="16" cy="9" r="2" />
+          <path d="M6 18c1-2 3-3 6-3s5 1 6 3" strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <circle cx="12" cy="12" r="8" />
+          <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+        </svg>
+      );
+  }
+}
+
+function TimelineEventIcon({ live }) {
+  const c = "w-3.5 h-3.5";
+  if (live) {
+    return (
+      <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+        <rect x="3" y="6" width="12" height="10" rx="1.5" />
+        <path d="M15 10l5-2v8l-5-2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <circle cx="12" cy="7" r="3" />
+      <path d="M6 20v-1a6 6 0 0112 0v1" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export function CameraInsights({
   peopleDetected = 0,
@@ -302,27 +397,27 @@ export function CameraInsights({
   onViewAll,
 }) {
   const rows = [
-    { key: "people", label: "People Detected", value: peopleDetected, icon: INSIGHT_ICONS.people },
-    { key: "vehicles", label: "Vehicles Detected", value: vehiclesDetected, icon: INSIGHT_ICONS.vehicle },
-    { key: "animals", label: "Animal Detected", value: animalsDetected, icon: INSIGHT_ICONS.animal },
-    { key: "recordings", label: "Number of Recordings", value: recordingCount, icon: INSIGHT_ICONS.recordings },
+    { key: "people", label: "People detected", value: peopleDetected, icon: "people" },
+    { key: "vehicles", label: "Vehicles detected", value: vehiclesDetected, icon: "vehicles" },
+    { key: "animals", label: "Animal detected", value: animalsDetected, icon: "animals" },
+    { key: "recordings", label: "Number of recordings", value: recordingCount, icon: "recordings" },
   ];
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <ul className="space-y-1 flex-1 min-h-0">
+      <ul className="space-y-0.5 flex-1 min-h-0">
         {rows.map((row) => (
           <li
             key={row.key}
-            className="flex items-center justify-between gap-3 py-2.5 border-b border-white/[0.04] last:border-0"
+            className="flex items-center justify-between gap-3 py-2.5 border-b border-white/[0.05] last:border-0"
           >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="dashboard-event-icon text-base" aria-hidden>
-                {row.icon}
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="dashboard-insight-icon" aria-hidden>
+                <InsightIcon type={row.icon} />
               </span>
-              <span className="text-xs text-gray-400 truncate">{row.label}</span>
+              <span className="text-[13px] text-gray-300">{row.label}</span>
             </div>
-            <span className="text-sm font-semibold text-white tabular-nums shrink-0">{row.value}</span>
+            <span className="text-base font-semibold text-white tabular-nums shrink-0">{row.value}</span>
           </li>
         ))}
       </ul>
@@ -330,7 +425,7 @@ export function CameraInsights({
         <button
           type="button"
           onClick={onViewAll}
-          className="mt-3 text-[11px] text-indigo-400 hover:text-indigo-300 text-left"
+          className="mt-3 w-full text-center text-[12px] font-medium text-indigo-300 hover:text-indigo-200 py-2 rounded-lg border border-indigo-500/20 bg-indigo-950/20"
         >
           View all insights →
         </button>
@@ -341,32 +436,38 @@ export function CameraInsights({
 
 export function ActivityTimeline({ items = [] }) {
   return (
-    <ul className="space-y-0 relative">
+    <ul className="space-y-0 relative pl-0.5">
       {items.length === 0 ? (
         <li className="text-xs text-gray-500 py-2">No activity yet.</li>
       ) : (
         items.map((item, i) => (
           <li
             key={`${item.label}-${item.time}-${i}`}
-            className="grid grid-cols-[4.75rem_0.75rem_1fr] gap-x-2.5 pb-4 last:pb-0 items-start relative"
+            className="grid grid-cols-[4.5rem_1.75rem_1fr] gap-x-2 pb-4 last:pb-0 items-start relative"
           >
             {i < items.length - 1 ? (
               <span
-                className="absolute left-[5.35rem] top-3 bottom-0 w-px bg-indigo-500/30"
+                className="absolute left-[5.6rem] top-7 bottom-0 w-px bg-indigo-500/35"
                 aria-hidden
               />
             ) : null}
-            <span className="text-[11px] text-gray-500 font-mono tabular-nums text-right pt-0.5 shrink-0">
+            <span className="text-[11px] text-gray-500 font-mono tabular-nums pt-1 shrink-0">
               {item.time}
             </span>
             <span
-              className={`relative z-[1] mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-[#121a2a] justify-self-center ${
-                item.live ? "bg-emerald-400" : "bg-indigo-500"
+              className={`relative z-[1] flex h-7 w-7 items-center justify-center rounded-lg border ${
+                item.live
+                  ? "bg-indigo-600/25 border-indigo-500/35 text-indigo-200"
+                  : "bg-indigo-600/15 border-indigo-500/25 text-indigo-300"
               }`}
-            />
-            <div className="min-w-0">
-              <p className="text-xs text-gray-200 font-medium leading-snug">{item.label}</p>
-              {item.detail ? <p className="text-[10px] text-gray-500 mt-0.5">{item.detail}</p> : null}
+            >
+              <TimelineEventIcon live={item.live} />
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <p className="text-[13px] text-gray-100 font-medium leading-snug">{item.label}</p>
+              {item.detail ? (
+                <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">{item.detail}</p>
+              ) : null}
             </div>
           </li>
         ))
@@ -437,7 +538,7 @@ export function LiveDashboardPage({
         }
       />
 
-      <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden flex flex-col px-4 lg:px-8 py-4 lg:py-5 gap-4">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col px-4 lg:px-8 py-4 lg:py-5 gap-4">
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {hasLive ? (
             <StatusPill variant="live">
@@ -463,7 +564,7 @@ export function LiveDashboardPage({
         </div>
 
         <div className="flex flex-col shrink-0 gap-4">
-          <div className="dashboard-video-shell dashboard-video-shell-hero w-full shrink-0">
+          <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full shrink-0">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
               {hasLive ? (
                 <span className="pointer-events-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
@@ -478,7 +579,7 @@ export function LiveDashboardPage({
               </span>
             </div>
 
-            <div className="absolute inset-0 z-10 [&>div]:h-full [&>motion.div]:h-full">{liveVideo}</div>
+            <div className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full">{liveVideo}</div>
 
             <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-8 mobile-video-gradient-bottom pointer-events-none">
               <div className="flex items-end justify-between gap-2 pointer-events-auto">
@@ -519,34 +620,34 @@ export function LiveDashboardPage({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 shrink-0 pb-2">
-          <div className="dashboard-card p-4 min-h-[200px] max-h-[280px] lg:max-h-[300px] flex flex-col">
-            <div className="flex justify-between items-center mb-3 gap-2">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Camera insights</h2>
+          <div className="dashboard-panel">
+            <div className="flex justify-between items-center mb-3 gap-2 shrink-0">
+              <h2 className="dashboard-panel-title">Camera Insights</h2>
               <select className="dashboard-select text-[10px] py-1 px-2 w-auto" defaultValue="today" aria-label="Insights period">
                 <option value="today">Today</option>
               </select>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">{cameraInsights}</div>
+            <div className="flex-1 min-h-0 overflow-y-auto">{cameraInsights}</div>
           </div>
 
-          <div className="dashboard-card p-4 min-h-[200px] max-h-[280px] lg:max-h-[300px] flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Activity timeline</h2>
+          <div className="dashboard-panel">
+            <div className="flex items-center justify-between mb-3 shrink-0">
+              <h2 className="dashboard-panel-title">Activity Timeline</h2>
               {hasLive ? (
-                <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   Live
                 </span>
               ) : null}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               <ActivityTimeline items={activityItems} />
             </div>
           </div>
 
-          <div className="dashboard-card p-4 min-h-[200px] lg:max-h-[300px]">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Camera info</h2>
-            {cameraInfo}
+          <div className="dashboard-panel">
+            <h2 className="dashboard-panel-title mb-3">Camera Info</h2>
+            <div className="flex-1 min-h-0 overflow-y-auto">{cameraInfo}</div>
           </div>
         </div>
       </div>

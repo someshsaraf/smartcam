@@ -407,7 +407,6 @@ function formatTimelineClock(ts) {
     return d.toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
-      second: "2-digit",
       hour12: true,
     });
   } catch {
@@ -2868,6 +2867,7 @@ export default function App() {
     : [];
   const liveActivityItems = useMemo(() => {
     const nowIso = new Date().toISOString();
+    const camLabel = mobileLiveCam?.name || activeCamera?.name || "Camera";
     const items = [];
 
     for (const ev of [...todayEvents].sort((a, b) => {
@@ -2879,6 +2879,7 @@ export default function App() {
         label: formatEventType(ev.event_type),
         time: formatTimelineClock(ev.ts),
         ts: ev.ts,
+        detail: camLabel,
       });
     }
 
@@ -2887,7 +2888,7 @@ export default function App() {
         label: "Person detected",
         time: formatTimelineClock(nowIso),
         ts: nowIso,
-        detail: `${mobilePersonCount} in frame`,
+        detail: camLabel,
       });
     }
 
@@ -2896,7 +2897,7 @@ export default function App() {
         label: "Recording clip",
         time: formatTimelineClock(nowIso),
         ts: nowIso,
-        detail: "Motion or manual capture",
+        detail: camLabel,
       });
     }
 
@@ -2905,6 +2906,7 @@ export default function App() {
       time: formatTimelineClock(liveSessionStarted),
       ts: liveSessionStarted,
       live: true,
+      detail: "Admin User",
     });
 
     return items.sort((a, b) => {
@@ -2912,7 +2914,7 @@ export default function App() {
       const tb = new Date(b.ts || 0).getTime();
       return tb - ta;
     });
-  }, [todayEvents, mobilePersonCount, mobileRecording, liveSessionStarted]);
+  }, [todayEvents, mobilePersonCount, mobileRecording, liveSessionStarted, mobileLiveCam?.name, activeCamera?.name]);
   const handleLiveFullscreen = () => {
     const el = document.querySelector(".dashboard-video-shell");
     if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
