@@ -1313,7 +1313,7 @@ def system_mosquitto():
 
 @app.get("/system/live_detection")
 def system_live_detection():
-    """Phase 1: controller-side face detection workers + WS fan-out."""
+    """Ops/debug snapshot. UI uses /ws/detections hello + detection frames."""
     return live_detection.get_service().status()
 
 

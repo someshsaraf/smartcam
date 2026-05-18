@@ -6,6 +6,7 @@ import {
   detectionOverlaySyncEnabled,
   HLS_BASE,
   MEDIAMTX_BASE,
+  preferNativeHlsPlayback,
   preferWebRtcLive,
   WS_DETECTIONS,
   WS_RECORDING,
@@ -21,22 +22,6 @@ function canPlayNativeHls(video) {
     const v = video.canPlayType(t);
     return v === "probably" || v === "maybe";
   });
-}
-
-function isIosDevice() {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent || "";
-  return (
-    /iPad|iPhone|iPod/i.test(ua) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
-}
-
-function preferNativeHlsPlayback() {
-  if (typeof navigator === "undefined") return false;
-  const android = /Android/i.test(navigator.userAgent || "");
-  const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
-  return isIosDevice() || (android && narrow);
 }
 
 function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
@@ -1686,14 +1671,22 @@ function LiveTile({
     video.addEventListener("playing", onPlaying);
 
     const useNative = preferNativeHlsPlayback() && canPlayNativeHls(video);
+    const startPlay = () => {
+      const p = video.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    };
 
     if (useNative) {
       hlsRef.current = null;
       video.playsInline = true;
+      video.muted = true;
+      video.autoplay = true;
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
       video.src = hlsUrl;
       video.load();
+      video.addEventListener("loadedmetadata", startPlay);
+      startPlay();
     } else if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: false,
@@ -1735,6 +1728,9 @@ function LiveTile({
       cancelled = true;
       video.removeEventListener("error", onVideoError);
       video.removeEventListener("playing", onPlaying);
+      if (useNative) {
+        video.removeEventListener("loadedmetadata", startPlay);
+      }
       hlsRef.current = null;
       if (hls) hls.destroy();
       video.removeAttribute("src");
@@ -2223,26 +2219,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API}/system/live_detection`);
-        if (res.ok && !cancelled) {
-          setDetectionSystem(await res.json());
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    poll();
-    const iv = setInterval(poll, 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(iv);
-    };
-  }, []);
-
-  useEffect(() => {
     let ws;
     let alive = true;
     const connect = () => {
@@ -2264,6 +2240,19 @@ export default function App() {
             return;
           }
           if (msg.type === "detections" && msg.camera_id != null) {
+            if (
+              msg.backend != null ||
+              typeof msg.hailo_ready === "boolean" ||
+              msg.hailo_error != null
+            ) {
+              setDetectionSystem((prev) => ({
+                ...(prev || {}),
+                backend: msg.backend ?? prev?.backend,
+                hailo_ready:
+                  typeof msg.hailo_ready === "boolean" ? msg.hailo_ready : prev?.hailo_ready,
+                hailo_error: msg.hailo_error ?? prev?.hailo_error,
+              }));
+            }
             const id = Number(msg.camera_id);
             const faces = Array.isArray(msg.faces) ? msg.faces : [];
             const personCount =

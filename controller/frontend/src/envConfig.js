@@ -70,10 +70,35 @@ export function detectionOverlaySyncEnabled() {
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
-/** Use MediaMTX WebRTC reader for live tiles (low latency). Set VITE_LIVE_WEBRTC=0 for HLS. */
+/** True on iPhone/iPad (incl. iPadOS desktop UA). */
+export function isIosDevice() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return (
+    /iPad|iPhone|iPod/i.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+/** Clips and live HLS: native Safari HLS on iOS; hls.js elsewhere. */
+export function preferNativeHlsPlayback() {
+  if (typeof navigator === "undefined") return false;
+  const android = /Android/i.test(navigator.userAgent || "");
+  const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
+  return isIosDevice() || (android && narrow);
+}
+
+/**
+ * WebRTC iframe reader (MediaMTX :8889). Disabled on iOS/narrow mobile — Safari shows a
+ * blank iframe while detection overlays still render on assumed 16:9.
+ * Set VITE_LIVE_WEBRTC=0 to force HLS everywhere.
+ */
 export function preferWebRtcLive() {
   const v = String(import.meta.env.VITE_LIVE_WEBRTC ?? "1")
     .trim()
     .toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+  const enabled = v === "1" || v === "true" || v === "yes" || v === "on";
+  if (!enabled) return false;
+  if (preferNativeHlsPlayback()) return false;
+  return true;
 }
