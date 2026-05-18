@@ -20,6 +20,8 @@ import {
   Profile,
   RecordCircle,
   Refresh,
+  SearchZoomIn,
+  SearchZoomOut,
   ShieldTick,
   VideoPlay,
   VideoSquare,
@@ -586,6 +588,10 @@ export function LiveDashboardPage({
   onSiren,
   onLight,
   recordDisabled,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  zoomLabel = "1x",
 }) {
   const hasLive = streamLabel === "LIVE";
 
@@ -644,6 +650,38 @@ export function LiveDashboardPage({
               <option value="medium">Medium 720p</option>
               <option value="low">Low 480p</option>
             </select>
+            <span className="dashboard-zoom-group" role="group" aria-label="Zoom">
+              <button
+                type="button"
+                onClick={onZoomOut}
+                disabled={!onZoomOut}
+                className="dashboard-zoom-btn"
+                aria-label="Zoom out"
+                title="Zoom out"
+              >
+                <SearchZoomOut size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={onResetZoom}
+                disabled={!onResetZoom}
+                className="dashboard-zoom-label"
+                aria-label="Reset zoom"
+                title="Reset zoom"
+              >
+                {zoomLabel}
+              </button>
+              <button
+                type="button"
+                onClick={onZoomIn}
+                disabled={!onZoomIn}
+                className="dashboard-zoom-btn"
+                aria-label="Zoom in"
+                title="Zoom in"
+              >
+                <SearchZoomIn size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+              </button>
+            </span>
             <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
               <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
