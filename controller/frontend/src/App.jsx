@@ -6,30 +6,15 @@ import {
   detectionOverlaySyncEnabled,
   HLS_BASE,
   MEDIAMTX_BASE,
+  preferNativeHlsPlayback,
   preferWebRtcLive,
   WS_DETECTIONS,
   WS_RECORDING,
 } from "./envConfig";
 import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
+import { IconClose, MobilePageHeader } from "./mobileScreens";
 
 const MAX_LIVE_TILES = 6;
-const MOBILE_BREAKPOINT_PX = 768;
-
-function useIsMobile(breakpoint = MOBILE_BREAKPOINT_PX) {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia(`(max-width: ${breakpoint}px)`).matches;
-  });
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
-    const onChange = () => setIsMobile(mq.matches);
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [breakpoint]);
-  return isMobile;
-}
-
 function canPlayNativeHls(video) {
   if (!video) return false;
   const types = ["application/vnd.apple.mpegurl", "application/x-mpegURL"];
@@ -37,22 +22,6 @@ function canPlayNativeHls(video) {
     const v = video.canPlayType(t);
     return v === "probably" || v === "maybe";
   });
-}
-
-function isIosDevice() {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent || "";
-  return (
-    /iPad|iPhone|iPod/i.test(ua) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
-}
-
-function preferNativeHlsPlayback() {
-  if (typeof navigator === "undefined") return false;
-  const android = /Android/i.test(navigator.userAgent || "");
-  const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
-  return isIosDevice() || (android && narrow);
 }
 
 function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
@@ -196,72 +165,16 @@ function hlsPlaylistUrlForCamera(cam, viaApi = true) {
 }
 
 function formatBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  const bytes = Number(n);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "…";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toLocaleString();
-}
-
-function formatCountdown(seconds) {
-  const s = Math.max(0, Math.floor(Number(seconds) || 0));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  if (m > 0) return `${m}:${String(r).padStart(2, "0")}`;
-  return `${r}s`;
-}
-
-function motionClipRemainingSec(status) {
-  if (!status?.active) return null;
-  const endsAt = Number(status.ends_at);
-  if (Number.isFinite(endsAt) && endsAt > 1e9) {
-    return Math.max(0, Math.floor(endsAt - Date.now() / 1000));
-  }
-  if (typeof status.remaining_seconds === "number") {
-    return Math.max(0, Math.floor(status.remaining_seconds));
-  }
-  return null;
-}
-
-function motionClipIsActive(status) {
-  if (!status || typeof status !== "object") return false;
-  if (status.active) return true;
-  const phase = status.phase;
-  return phase === "starting" || phase === "post_roll" || phase === "materializing";
-}
-
-function formatMotionClipLine(status, settings) {
-  if (!motionClipIsActive(status)) return null;
-  const pre = settings?.pre_record_seconds ?? status.pre_seconds ?? 10;
-  const post = settings?.post_record_seconds ?? status.post_seconds ?? 50;
-  if (status.phase === "materializing") return "Motion clip: saving…";
-  if (status.phase === "starting") {
-    return `Recording: preparing clip (${pre}s pre + ${post}s post)…`;
-  }
-  if (status.phase === "post_roll") {
-    const rem = motionClipRemainingSec(status);
-    if (rem == null) return "Recording…";
-    return `Recording: ${formatCountdown(rem)} left (${pre}s pre + ${post}s post)`;
-  }
-  return "Recording motion clip…";
-}
-
-/** Re-render live tiles every second while a motion clip countdown is visible. */
-function useMotionClipCountdownTicker(motionClipById) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const hasCountdown = Object.values(motionClipById || {}).some(
-      (st) =>
-        motionClipIsActive(st) &&
-        (st.phase === "post_roll" || st.phase === "starting" || st.phase === "materializing")
-    );
-    if (!hasCountdown) return undefined;
-    const iv = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(iv);
-  }, [motionClipById]);
 }
 
 function edgeBaseUrlForCamera(cameras, camId) {
@@ -380,40 +293,61 @@ async function readApiError(res) {
   }
 }
 
-function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb }) {
+function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb, mobile = false }) {
   const others = cameras.filter((c) => !cameraIdsMatch(c.id, activeId));
   if (others.length === 0) return null;
   return (
-    <div
-      className="flex gap-2 overflow-x-auto pb-1 shrink-0 snap-x snap-mandatory"
-      aria-label="Other camera feeds"
-    >
-      {others.map((c) => (
-        <div
-          key={c.id}
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(c.id)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onSelect(c.id);
-            }
-          }}
-          className="shrink-0 w-[7.5rem] snap-start cursor-pointer group"
-          title={`Switch to ${c.name}`}
-        >
-          <div className="rounded-lg overflow-hidden ring-1 ring-gray-700 group-hover:ring-indigo-500/70 aspect-video bg-black pointer-events-none">
-            {renderThumb(c)}
+    <div className={`shrink-0 ${mobile ? "px-1" : ""}`} aria-label="Other camera feeds">
+      {mobile ? (
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 px-1 mb-2">
+          Other cameras
+        </p>
+      ) : null}
+      <div
+        className={`flex gap-2.5 mobile-scroll-x snap-x snap-mandatory ${mobile ? "pb-2" : "pb-1"}`}
+      >
+        {others.map((c) => (
+          <div
+            key={c.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(c.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(c.id);
+              }
+            }}
+            className={`shrink-0 snap-start cursor-pointer group active:scale-[0.98] transition-transform ${
+              mobile ? "w-[8.5rem]" : "w-[7.5rem]"
+            }`}
+            title={`Switch to ${c.name}`}
+          >
+            <div
+              className={`overflow-hidden aspect-video bg-black pointer-events-none ${
+                mobile
+                  ? "rounded-xl ring-1 ring-white/10 shadow-lg"
+                  : "rounded-lg ring-1 ring-gray-700 group-hover:ring-indigo-500/70"
+              }`}
+            >
+              {renderThumb(c)}
+            </div>
+            <p
+              className={`truncate mt-1.5 px-0.5 font-medium ${
+                mobile
+                  ? "text-xs text-gray-300"
+                  : "text-[10px] text-gray-400 group-hover:text-gray-200"
+              }`}
+            >
+              {c.name}
+            </p>
           </div>
-          <p className="text-[10px] text-gray-400 truncate mt-1 px-0.5 group-hover:text-gray-200">
-            {c.name}
-          </p>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
+
 
 const EVENT_TYPE_LABELS = {
   person_detected: "Person detected",
@@ -508,7 +442,9 @@ function EventsPanel({
   className = "",
 }) {
   const isSidebar = variant === "sidebar";
+  const isPage = variant === "page";
   const [events, setEvents] = useState([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [filterFromDate, setFilterFromDate] = useState("");
@@ -653,21 +589,69 @@ function EventsPanel({
       className={`flex flex-col min-h-0 ${
         isSidebar
           ? "bg-transparent"
-          : "rounded-xl border border-gray-800 bg-[#070c16]"
+          : isPage
+            ? "rounded-none bg-[#0b1220]"
+            : "rounded-xl border border-gray-800 bg-[#070c16]"
       } ${className}`}
     >
       <div
         className={`shrink-0 space-y-2 ${
-          isSidebar ? "px-0 py-2 border-b border-gray-800" : "px-3 py-2 border-b border-gray-800"
+          isSidebar
+            ? "px-0 py-2 border-b border-gray-800"
+            : isPage
+              ? ""
+              : "px-3 py-2 border-b border-gray-800"
         }`}
       >
+        {isPage ? (
+          <MobilePageHeader
+            title="Events"
+            subtitle={`${cameraName || `Camera ${cameraId}`}${
+              events.length > 0 ? ` · ${events.length}` : ""
+            }${filterActive ? " · filtered" : ""}`}
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen((v) => !v)}
+                  className="mobile-btn-secondary text-[11px] !px-2.5 !py-1.5"
+                >
+                  {filtersOpen ? "Hide" : "Filter"}
+                </button>
+                {events.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={deleteAllEvents}
+                    disabled={loading || deleting}
+                    className="mobile-btn-danger text-[11px] !px-2.5 !py-1.5"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={load}
+                  disabled={loading || deleting}
+                  className="mobile-btn-secondary text-[11px] !px-2.5 !py-1.5"
+                >
+                  {loading ? "…" : "Sync"}
+                </button>
+              </>
+            }
+          />
+        ) : (
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className={`font-semibold text-gray-100 ${isSidebar ? "text-xs" : "text-sm"}`}>
+            <h2
+              className={`font-semibold text-gray-100 ${
+                isSidebar ? "text-xs" : "text-sm"
+              }`}
+            >
               Events
             </h2>
-            <p className="text-[10px] text-gray-500 truncate">
+            <p className="text-gray-500 truncate text-[10px]">
               {cameraName || `Camera ${cameraId}`}
+              {events.length > 0 ? ` · ${events.length}` : ""}
               {filterActive ? " · filtered" : ""}
             </p>
           </div>
@@ -692,50 +676,57 @@ function EventsPanel({
             </button>
           </div>
         </div>
+        )}
+        {isPage && !filtersOpen ? null : (
+        <>
         <div
-          className={`text-[10px] ${isSidebar ? "flex flex-col gap-1.5" : "grid grid-cols-2 gap-x-2 gap-y-1"}`}
+          className={`text-[10px] ${isSidebar ? "flex flex-col gap-1.5" : isPage ? "px-4 grid grid-cols-2 gap-x-2 gap-y-2" : "grid grid-cols-2 gap-x-2 gap-y-1"}`}
         >
           <label className={`text-gray-500 ${isSidebar ? "" : "col-span-2"}`}>From</label>
           <input
             type="date"
             value={filterFromDate}
             onChange={(e) => setFilterFromDate(e.target.value)}
-            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
-              isSidebar ? "w-full" : ""
-            }`}
+            className={`${
+              isPage ? "mobile-input !py-2 !text-xs" : "rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            } ${isSidebar ? "w-full" : ""}`}
           />
           <input
             type="time"
             value={filterFromTime}
             onChange={(e) => setFilterFromTime(e.target.value)}
-            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
-              isSidebar ? "w-full" : ""
-            }`}
+            className={`${
+              isPage ? "mobile-input !py-2 !text-xs" : "rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            } ${isSidebar ? "w-full" : ""}`}
           />
           <label className={`text-gray-500 ${isSidebar ? "mt-0.5" : "col-span-2"}`}>To</label>
           <input
             type="date"
             value={filterToDate}
             onChange={(e) => setFilterToDate(e.target.value)}
-            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
-              isSidebar ? "w-full" : ""
-            }`}
+            className={`${
+              isPage ? "mobile-input !py-2 !text-xs" : "rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            } ${isSidebar ? "w-full" : ""}`}
           />
           <input
             type="time"
             value={filterToTime}
             onChange={(e) => setFilterToTime(e.target.value)}
-            className={`rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200 ${
-              isSidebar ? "w-full" : ""
-            }`}
+            className={`${
+              isPage ? "mobile-input !py-2 !text-xs" : "rounded bg-gray-900 border border-gray-700 px-1.5 py-1 text-gray-200"
+            } ${isSidebar ? "w-full" : ""}`}
           />
         </div>
-        <div className="flex flex-wrap items-center gap-1">
+        <div className={`flex flex-wrap items-center gap-2 ${isPage ? "px-4 pb-2" : ""}`}>
           <button
             type="button"
             onClick={applyFilter}
             disabled={loading || deleting}
-            className="text-[10px] px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white disabled:opacity-50"
+            className={
+              isPage
+                ? "mobile-btn-primary text-[11px] !px-3 !py-2"
+                : "text-[10px] px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white disabled:opacity-50"
+            }
           >
             Apply filter
           </button>
@@ -747,16 +738,24 @@ function EventsPanel({
               deleting ||
               (!filterActive && !filterFromDate && !filterToDate)
             }
-            className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-40"
+            className={
+              isPage
+                ? "mobile-btn-secondary text-[11px] !px-3 !py-2"
+                : "text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-40"
+            }
           >
             Clear filter
           </button>
         </div>
-        {filterError ? <p className="text-[10px] text-red-400">{filterError}</p> : null}
+        {filterError ? (
+          <p className={`text-[10px] text-red-400 ${isPage ? "px-4" : ""}`}>{filterError}</p>
+        ) : null}
+        </>
+        )}
       </div>
       <div
-        className={`flex-1 min-h-0 overflow-y-auto space-y-1 ${
-          isSidebar ? "px-0 py-2" : "p-2"
+        className={`flex-1 min-h-0 overflow-y-auto space-y-2 ${
+          isSidebar ? "px-0 py-2" : isPage ? "px-3 py-3" : "p-2"
         }`}
       >
         {events.length === 0 ? (
@@ -775,10 +774,18 @@ function EventsPanel({
             return (
               <div
                 key={ev.id}
-                className={`flex gap-1 rounded-lg border text-[11px] ${
-                  isActive
-                    ? "border-blue-500/70 bg-[#1e293b]"
-                    : "border-gray-800/80 bg-[#111827]"
+                className={`flex gap-1 text-[11px] ${
+                  isPage
+                    ? `rounded-2xl border shadow-md ${
+                        isActive
+                          ? "border-indigo-500/60 bg-[#1a2332]"
+                          : "border-white/10 bg-gradient-to-r from-[#141c2e] to-[#0c111c]"
+                      }`
+                    : `rounded-lg border ${
+                        isActive
+                          ? "border-blue-500/70 bg-[#1e293b]"
+                          : "border-gray-800/80 bg-[#111827]"
+                      }`
                 }`}
               >
                 <button
@@ -844,31 +851,45 @@ function EventsPanel({
   );
 }
 
-function MobileBottomNav({ tab, onTab, clipCount, eventCount }) {
+function AppBottomNav({ tab, onTab, clipCount, eventCount }) {
   const tabs = [
-    { id: "live", label: "Live" },
-    { id: "clips", label: clipCount > 0 ? `Clips (${clipCount})` : "Clips" },
-    { id: "events", label: eventCount > 0 ? `Events (${eventCount})` : "Events" },
+    { id: "live", label: "Live", Icon: IconLive, badge: 0 },
+    { id: "clips", label: "Clips", Icon: IconClips, badge: clipCount },
+    { id: "events", label: "Events", Icon: IconEvents, badge: eventCount },
   ];
   return (
     <nav
-      className="md:hidden shrink-0 border-t border-gray-800 bg-[#070c16] flex pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+      className="shrink-0 mobile-glass border-t border-white/5 flex justify-around px-2 lg:px-8 pt-2 pb-[max(0.65rem,env(safe-area-inset-bottom))]"
       aria-label="Main navigation"
     >
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => onTab(t.id)}
-          className={`flex-1 py-3 text-xs font-medium transition-colors ${
-            tab === t.id
-              ? "text-indigo-300 border-t-2 border-indigo-500 bg-indigo-500/10"
-              : "text-gray-400 border-t-2 border-transparent"
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+      {tabs.map((t) => {
+        const active = tab === t.id;
+        const Icon = t.Icon;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onTab(t.id)}
+            className={`relative flex flex-col items-center justify-center gap-1 min-w-[4.5rem] py-2 px-3 rounded-2xl transition-all active:scale-95 ${
+              active
+                ? "text-indigo-200 bg-indigo-500/20 shadow-[0_0_20px_rgba(99,102,241,0.25)]"
+                : "text-gray-500"
+            }`}
+          >
+            <span className="relative">
+              <Icon className={active ? "w-6 h-6" : "w-5 h-5"} />
+              {t.badge > 0 ? (
+                <span className="absolute -top-1.5 -right-2 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-indigo-500 text-[9px] font-bold text-white">
+                  {t.badge > 99 ? "99+" : t.badge}
+                </span>
+              ) : null}
+            </span>
+            <span className={`text-[10px] font-semibold ${active ? "text-indigo-100" : ""}`}>
+              {t.label}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -1040,35 +1061,28 @@ function RecordingPlayModal({ playing, cameras, onClose, onRefresh }) {
   );
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+      className="fixed inset-0 z-[60] flex flex-col justify-end lg:justify-center items-stretch lg:items-center bg-black/90 lg:p-6"
       role="dialog"
       aria-modal="true"
       onClick={onClose}
     >
       <div
-        className="max-w-4xl w-full bg-[#111827] rounded-xl border border-gray-700 p-3 shadow-xl"
+        className="w-full lg:max-w-4xl shadow-xl border border-white/10 bg-[#0b1220] overflow-hidden rounded-t-3xl lg:rounded-2xl max-h-[92dvh] flex flex-col pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:pb-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-start gap-2 mb-2 text-xs">
+        <div className="flex justify-between items-start gap-2 shrink-0 mobile-glass border-b border-white/5 px-4 py-3">
           <div className="min-w-0">
-            <p className="font-medium text-gray-200 truncate">{playing.camName || "Clip"}</p>
-            <p className="font-mono text-gray-500 truncate">{playing.name}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-indigo-300/90">Playback</p>
+            <p className="font-medium text-gray-100 truncate text-base">{playing.camName || "Clip"}</p>
+            <p className="font-mono text-gray-500 truncate text-[11px] mt-0.5">{playing.name}</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-gray-400 hover:text-white px-2 shrink-0"
-            aria-label="Close"
-          >
-            ✕
+          <button type="button" onClick={onClose} className="p-2 rounded-full border border-white/10 text-gray-300 active:bg-white/10 shrink-0" aria-label="Close">
+            <IconClose className="w-5 h-5" />
           </button>
         </div>
-        <ClipPlayer
-          url={url}
-          camId={playing.camId}
-          filename={playing.name}
-          onRepaired={onRefresh}
-        />
+        <div className="flex-1 min-h-0 p-3 lg:p-4">
+          <ClipPlayer url={url} camId={playing.camId} filename={playing.name} onRepaired={onRefresh} />
+        </div>
       </div>
     </div>
   );
@@ -1087,6 +1101,131 @@ function IconTrash({ className = "w-3.5 h-3.5" }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M10 11v6M14 11v6M6 7l1 12a1 1 0 001 1h8a1 1 0 001-1l1-12" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+function IconLive({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <rect x="3" y="5" width="14" height="12" rx="2" />
+      <path d="M17 9l4-2v10l-4-2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconClips({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function IconEvents({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <path d="M6 8h12M6 12h8M6 16h10" strokeLinecap="round" />
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+    </svg>
+  );
+}
+
+function IconSettings({ className = "w-5 h-5" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a7.723 7.723 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"
+      />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+function IconPlay({ className = "w-8 h-8" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M9 6.5v11l9-5.5-9-5.5z" />
+    </svg>
+  );
+}
+
+function AppHeader({
+  cameraName,
+  streamLabel,
+  personCount = 0,
+  recording,
+  onManage,
+  onDetect,
+  detecting,
+}) {
+  return (
+    <header className="shrink-0 mobile-glass border-b border-white/5 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 lg:px-6 pb-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-indigo-300/90">
+            Vigilance
+          </p>
+          <h1 className="text-lg font-semibold text-white truncate leading-tight">
+            {cameraName || "Live view"}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            disabled={detecting}
+            onClick={onDetect}
+            className="text-xs font-medium px-3 py-2 rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-50"
+          >
+            {detecting ? "…" : "Find"}
+          </button>
+          <button
+            type="button"
+            onClick={onManage}
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-full border border-white/10 text-gray-200 active:bg-white/10"
+            aria-label="Manage cameras"
+          >
+            <IconSettings className="w-4 h-4 shrink-0" />
+            <span>Manage</span>
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 mt-2.5">
+        <span
+          className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border ${
+            streamLabel === "NO SIGNAL"
+              ? "border-red-500/40 text-red-300 bg-red-500/10"
+              : streamLabel === "LIVE"
+                ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+                : "border-amber-500/40 text-amber-300 bg-amber-500/10"
+          }`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              streamLabel === "NO SIGNAL"
+                ? "bg-red-400"
+                : streamLabel === "LIVE"
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-amber-400"
+            }`}
+          />
+          {streamLabel || "LIVE"}
+        </span>
+        {recording ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border border-red-500/50 text-red-200 bg-red-500/15">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+            Recording
+          </span>
+        ) : null}
+        {personCount > 0 ? (
+          <span className="text-[11px] font-medium px-2.5 py-1 rounded-full border border-blue-500/40 text-blue-200 bg-blue-500/10">
+            Person detected ({personCount})
+          </span>
+        ) : null}
+      </div>
+    </header>
   );
 }
 
@@ -1129,18 +1268,66 @@ function RecordingsTimeline({
 
   return (
     <section
-        className={`bg-[#070c16] flex flex-col ${
+        className={`flex flex-col ${
           isPage
-            ? "flex-1 min-h-0 border-t border-gray-800"
-            : "shrink-0 border-t border-gray-800 max-h-[200px] min-h-[120px]"
+            ? "flex-1 min-h-0 bg-[#0b1220]"
+            : "shrink-0 border-t border-gray-800 bg-[#070c16] max-h-[200px] min-h-[120px]"
         } ${className}`}
         aria-label="Recordings timeline"
       >
-        <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-2 shrink-0">
+        {isPage ? (
+          <MobilePageHeader
+            title="Clips"
+            subtitle={`${activeCameraName || "No camera selected"}${
+              recordings.length > 0 ? ` · ${recordings.length}` : ""
+            }`}
+            actions={
+              <>
+                {recordings.length > 0 && typeof onDeleteAll === "function" ? (
+                  <button
+                    type="button"
+                    disabled={loading || deleting}
+                    onClick={async () => {
+                      setDeleting(true);
+                      try {
+                        const ok = await onDeleteAll();
+                        if (ok) setPlaying(null);
+                      } finally {
+                        setDeleting(false);
+                      }
+                    }}
+                    className="mobile-btn-danger text-[11px] !px-2.5 !py-1.5"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={loading || deleting || !hasCameras}
+                  onClick={onRefresh}
+                  className="mobile-btn-secondary text-[11px] !px-2.5 !py-1.5"
+                >
+                  {loading ? "…" : "Sync"}
+                </button>
+              </>
+            }
+          />
+        ) : (
+        <div
+          className={`shrink-0 flex items-center justify-between gap-2 border-b border-white/5 ${
+            isPage ? "px-4 py-3 mobile-glass" : "px-3 py-2 border-gray-800"
+          }`}
+        >
           <div className="min-w-0">
-            <h2 className="text-xs font-semibold text-gray-200">Clips</h2>
-            <p className="text-[10px] text-gray-500 truncate" title={activeCameraName || ""}>
+            <h2 className={`font-semibold text-gray-100 ${isPage ? "text-base" : "text-xs"}`}>
+              Clips
+            </h2>
+            <p
+              className={`text-gray-500 truncate ${isPage ? "text-xs mt-0.5" : "text-[10px]"}`}
+              title={activeCameraName || ""}
+            >
               {activeCameraName || "No camera selected"}
+              {recordings.length > 0 ? ` · ${recordings.length}` : ""}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -1172,6 +1359,7 @@ function RecordingsTimeline({
             </button>
           </div>
         </div>
+        )}
         <div
           className={`flex-1 min-h-0 px-3 py-2 ${
             isPage ? "overflow-y-auto overflow-x-hidden" : "overflow-x-auto overflow-y-hidden"
@@ -1188,7 +1376,13 @@ function RecordingsTimeline({
           ) : recordings.length === 0 ? (
             <p className="text-xs text-gray-500 py-2">No clips for this camera yet. Tap Refresh to sync from cameras.</p>
           ) : (
-            <ul className={isPage ? "flex flex-col gap-3 pb-4" : "flex gap-3 pb-1"}>
+            <ul
+              className={
+                isPage
+                  ? "grid grid-cols-2 gap-3 pb-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  : "flex gap-3 pb-1"
+              }
+            >
               {recordings.map((r) => {
                 const url = clipUrl(r, { forPlayback: true });
                 const downloadUrl = clipUrl(r, { forPlayback: false, viaController: false });
@@ -1200,15 +1394,25 @@ function RecordingsTimeline({
                 return (
                   <li
                     key={key}
-                    className={`rounded-lg border p-1.5 flex flex-col gap-1 ${
-                      isPage ? "w-full max-w-xl" : "shrink-0 w-[10.5rem]"
+                    className={`flex flex-col overflow-hidden ${
+                      isPage
+                        ? "rounded-2xl border border-white/10 bg-gradient-to-b from-[#151d2e] to-[#0c111c] shadow-lg"
+                        : "rounded-lg border p-1.5 gap-1 shrink-0 w-[10.5rem]"
                     } ${
                       isPlaying
-                        ? "border-blue-500/70 bg-[#111827]"
-                        : "border-gray-800 bg-[#111827]/60"
+                        ? isPage
+                          ? "ring-2 ring-indigo-500/80 border-indigo-500/50"
+                          : "border-blue-500/70 bg-[#111827]"
+                        : isPage
+                          ? ""
+                          : "border-gray-800 bg-[#111827]/60"
                     }`}
                   >
-                    <div className="relative w-full aspect-video rounded overflow-hidden bg-black border border-gray-700">
+                    <div
+                      className={`relative w-full aspect-video overflow-hidden bg-black ${
+                        isPage ? "" : "rounded border border-gray-700"
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={() =>
@@ -1217,7 +1421,7 @@ function RecordingsTimeline({
                             camName: activeCameraName || r.camName || "",
                           })
                         }
-                        className="absolute inset-0 w-full h-full"
+                        className="absolute inset-0 w-full h-full group"
                         title="Play clip"
                       >
                         <RecordingThumbnail
@@ -1226,8 +1430,19 @@ function RecordingsTimeline({
                           videoFallbackSrc={url}
                           className="w-full h-full object-cover pointer-events-none"
                         />
+                        {isPage ? (
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/25 group-active:bg-black/45 transition-colors">
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-[#0b1220] shadow-lg">
+                              <IconPlay className="w-5 h-5 ml-0.5" />
+                            </span>
+                          </span>
+                        ) : null}
                       </button>
-                      <div className="absolute top-1 right-1 flex gap-1 z-10">
+                      <div
+                        className={`absolute flex gap-1 z-10 ${
+                          isPage ? "top-2 right-2" : "top-1 right-1"
+                        }`}
+                      >
                         <a
                           href={downloadUrl}
                           download={r.name}
@@ -1260,12 +1475,18 @@ function RecordingsTimeline({
                         </button>
                       </div>
                     </div>
-                    <div className="min-w-0 text-[10px] px-0.5">
-                      <p className="text-gray-500 truncate">{formatTime(r.mtime)}</p>
-                      <p className="text-gray-600">{formatBytes(r.size)}</p>
-                      <p className="font-mono text-gray-600 truncate" title={r.name}>
-                        {r.name}
+                    <div className={`min-w-0 ${isPage ? "p-2.5 space-y-0.5" : "text-[10px] px-0.5"}`}>
+                      <p className={isPage ? "text-xs text-gray-200 font-medium" : "text-gray-500 truncate"}>
+                        {formatTime(r.mtime)}
                       </p>
+                      <p className={isPage ? "text-[10px] text-gray-500" : "text-gray-600"}>
+                        {formatBytes(r.size)}
+                      </p>
+                      {!isPage ? (
+                        <p className="font-mono text-gray-600 truncate" title={r.name}>
+                          {r.name}
+                        </p>
+                      ) : null}
                     </div>
                   </li>
                 );
@@ -1288,53 +1509,6 @@ function countPersonDetections(detections) {
   return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
-/** Always-on debug line for Hailo YOLOv8n person test (yolov8n.hef only). */
-function formatPersonDebugLine(info, wsOpen, system) {
-  if (!wsOpen) return "Person test: WS disconnected";
-  if (!info?.ts && !info?.error) return "Person test: waiting for frames…";
-  if (info.status === "buffering") {
-    const age = typeof info.bufferAgeMs === "number" ? info.bufferAgeMs : 0;
-    const need =
-      typeof info.inferenceDelayMs === "number" ? info.inferenceDelayMs : 4500;
-    return `Person test: syncing video (${age} / ${need} ms)…`;
-  }
-  if (info.error) return `Person test: — (${info.error})`;
-
-  const hailoErr = info.hailoError || system?.hailo_error || null;
-  const n =
-    typeof info.personCount === "number" ? info.personCount : countPersonDetections(info.faces);
-  if (n > 0) {
-    const streak = typeof info.personTriggerStreak === "number" ? info.personTriggerStreak : 0;
-    const need =
-      typeof info.personTriggerMinFrames === "number" ? info.personTriggerMinFrames : 3;
-    const score =
-      typeof info.personMaxScore === "number" ? info.personMaxScore : null;
-    const recThr =
-      typeof info.personRecordThreshold === "number"
-        ? info.personRecordThreshold
-        : typeof info.personDisplayThreshold === "number"
-          ? info.personDisplayThreshold
-          : 0.9;
-    const scoreTxt = score != null ? formatConfidencePct(score) : "?";
-    const thrTxt = formatConfidencePct(recThr);
-    if (info.personCaptureBusy) {
-      return `Person test: YES — ${n} @ ${scoreTxt} · recording (${thrTxt} to trigger)`;
-    }
-    if (streak >= need && info.personRecordEligible) {
-      return `Person test: YES — ${n} @ ${scoreTxt} · triggering clip`;
-    }
-    if (streak > 0) {
-      const recOk = info.personRecordEligible ? "ok" : `need ${thrTxt}`;
-      return `Person test: YES — ${n} @ ${scoreTxt} · arming ${streak}/${need} (${recOk})`;
-    }
-    return `Person test: YES — ${n} @ ${scoreTxt} · arming 0/${need} (need ${thrTxt} to record)`;
-  }
-  if (hailoErr) return `Person test: — (Hailo YOLOv8n: ${hailoErr})`;
-  const fc = typeof info.faceCount === "number" ? info.faceCount : (info.faces?.length ?? 0);
-  if (fc > 0) return `Person test: no (${fc} face box(es), no person label)`;
-  return "Person test: no person in frame";
-}
-
 function LiveTile({
   cam,
   recording,
@@ -1343,13 +1517,10 @@ function LiveTile({
   onManualToggle,
   faces,
   personCount,
-  detectionInfo,
-  detectionWsOpen,
   detectionSystem,
-  motionClipLine,
+  motionClipCountdown,
   overlayDelayMs,
   layout = "default",
-  isMobile = false,
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
@@ -1382,14 +1553,6 @@ function LiveTile({
       : typeof personCount === "number"
         ? personCount
         : countPersonDetections(rawFaces);
-  const persons =
-    typeof drawPersonCount === "number" ? drawPersonCount : countPersonDetections(drawFaces);
-  const personDebugLine = formatPersonDebugLine(
-    { ...detectionInfo, faces: rawFaces, personCount: detectionInfo?.personCount ?? drawPersonCount },
-    detectionWsOpen,
-    detectionSystem
-  );
-  const personDebugPositive = persons > 0;
   const [scale, setScale] = useState(1);
   const [streamError, setStreamError] = useState("");
   const [edgeHint, setEdgeHint] = useState("");
@@ -1399,6 +1562,9 @@ function LiveTile({
   const [hlsUrl, setHlsUrl] = useState(hlsProxyUrl);
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
+  const isHero = layout === "hero";
+  const isThumb = layout === "thumb";
+  const heroLayout = isHero && !isThumb;
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -1505,14 +1671,22 @@ function LiveTile({
     video.addEventListener("playing", onPlaying);
 
     const useNative = preferNativeHlsPlayback() && canPlayNativeHls(video);
+    const startPlay = () => {
+      const p = video.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    };
 
     if (useNative) {
       hlsRef.current = null;
       video.playsInline = true;
+      video.muted = true;
+      video.autoplay = true;
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
       video.src = hlsUrl;
       video.load();
+      video.addEventListener("loadedmetadata", startPlay);
+      startPlay();
     } else if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: false,
@@ -1554,6 +1728,9 @@ function LiveTile({
       cancelled = true;
       video.removeEventListener("error", onVideoError);
       video.removeEventListener("playing", onPlaying);
+      if (useNative) {
+        video.removeEventListener("loadedmetadata", startPlay);
+      }
       hlsRef.current = null;
       if (hls) hls.destroy();
       video.removeAttribute("src");
@@ -1585,9 +1762,9 @@ function LiveTile({
       if (!vw || !vh) return;
       const layout = computeObjectContainLayout(cw, ch, vw, vh);
       if (!layout) return;
-      const lineW = isMobile ? 3 : 2;
+      const lineW = heroLayout ? 3 : 2;
       ctx.lineWidth = lineW;
-      ctx.font = isMobile
+      ctx.font = heroLayout
         ? "12px ui-monospace, system-ui, sans-serif"
         : "11px ui-monospace, system-ui, sans-serif";
       const faceList = personDetections(drawFaces);
@@ -1605,7 +1782,7 @@ function LiveTile({
         const textY = Math.max(12, y - 4);
         const metrics = ctx.measureText(label);
         const boxW = metrics.width + padX * 2;
-        const boxH = isMobile ? 16 : 14;
+        const boxH = heroLayout ? 16 : 14;
         const labelX = Math.min(Math.max(0, x), cw - boxW);
         const labelTop = Math.max(0, textY - boxH + 2);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
@@ -1634,18 +1811,19 @@ function LiveTile({
       window.removeEventListener("orientationchange", paint);
       window.clearInterval(overlayTick);
     };
-  }, [drawFaces, useWebRtc, cam.id, isMobile]);
-
-  const isHero = layout === "hero";
-  const isThumb = layout === "thumb";
+  }, [drawFaces, useWebRtc, cam.id, heroLayout]);
 
   return (
     <div
-      className={`bg-[#111827] flex flex-col min-h-0 h-full ${
-        isThumb ? "rounded-none p-0" : "rounded-xl p-2"
+      className={`flex flex-col min-h-0 h-full ${
+        isThumb
+          ? "rounded-none p-0 bg-transparent"
+          : heroLayout
+            ? "rounded-2xl p-0 bg-[#0a0f18] ring-1 ring-white/5 shadow-2xl overflow-hidden"
+            : "rounded-xl p-2 bg-[#111827]"
       }`}
     >
-      {!isThumb ? (
+      {!isThumb && !heroLayout ? (
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -1659,35 +1837,7 @@ function LiveTile({
         </div>
       </div>
       ) : null}
-      {!isThumb ? (
-      <div className="mb-1 space-y-0.5">
-        <p
-          className={`text-[10px] font-mono leading-snug ${
-            personDebugPositive
-              ? "text-blue-300 font-semibold"
-              : personDebugLine.includes("—") ||
-                  personDebugLine.includes("waiting") ||
-                  personDebugLine.includes("disconnected")
-                ? "text-amber-400/90"
-                : "text-gray-500"
-          }`}
-          title="Hailo YOLOv8n on controller RTSP — triggers motion clip when recording mode is Motion"
-        >
-          {personDebugLine}
-        </p>
-        {motionClipLine ? (
-          <p className="text-[10px] font-mono text-rose-300 font-semibold" title="Motion recording in progress">
-            {motionClipLine}
-          </p>
-        ) : null}
-        {isMobile && persons > 0 ? (
-          <p className="sm:hidden text-[10px] text-blue-300 font-semibold">
-            Person detected ({persons})
-          </p>
-        ) : null}
-      </div>
-      ) : null}
-      {!isThumb && edgeHint ? (
+      {!isThumb && !heroLayout && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
           {cam.url ? (
@@ -1703,23 +1853,40 @@ function LiveTile({
         className={`relative flex-1 bg-black overflow-hidden touch-none ${
           isThumb
             ? "rounded-none min-h-0 h-full"
-            : `rounded-lg ${
-                isHero
-                  ? isMobile
-                    ? "min-h-[42dvh] max-h-[68dvh]"
-                    : "min-h-[200px] max-h-none"
-                  : isMobile
-                    ? "min-h-[28dvh] max-h-[40dvh]"
-                    : "min-h-[100px] max-h-[200px]"
-              }`
+            : heroLayout
+              ? "min-h-0 flex-1 rounded-none lg:min-h-[min(62vh,680px)]"
+              : `rounded-lg min-h-[100px] max-h-[200px]`
         }`}
       >
+        {heroLayout ? (
+          <>
+            <div className="absolute inset-x-0 top-0 h-14 mobile-video-gradient-top pointer-events-none z-[5]" />
+            <div className="absolute inset-x-0 bottom-0 h-24 mobile-video-gradient-bottom pointer-events-none z-[5]" />
+          </>
+        ) : null}
         {recording ? (
           <div
-            className="absolute top-2 right-2 z-20 h-5 w-5 rounded-full bg-red-600 shadow-lg ring-2 ring-white/90"
-            title="Recording"
-            aria-label="Recording"
-          />
+            className={`absolute z-20 flex items-center gap-1.5 ${
+              heroLayout ? "top-3 right-3" : "top-2 right-2"
+            }`}
+            title={
+              motionClipCountdown
+                ? `Recording — ${motionClipCountdown} remaining`
+                : "Recording"
+            }
+            aria-label={
+              motionClipCountdown
+                ? `Recording, ${motionClipCountdown} remaining`
+                : "Recording"
+            }
+          >
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-600 shadow-lg ring-2 ring-white/90 animate-pulse" />
+            {motionClipCountdown ? (
+              <span className="text-[11px] font-mono font-semibold tabular-nums text-white bg-black/55 backdrop-blur-sm px-1.5 py-0.5 rounded-md border border-white/10">
+                {motionClipCountdown}
+              </span>
+            ) : null}
+          </div>
         ) : null}
         <div
           className="w-full h-full origin-center transition-transform duration-75"
@@ -1763,53 +1930,69 @@ function LiveTile({
           )}
         </div>
         {!isThumb ? (
-        <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 z-10 pointer-events-auto items-center">
+        <div
+          className={`absolute z-10 pointer-events-auto flex items-center gap-1 ${
+            heroLayout
+              ? "bottom-3 left-1/2 -translate-x-1/2 mobile-glass rounded-full border border-white/10 px-2 py-1.5 shadow-lg"
+              : "bottom-1 left-1 right-1 flex-wrap"
+          }`}
+        >
           {showManual ? (
             <button
               type="button"
               onClick={onManualToggle}
-              className={`rounded px-2 py-0.5 text-[10px] font-medium shrink-0 ${
+              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold shrink-0 ${
                 manualRecording
-                  ? "bg-red-600 text-white ring-1 ring-white/80 hover:bg-red-500"
-                  : "bg-gray-700 text-gray-100 hover:bg-gray-600"
+                  ? "bg-red-600 text-white"
+                  : heroLayout
+                    ? "bg-white/10 text-gray-100"
+                    : "bg-gray-700 text-gray-100 hover:bg-gray-600"
               }`}
               title={manualRecording ? "Stop manual recording" : "Start manual recording"}
             >
-              {manualRecording ? "■ Stop" : "● Rec"}
+              {manualRecording ? "Stop" : "Rec"}
             </button>
           ) : null}
           <button
             type="button"
             onClick={zoomOut}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              heroLayout ? "w-8 h-8 text-sm" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             −
           </button>
           <button
             type="button"
             onClick={zoomIn}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              heroLayout ? "w-8 h-8 text-sm" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             +
           </button>
           <button
             type="button"
             onClick={() => setScale(1)}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              heroLayout ? "w-8 h-8 text-[10px] font-medium" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
             1×
           </button>
           <button
             type="button"
             onClick={goFs}
-            className="rounded bg-black/70 px-2 py-0.5 text-[10px] text-white hover:bg-black/90"
+            className={`rounded-full text-white active:bg-white/20 ${
+              heroLayout ? "w-8 h-8 text-[10px] font-medium" : "bg-black/70 px-2 py-0.5 text-[10px] hover:bg-black/90"
+            }`}
           >
-            Fullscreen
+            ⛶
           </button>
         </div>
         ) : null}
       </div>
-      {!isThumb ? (
+      {!isThumb && !heroLayout ? (
       <p
         className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
         title={useWebRtc ? "WebRTC reader (low latency)" : "HLS playlist for video + synced overlay"}
@@ -1849,16 +2032,13 @@ export default function App() {
   const [activeCameraId, setActiveCameraId] = useState(null);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
-  /** Motion clip in progress on Pi edge (cam id → status from edge). */
-  const [motionClipById, setMotionClipById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
   /** Phase 1: controller `/ws/detections` → per-camera inference + person debug */
   const [detectionsById, setDetectionsById] = useState({});
   const [detectionWsOpen, setDetectionWsOpen] = useState(false);
   const [detectionSystem, setDetectionSystem] = useState(null);
-  const isMobile = useIsMobile();
-  const [mobileTab, setMobileTab] = useState("live");
-  const [mobileManageOpen, setMobileManageOpen] = useState(false);
+  const [mainTab, setMainTab] = useState("live");
+  const [manageOpen, setManageOpen] = useState(false);
   const [playingClip, setPlayingClip] = useState(null);
 
   const load = useCallback(async () => {
@@ -1929,7 +2109,7 @@ export default function App() {
   }, [cams]);
 
   useEffect(() => {
-    loadAllRecordings(cams);
+    loadAllRecordings(cams, { sync: true });
   }, [cams, loadAllRecordings]);
 
   useEffect(() => {
@@ -1965,50 +2145,8 @@ export default function App() {
     };
   }, [cams]);
 
-  useEffect(() => {
-    const edgeCams = cams.filter(
-      (c) =>
-        c.edge_base_url &&
-        isSetCameraId(c.id) &&
-        (c.settings?.recording_mode || "motion") === "motion"
-    );
-    if (!edgeCams.length) return undefined;
-    let cancelled = false;
-    const poll = async () => {
-      for (const c of edgeCams) {
-        try {
-          const res = await fetch(`${API}/cameras/${c.id}/recordings/motion/status`);
-          if (!res.ok || cancelled) continue;
-          const st = await res.json();
-          if (cancelled || !st || typeof st !== "object") continue;
-          setMotionClipById((prev) => {
-            const prevSt = prev[c.id];
-            const wasActive = motionClipIsActive(prevSt);
-            const nowActive = motionClipIsActive(st);
-            const next = { ...prev, [c.id]: st };
-            if (wasActive && !nowActive) {
-              loadAllRecordingsRef.current(camsRef.current, { sync: true });
-            } else if (st.filename && st.filename !== prevSt?.filename) {
-              loadAllRecordingsRef.current(camsRef.current, { sync: false });
-            }
-            return next;
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-    poll();
-    const iv = window.setInterval(poll, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(iv);
-    };
-  }, [cams]);
-
   const camsRef = useRef(cams);
   const loadAllRecordingsRef = useRef(loadAllRecordings);
-  const motionClipByIdRef = useRef(motionClipById);
   const recordingByIdRef = useRef(recordingById);
   const manualRecordingByIdRef = useRef(manualRecordingById);
 
@@ -2018,9 +2156,6 @@ export default function App() {
   useEffect(() => {
     loadAllRecordingsRef.current = loadAllRecordings;
   }, [loadAllRecordings]);
-  useEffect(() => {
-    motionClipByIdRef.current = motionClipById;
-  }, [motionClipById]);
   useEffect(() => {
     recordingByIdRef.current = recordingById;
   }, [recordingById]);
@@ -2036,9 +2171,10 @@ export default function App() {
       const list = camsRef.current;
       const load = loadAllRecordingsRef.current;
       if (!list?.length || typeof load !== "function") return;
-      load(list);
-      window.setTimeout(() => load(camsRef.current), 1500);
-      window.setTimeout(() => load(camsRef.current), 4000);
+      const opts = { sync: true };
+      load(list, opts);
+      window.setTimeout(() => load(camsRef.current, opts), 1500);
+      window.setTimeout(() => load(camsRef.current, opts), 4000);
     };
     const connect = () => {
       try {
@@ -2083,26 +2219,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API}/system/live_detection`);
-        if (res.ok && !cancelled) {
-          setDetectionSystem(await res.json());
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    poll();
-    const iv = setInterval(poll, 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(iv);
-    };
-  }, []);
-
-  useEffect(() => {
     let ws;
     let alive = true;
     const connect = () => {
@@ -2124,6 +2240,19 @@ export default function App() {
             return;
           }
           if (msg.type === "detections" && msg.camera_id != null) {
+            if (
+              msg.backend != null ||
+              typeof msg.hailo_ready === "boolean" ||
+              msg.hailo_error != null
+            ) {
+              setDetectionSystem((prev) => ({
+                ...(prev || {}),
+                backend: msg.backend ?? prev?.backend,
+                hailo_ready:
+                  typeof msg.hailo_ready === "boolean" ? msg.hailo_ready : prev?.hailo_ready,
+                hailo_error: msg.hailo_error ?? prev?.hailo_error,
+              }));
+            }
             const id = Number(msg.camera_id);
             const faces = Array.isArray(msg.faces) ? msg.faces : [];
             const personCount =
@@ -2377,6 +2506,8 @@ export default function App() {
             ? body.filename.trim()
             : null;
         if (stoppedName) {
+          const stoppedSize =
+            typeof body.size === "number" && body.size > 0 ? body.size : null;
           setAllRecordings((prev) => {
             const key = recordingKey({ camId: cam.id, name: stoppedName });
             if (prev.some((r) => recordingKey(r) === key)) return prev;
@@ -2385,7 +2516,7 @@ export default function App() {
                 camId: cam.id,
                 camName: cam.name,
                 name: stoppedName,
-                size: 0,
+                size: stoppedSize ?? 0,
                 mtime: Date.now() / 1000,
               },
               ...prev,
@@ -2473,414 +2604,223 @@ export default function App() {
     }
   };
   const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
-  useMotionClipCountdownTicker(motionClipById);
-  const showLivePanel = !isMobile || mobileTab === "live";
-  const showClipsPanel = isMobile && mobileTab === "clips";
-  const showEventsPanel = isMobile && mobileTab === "events";
+  const mobilePersonCount = mobileLiveCam
+    ? (detectionsById[mobileLiveCam.id]?.personCount ??
+        countPersonDetections(detectionsById[mobileLiveCam.id]?.faces))
+    : 0;
+  const mobileRecording =
+    mobileLiveCam &&
+    ((mobileLiveCam.settings?.recording_mode || "motion") === "off"
+      ? manualRecordingById[mobileLiveCam.id] === true
+      : recordingActiveForCam(recordingById, mobileLiveCam.id));
+  const showLivePanel = mainTab === "live";
+  const showClipsPanel = mainTab === "clips";
+  const showEventsPanel = mainTab === "events";
 
   useEffect(() => {
-    if (mobileTab === "cameras") setMobileTab("live");
-  }, [mobileTab]);
+    if (mainTab === "cameras") setMainTab("live");
+  }, [mainTab]);
 
   const renderLiveTile = (c, layout) => (
     <LiveTile
       cam={c}
       layout={layout}
-      isMobile={isMobile}
       recording={
         (c.settings?.recording_mode || "motion") === "off"
           ? manualRecordingById[c.id] === true
-          : recordingActiveForCam(recordingById, c.id) ||
-            motionClipIsActive(motionClipById[c.id])
+          : recordingActiveForCam(recordingById, c.id)
       }
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}
       onManualToggle={() => toggleManualRecording(c)}
       faces={detectionsById[c.id]?.faces}
       personCount={detectionsById[c.id]?.personCount ?? 0}
-      detectionInfo={detectionsById[c.id]}
-      detectionWsOpen={detectionWsOpen}
       detectionSystem={detectionSystem}
       overlayDelayMs={
         typeof detectionSystem?.overlay_delay_ms === "number"
           ? detectionSystem.overlay_delay_ms
           : undefined
       }
-      motionClipLine={
-        (c.settings?.recording_mode || "motion") === "motion"
-          ? formatMotionClipLine(motionClipById[c.id], c.settings)
-          : null
-      }
+      motionClipCountdown={null}
     />
   );
 
   return (
-    <div className="flex flex-col md:flex-row h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
-      <aside
-        className={`bg-[#070c16] p-3 flex flex-col gap-3 border-r border-gray-800 min-h-0 ${
-          isMobile
-            ? mobileManageOpen
-              ? "flex flex-1 w-full fixed inset-0 z-40 overflow-y-auto"
-              : "hidden"
-            : "hidden md:flex w-60 lg:w-72 shrink-0 overflow-hidden"
-        }`}
-      >
-        {isMobile && mobileManageOpen ? (
-          <button
-            type="button"
-            onClick={() => setMobileManageOpen(false)}
-            className="text-sm text-indigo-300 hover:text-indigo-100 text-left mb-1"
-          >
-            ← Back to live
-          </button>
-        ) : null}
-        <div
-          className={`flex flex-col gap-3 ${
-            !isMobile ? "shrink-0 overflow-y-auto max-h-[28vh] min-h-0" : ""
-          }`}
-        >
-        <h1 className="text-lg font-bold">Vigilance</h1>
-        <p className="text-[10px] text-gray-500">Dashboard · up to {MAX_LIVE_TILES} cameras</p>
-
-        <button
-          type="button"
-          onClick={() => setShowDebugPanel((v) => !v)}
-          className="text-[10px] text-left text-gray-400 hover:text-gray-200"
-        >
-          {showDebugPanel ? "▼" : "▶"} Detection diagnostics
-        </button>
-        {showDebugPanel ? (
-        <div className="rounded-lg border border-gray-700 bg-[#111827] p-2 text-[10px] space-y-1.5">
-          <p className="font-semibold text-gray-300">Person detection (debug)</p>
-          <p className={detectionWsOpen ? "text-green-400" : "text-amber-400"}>
-            WebSocket: {detectionWsOpen ? "connected" : "disconnected"}
-          </p>
-          <p className="text-gray-400">
-            Backend: <span className="text-gray-200">{detectionSystem?.backend || "—"}</span>
-          </p>
-          <p className="text-gray-400">
-            Hailo YOLOv8n:{" "}
-            <span className="text-gray-200">
-              {detectionSystem?.hailo_ready
-                ? "ready"
-                : detectionSystem?.hailo_error || "not ready"}
-            </span>
-          </p>
-          <p className="text-gray-400">
-            HEF:{" "}
-            <span className="text-gray-200 font-mono">
-              {detectionSystem?.hef_model || "yolov8n.hef"}
-            </span>
-          </p>
-          <p className="text-gray-400">
-            Inference workers:{" "}
-            <span className="text-gray-200">{detectionSystem?.workers ?? 0}</span>
-          </p>
-          <p className="text-gray-400">
-            Inference delay:{" "}
-            <span className="text-gray-200">
-              {typeof detectionSystem?.inference_delay_ms === "number"
-                ? detectionSystem.inference_delay_ms
-                : typeof detectionSystem?.overlay_delay_ms === "number"
-                  ? detectionSystem.overlay_delay_ms
-                  : "—"}{" "}
-              ms
-            </span>
-            {detectionOverlaySyncEnabled() ? (
-              <span className="text-gray-500">
-                {" "}
-                (+ UI {detectionOverlayDelayMs()} ms)
-              </span>
-            ) : null}
-          </p>
-          {liveCams.length > 0 ? (
-            <div className="border-t border-gray-700 pt-1.5 space-y-0.5">
-              {liveCams.map((c) => (
-                <p key={c.id} className="text-gray-400 font-mono leading-snug">
-                  {c.name}:{" "}
-                  {formatPersonDebugLine(detectionsById[c.id], detectionWsOpen, detectionSystem)}
-                </p>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        ) : null}
-
-        <button
-          type="button"
-          disabled={detecting}
-          onClick={detectCameras}
-          className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed p-2 rounded text-sm"
-        >
-          {detecting ? "Detecting… (~3s)" : "Detect cameras"}
-        </button>
-
-        {discoveredEdges.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {discoveredEdges.map((e, i) => (
-              <div
-                key={`${e.edge_base_url}-${e.mqtt_camera_id}-${i}`}
-                className="bg-[#111827] p-2 rounded text-xs flex flex-col gap-1"
+    <div className="flex flex-col h-[100dvh] bg-[#0b1220] text-white overflow-hidden">
+      {manageOpen ? (
+        <aside className="fixed inset-0 z-40 flex flex-col bg-[#0b1220]">
+          <MobilePageHeader
+            title="Manage cameras"
+            subtitle={`${cams.length} configured · up to ${MAX_LIVE_TILES} live`}
+            onBack={() => setManageOpen(false)}
+            backLabel="Back to live"
+            actions={
+              <button
+                type="button"
+                disabled={detecting}
+                onClick={detectCameras}
+                className="text-xs font-medium px-3 py-2 rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-50 whitespace-nowrap"
               >
-                <div className="flex justify-between items-center gap-1">
-                  <span className="truncate font-medium">{e.name}</span>
+                {detecting ? "…" : "Find"}
+              </button>
+            }
+          />
+          <div className="flex-1 overflow-y-auto w-full max-w-2xl mx-auto px-4 lg:px-6 pb-[max(5rem,env(safe-area-inset-bottom))]">
+          <div className="flex flex-col gap-3">
+            <button type="button" onClick={() => setShowDebugPanel((v) => !v)} className="text-[10px] text-left text-gray-400 hover:text-gray-200">
+              {showDebugPanel ? "▼" : "▶"} Detection diagnostics
+            </button>
+            {showDebugPanel ? (
+              <div className="mobile-card p-3 text-[10px] space-y-1.5">
+                <p className="font-semibold text-gray-300">Person detection (debug)</p>
+                <p className={detectionWsOpen ? "text-green-400" : "text-amber-400"}>
+                  WebSocket: {detectionWsOpen ? "connected" : "disconnected"}
+                </p>
+                <p className="text-gray-400">
+                  Backend: <span className="text-gray-200">{detectionSystem?.backend || "—"}</span>
+                </p>
+                <p className="text-gray-400">
+                  Hailo YOLOv8n:{" "}
+                  <span className="text-gray-200">
+                    {detectionSystem?.hailo_ready ? "ready" : detectionSystem?.hailo_error || "not ready"}
+                  </span>
+                </p>
+                {liveCams.length > 0 ? (
+                  <div className="border-t border-white/10 pt-1.5 space-y-0.5">
+                    {liveCams.map((c) => {
+                      const n =
+                        detectionsById[c.id]?.personCount ??
+                        countPersonDetections(detectionsById[c.id]?.faces);
+                      return (
+                        <p key={c.id} className="text-gray-400 font-mono leading-snug">
+                          {c.name}: {n > 0 ? `${n} person(s)` : "none"}
+                        </p>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {discoveredEdges.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {discoveredEdges.map((e, i) => (
+                  <div key={`${e.edge_base_url}-${e.mqtt_camera_id}-${i}`} className="mobile-card p-3 text-xs flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center gap-1">
+                      <span className="truncate font-medium">{e.name}</span>
+                      <button type="button" onClick={() => addDiscovered(e)} className="text-green-400 shrink-0">Add</button>
+                    </div>
+                    <span className="text-[10px] text-gray-500 font-mono truncate">
+                      {e.edge_base_url} · id {e.mqtt_camera_id}
+                    </span>
+                    {e.incomplete ? (
+                      <input
+                        className="mobile-input !text-[10px] font-mono"
+                        placeholder={`rtsp://…:8554/${(e.mediamtx_path || e.mqtt_camera_id || "camera1").replace(/^\//, "")}`}
+                        value={edgeRtspOverrides[edgeDiscoveryKey(e)] ?? ""}
+                        onChange={(ev) => setEdgeRtspOverrides((o) => ({ ...o, [edgeDiscoveryKey(e)]: ev.target.value }))}
+                      />
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-2">
+            <h3 className="mobile-section-title">Detected Cameras</h3>
+            {cams.map((c) => (
+              <div
+                key={c.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActiveCameraId(c.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveCameraId(c.id); } }}
+                className={`p-3 rounded-xl mb-2 text-sm flex justify-between items-center gap-2 cursor-pointer border active:scale-[0.99] transition-transform ${
+                  cameraIdsMatch(activeCameraId, c.id)
+                    ? "border-indigo-500/60 bg-indigo-500/10 ring-1 ring-indigo-500/30"
+                    : "border-white/10 bg-[#111827]/80"
+                }`}
+              >
+                <span className="truncate flex-1">{c.name}</span>
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => addDiscovered(e)}
-                    className="text-green-400 shrink-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openSettings(c);
+                    }}
+                    className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-white/15 text-gray-200 hover:bg-white/10"
+                    title="Camera settings"
                   >
-                    Add
+                    Settings
                   </button>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); deleteCamera(c); }} className="text-red-400 hover:text-red-300 px-1 text-xs" title="Remove camera">✕</button>
                 </div>
-                <span className="text-[10px] text-gray-500 font-mono truncate">
-                  {e.edge_base_url} · id {e.mqtt_camera_id}
-                </span>
-                {e.incomplete ? (
-                  <p
-                    className="text-[10px] text-amber-500 leading-snug"
-                    title="Edge did not advertise an RTSP URL in mDNS TXT (see docs/SETUP_PI4.md)."
-                  >
-                    No RTSP in mDNS — paste the RTSP URL here, then Add.
-                  </p>
-                ) : null}
-                {e.incomplete ? (
-                  <input
-                    className="w-full bg-[#0b1220] border border-amber-700/80 rounded px-2 py-1 text-[10px] font-mono"
-                    placeholder={`rtsp://…:8554/${(e.mediamtx_path || e.mqtt_camera_id || "camera1").replace(/^\//, "")}`}
-                    value={edgeRtspOverrides[edgeDiscoveryKey(e)] ?? ""}
-                    onChange={(ev) =>
-                      setEdgeRtspOverrides((o) => ({
-                        ...o,
-                        [edgeDiscoveryKey(e)]: ev.target.value,
-                      }))
-                    }
-                  />
-                ) : null}
               </div>
             ))}
           </div>
-        ) : null}
-        </div>
-
-        <div className={isMobile ? "" : "shrink-0 flex flex-col"}>
-          <h3 className="text-xs text-gray-400 mb-2 shrink-0">Detected Cameras</h3>
-          <div
-            className={
-              isMobile ? "" : "min-h-[2.5rem] max-h-[11.5rem] overflow-y-auto shrink-0"
-            }
-          >
-          {cams.map((c) => (
-            <div
-              key={c.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => setActiveCameraId(c.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setActiveCameraId(c.id);
-                }
-              }}
-              className={`bg-[#111827] p-2 rounded mb-2 text-sm flex justify-between items-center gap-1 cursor-pointer border ${
-                cameraIdsMatch(activeCameraId, c.id)
-                  ? "border-indigo-500 ring-1 ring-indigo-500/40"
-                  : "border-transparent hover:border-gray-600"
-              }`}
-              title="Show this camera's clips in the timeline"
-            >
-              <span className="truncate flex-1">{c.name}</span>
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openSettings(c);
-                  }}
-                  className="text-gray-300 hover:text-white px-1"
-                  title="Camera settings"
-                >
-                  ⚙
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteCamera(c);
-                  }}
-                  className="text-red-400 hover:text-red-300 px-1 text-xs"
-                  title="Remove camera"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          ))}
           </div>
-        </div>
+        </aside>
+      ) : null}
 
-        {!isMobile ? (
-          <EventsPanel
-            variant="sidebar"
-            cameraId={activeCameraId}
-            cameraName={activeCamera?.name ?? ""}
-            recordings={recordingsForActiveCamera}
-            cameras={cams}
-            playingClip={playingClip}
-            onPlayClip={setPlayingClip}
-            onClearPlay={() => setPlayingClip(null)}
-            className="flex-1 min-h-0 mt-1 pt-1 border-t border-gray-800"
-          />
-        ) : null}
-      </aside>
-
-      <div
-        className={`flex-1 flex flex-col min-w-0 min-h-0 ${
-          isMobile && mobileManageOpen ? "hidden" : ""
-        }`}
-      >
+      <div className={`flex-1 flex flex-col min-w-0 min-h-0 w-full max-w-6xl mx-auto ${manageOpen ? "hidden" : ""}`}>
         {showLivePanel ? (
-        <>
-        {isMobile ? (
-          <div className="flex gap-2 px-3 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
-            <button
-              type="button"
-              disabled={detecting}
-              onClick={detectCameras}
-              className="flex-1 text-xs py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
-            >
-              {detecting ? "Detecting…" : "Detect cameras"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileManageOpen(true)}
-              className="flex-1 text-xs py-2 rounded border border-gray-600 text-gray-200 hover:bg-gray-800"
-            >
-              Manage
-            </button>
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 border-b border-gray-800 bg-[#070c16]/80 shrink-0">
-          <span className="text-xs font-medium text-gray-200">
-            {liveCams.length} camera{liveCams.length === 1 ? "" : "s"} live
-          </span>
-          {activeCamera ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full border border-indigo-500/50 text-indigo-200 bg-indigo-500/10">
-              Active: {activeCamera.name}
-            </span>
-          ) : null}
-          <span
-            className={`text-[10px] px-2 py-0.5 rounded-full border ${
-              detectionWsOpen
-                ? "border-green-500/40 text-green-400 bg-green-500/10"
-                : "border-amber-500/40 text-amber-400 bg-amber-500/10"
-            }`}
-          >
-            WS {detectionWsOpen ? "connected" : "disconnected"}
-          </span>
-          <span
-            className={`text-[10px] px-2 py-0.5 rounded-full border ${
-              detectionSystem?.hailo_ready
-                ? "border-green-500/40 text-green-400 bg-green-500/10"
-                : "border-gray-600 text-gray-400 bg-gray-800/50"
-            }`}
-          >
-            Hailo {detectionSystem?.hailo_ready ? "ready" : "off"}
-          </span>
-          {liveCams.some((c) => {
-            const n =
-              detectionsById[c.id]?.personCount ??
-              countPersonDetections(detectionsById[c.id]?.faces);
-            return n > 0;
-          }) ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full border border-blue-500/40 text-blue-300 bg-blue-500/10">
-              Person detected
-            </span>
-          ) : null}
-          <span className="text-[10px] text-gray-500 ml-auto hidden lg:inline font-mono truncate max-w-[40%]">
-            {API}
-          </span>
-        </div>
-
-        <div className="flex-1 p-2 md:p-3 min-h-0 overflow-hidden flex flex-col">
-          {liveCams.length === 0 ? (
-            <p className="text-gray-500 text-sm p-4">
-              No cameras saved. Use Detect cameras to add Pi edges — saved cameras persist across
-              backend restarts until removed.
-            </p>
-          ) : isMobile ? (
-            <div className="flex flex-col flex-1 min-h-0 gap-2">
-              {mobileLiveCam ? (
-                <div className="flex-1 min-h-0 rounded-xl ring-1 ring-gray-800">
-                  {renderLiveTile(mobileLiveCam, "hero")}
+          <>
+            <AppHeader
+              cameraName={mobileLiveCam?.name}
+              streamLabel={liveCams.length > 0 ? "LIVE" : "—"}
+              personCount={mobilePersonCount}
+              recording={Boolean(mobileRecording)}
+              onManage={() => setManageOpen(true)}
+              onDetect={detectCameras}
+              detecting={detecting}
+            />
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-3 lg:px-6 pt-2 pb-1">
+              {liveCams.length === 0 ? (
+                <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
+                  <p className="text-gray-300 text-sm font-medium mb-1">No cameras yet</p>
+                  <p className="text-gray-500 text-xs max-w-[16rem]">Tap Find to discover Pi edge cameras on your network.</p>
                 </div>
-              ) : null}
-              <LiveCameraThumbStrip
-                cameras={liveCams}
-                activeId={effectiveActiveCameraId}
-                onSelect={setActiveCameraId}
-                renderThumb={(c) => renderLiveTile(c, "thumb")}
-              />
-            </div>
-          ) : (
-            <div
-              className={`grid flex-1 min-h-0 gap-3 grid-cols-1 md:grid-cols-3 ${
-                liveCams.length > 4 ? "md:grid-rows-3" : "md:grid-rows-2"
-              }`}
-            >
-              {liveCams.map((c, i) => (
-                <div
-                  key={c.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    if (e.target.closest("button, a")) return;
-                    setActiveCameraId(c.id);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setActiveCameraId(c.id);
-                    }
-                  }}
-                  className={`min-h-0 min-w-0 rounded-xl transition-shadow cursor-pointer ${bentoTileClass(i, liveCams.length)} ${
-                    cameraIdsMatch(activeCameraId, c.id)
-                      ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-[#0b1220]"
-                      : "hover:ring-1 hover:ring-gray-600"
-                  }`}
-                  title={
-                    cameraIdsMatch(activeCameraId, c.id)
-                      ? "Active camera (clips below)"
-                      : "Click to activate — show this camera's clips"
-                  }
-                >
-                  {renderLiveTile(c, i === 0 ? "hero" : "default")}
+              ) : (
+                <div className="flex flex-col flex-1 min-h-0 gap-3 lg:gap-4">
+                  {mobileLiveCam ? (
+                    <div className="flex-1 min-h-0 flex flex-col">
+                      {renderLiveTile(mobileLiveCam, "hero")}
+                    </div>
+                  ) : null}
+                  <LiveCameraThumbStrip
+                    cameras={liveCams}
+                    activeId={effectiveActiveCameraId}
+                    onSelect={setActiveCameraId}
+                    renderThumb={(c) => renderLiveTile(c, "thumb")}
+                    mobile
+                  />
                 </div>
-              ))}
+              )}
             </div>
-          )}
-        </div>
-        </>
+          </>
         ) : null}
 
-        {(!isMobile || showClipsPanel) && (
-        <RecordingsTimeline
-          recordings={recordingsForActiveCamera}
-          cameras={cams}
-          activeCameraName={activeCamera?.name ?? ""}
-          loading={recordingsLoading}
-          listError={recordingsListError}
-          hasCameras={cams.length > 0}
-          onRefresh={() => loadAllRecordings(cams, { sync: true })}
-          onDelete={deleteRecordingFor}
-          onDeleteAll={deleteAllRecordingsForActiveCamera}
-          playing={playingClip}
-          onPlayingChange={setPlayingClip}
-          variant={isMobile ? "page" : "dock"}
-        />
-        )}
+        {showClipsPanel ? (
+          <RecordingsTimeline
+            recordings={recordingsForActiveCamera}
+            cameras={cams}
+            activeCameraName={activeCamera?.name ?? ""}
+            loading={recordingsLoading}
+            listError={recordingsListError}
+            hasCameras={cams.length > 0}
+            onRefresh={() => loadAllRecordings(cams, { sync: true })}
+            onDelete={deleteRecordingFor}
+            onDeleteAll={deleteAllRecordingsForActiveCamera}
+            playing={playingClip}
+            onPlayingChange={setPlayingClip}
+            variant="page"
+            className="flex-1 min-h-0"
+          />
+        ) : null}
 
-        {isMobile && showEventsPanel ? (
+        {showEventsPanel ? (
           <EventsPanel
+            variant="page"
             cameraId={activeCameraId}
             cameraName={activeCamera?.name ?? ""}
             recordings={recordingsForActiveCamera}
@@ -2888,17 +2828,11 @@ export default function App() {
             playingClip={playingClip}
             onPlayClip={setPlayingClip}
             onClearPlay={() => setPlayingClip(null)}
-            className="flex-1 min-h-0 m-2"
+            className="flex-1 min-h-0"
           />
         ) : null}
 
-        {isMobile ? (
-          <MobileBottomNav
-            tab={mobileTab}
-            onTab={setMobileTab}
-            clipCount={recordingsForActiveCamera.length}
-          />
-        ) : null}
+        <AppBottomNav tab={mainTab} onTab={setMainTab} clipCount={recordingsForActiveCamera.length} />
       </div>
 
       <RecordingPlayModal
@@ -2910,15 +2844,22 @@ export default function App() {
 
       {settingsCam && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-50 flex flex-col justify-end lg:justify-center items-stretch lg:items-center bg-black/80 lg:p-6"
           role="dialog"
           aria-modal="true"
+          onClick={closeSettings}
         >
-          <div className="bg-[#111827] rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 shadow-xl border border-gray-800">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h2 className="text-lg font-semibold">Camera settings</h2>
-                <p className="text-xs text-gray-400">{settingsCam.location || "No location"}</p>
+          <div
+            className="w-full lg:max-w-2xl overflow-y-auto shadow-xl border border-white/10 bg-[#0b1220] rounded-t-3xl lg:rounded-2xl max-h-[92dvh] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:pb-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start gap-3 pb-3 mb-3 border-b border-white/5">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-indigo-300/90">Settings</p>
+                <h2 className="font-semibold text-white text-lg">
+                  Camera settings
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">{settingsCam.location || "No location"}</p>
                 {settingsCam.edge_base_url ? (
                   <p className="text-[10px] text-amber-400/90 mt-1">
                     Edge {settingsCam.edge_base_url} · MQTT id{" "}
@@ -2933,9 +2874,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={closeSettings}
-                className="text-gray-400 hover:text-white text-xl leading-none"
+                className="p-2 rounded-full border border-white/10 text-gray-300 active:bg-white/10 shrink-0"
+                aria-label="Close settings"
               >
-                ×
+                <IconClose className="w-5 h-5" />
               </button>
             </div>
 
@@ -2944,7 +2886,7 @@ export default function App() {
                 <label className="block text-xs text-gray-400 mb-1">Camera name</label>
                 <input
                   type="text"
-                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                  className="mobile-input"
                   value={connectionForm.name}
                   onChange={(e) =>
                     setConnectionForm((f) => ({ ...f, name: e.target.value }))
@@ -2958,7 +2900,7 @@ export default function App() {
                 <label className="block text-xs text-gray-400 mb-1">RTSP URL (MediaMTX pull source)</label>
                 <input
                   type="text"
-                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm font-mono"
+                  className="mobile-input font-mono"
                   value={connectionForm.url}
                   onChange={(e) =>
                     setConnectionForm((f) => ({ ...f, url: e.target.value }))
@@ -2974,7 +2916,7 @@ export default function App() {
                 <label className="block text-xs text-gray-400 mb-1">Edge HTTP API (optional)</label>
                 <input
                   type="text"
-                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm font-mono"
+                  className="mobile-input font-mono"
                   value={connectionForm.edge_base_url}
                   onChange={(e) =>
                     setConnectionForm((f) => ({ ...f, edge_base_url: e.target.value }))
@@ -2986,7 +2928,7 @@ export default function App() {
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Recording</label>
                 <select
-                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                  className="mobile-input"
                   value={form.recording_mode}
                   onChange={(e) =>
                     setForm((f) => ({ ...f, recording_mode: e.target.value }))
@@ -3016,7 +2958,7 @@ export default function App() {
                   Stream quality (edge encoder / future libcamera)
                 </label>
                 <select
-                  className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                  className="mobile-input"
                   value={form.quality}
                   onChange={(e) => setForm((f) => ({ ...f, quality: e.target.value }))}
                 >
@@ -3044,7 +2986,7 @@ export default function App() {
                     type="number"
                     min={1}
                     max={120}
-                    className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                    className="mobile-input"
                     value={form.pre_record_seconds}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, pre_record_seconds: e.target.value }))
@@ -3057,7 +2999,7 @@ export default function App() {
                     type="number"
                     min={1}
                     max={300}
-                    className="w-full bg-[#0b1220] border border-gray-700 rounded px-3 py-2 text-sm"
+                    className="mobile-input"
                     value={form.post_record_seconds}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, post_record_seconds: e.target.value }))
@@ -3070,7 +3012,7 @@ export default function App() {
                 type="button"
                 onClick={saveSettings}
                 disabled={saving}
-                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 rounded text-sm"
+                className="mobile-btn-primary w-full lg:w-auto"
               >
                 {saving ? "Saving…" : "Save settings"}
               </button>

@@ -104,7 +104,10 @@ def upsert_recording(
                 INSERT INTO recordings (camera_id, filename, size, mtime, recording_id, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(camera_id, filename) DO UPDATE SET
-                    size = excluded.size,
+                    size = CASE
+                        WHEN excluded.size > 0 THEN excluded.size
+                        ELSE recordings.size
+                    END,
                     mtime = excluded.mtime,
                     recording_id = COALESCE(excluded.recording_id, recordings.recording_id),
                     updated_at = excluded.updated_at
@@ -119,7 +122,10 @@ def upsert_recording(
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(camera_id, filename) DO UPDATE SET
-                    size = excluded.size,
+                    size = CASE
+                        WHEN excluded.size > 0 THEN excluded.size
+                        ELSE recordings.size
+                    END,
                     mtime = excluded.mtime,
                     recording_id = COALESCE(excluded.recording_id, recordings.recording_id),
                     updated_at = excluded.updated_at,

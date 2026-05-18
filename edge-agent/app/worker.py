@@ -455,6 +455,12 @@ class EdgeRecorder:
                     "reason": "motion_capture_in_progress",
                     **self.motion_clip_status(),
                 }
+            if self._materialize_count > 0:
+                return {
+                    "accepted": False,
+                    "reason": "motion_materialize_in_progress",
+                    **self.motion_clip_status(),
+                }
             self._last_external_clip_trigger = now
             rid = f"evt_{int(time.time() * 1000)}"
             self._capture_active = True
@@ -595,13 +601,14 @@ class EdgeRecorder:
         clip_end = clip_start + float(duration_seconds)
         pre_jpegs = self._buffer_frames_in_range(clip_start, float(person_detected_at))
 
+        idx = 0
         try:
             if not ff:
                 print("[edge] motion clip: ffmpeg missing")
+                self._publish(status="Stop", recording_id=rid, local_path="")
                 return
 
             tmp.mkdir(parents=True, exist_ok=True)
-            idx = 0
             for blob in pre_jpegs:
                 (tmp / f"{idx:05d}.jpg").write_bytes(blob)
                 idx += 1
