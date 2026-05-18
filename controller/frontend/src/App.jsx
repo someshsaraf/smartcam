@@ -15,6 +15,7 @@ import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
 import { IconClose, MobilePageHeader } from "./mobileScreens";
 import {
   CameraInfoTable,
+  CameraInsights,
   DeviceCard,
   DeviceConfigTabs,
   DeviceDetailHeader,
@@ -456,6 +457,12 @@ function eventsApiQuery(appliedFilter) {
   if (appliedFilter?.fromIso) params.set("from_ts", appliedFilter.fromIso);
   if (appliedFilter?.toIso) params.set("to_ts", appliedFilter.toIso);
   return params.toString();
+}
+
+function todayStartIso() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
 }
 
 function EventsPanel({
@@ -2160,6 +2167,8 @@ export default function App() {
   const [deviceDetailId, setDeviceDetailId] = useState(null);
   const [deviceDetailTab, setDeviceDetailTab] = useState("general");
   const [playingClip, setPlayingClip] = useState(null);
+  /** Person-detected events today for Camera insights (active camera). */
+  const [insightsPeopleToday, setInsightsPeopleToday] = useState(0);
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -2282,6 +2291,40 @@ export default function App() {
   useEffect(() => {
     manualRecordingByIdRef.current = manualRecordingById;
   }, [manualRecordingById]);
+
+  useEffect(() => {
+    const camId = isSetCameraId(activeCameraId)
+      ? activeCameraId
+      : cams.length > 0
+        ? cams[0].id
+        : null;
+    if (!isSetCameraId(camId)) {
+      setInsightsPeopleToday(0);
+      return undefined;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const q = eventsApiQuery({ fromIso: todayStartIso(), toIso: null });
+        const res = await fetch(
+          `${API}/cameras/${encodeURIComponent(String(camId))}/events?${q}`
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const rows = Array.isArray(data.events) ? data.events : [];
+        const count = rows.filter((ev) => ev?.event_type === "person_detected").length;
+        if (!cancelled) setInsightsPeopleToday(count);
+      } catch {
+        if (!cancelled) setInsightsPeopleToday(0);
+      }
+    };
+    load();
+    const iv = window.setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, [activeCameraId, cams]);
 
   useEffect(() => {
     let ws;
@@ -2864,17 +2907,13 @@ export default function App() {
                 />
               ) : null
             }
-            recentEvents={
-              <EventsPanel
-                variant="compact"
-                cameraId={effectiveActiveCameraId}
-                cameraName={activeCamera?.name ?? ""}
-                recordings={recordingsForActiveCamera}
-                cameras={cams}
-                playingClip={playingClip}
-                onPlayClip={setPlayingClip}
-                onClearPlay={() => setPlayingClip(null)}
-                className="min-h-0"
+            cameraInsights={
+              <CameraInsights
+                peopleDetected={insightsPeopleToday}
+                vehiclesDetected={0}
+                animalsDetected={0}
+                recordingCount={recordingsForActiveCamera.length}
+                onViewAll={() => setMainTab("events")}
               />
             }
             cameraInfo={<CameraInfoTable rows={cameraInfoRows} />}

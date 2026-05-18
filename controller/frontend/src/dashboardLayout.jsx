@@ -287,6 +287,58 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
   );
 }
 
+const INSIGHT_ICONS = {
+  people: "🚶",
+  vehicle: "🚗",
+  animal: "🐾",
+  recordings: "🎬",
+};
+
+export function CameraInsights({
+  peopleDetected = 0,
+  vehiclesDetected = 0,
+  animalsDetected = 0,
+  recordingCount = 0,
+  onViewAll,
+}) {
+  const rows = [
+    { key: "people", label: "People Detected", value: peopleDetected, icon: INSIGHT_ICONS.people },
+    { key: "vehicles", label: "Vehicles Detected", value: vehiclesDetected, icon: INSIGHT_ICONS.vehicle },
+    { key: "animals", label: "Animal Detected", value: animalsDetected, icon: INSIGHT_ICONS.animal },
+    { key: "recordings", label: "Number of Recordings", value: recordingCount, icon: INSIGHT_ICONS.recordings },
+  ];
+
+  return (
+    <div className="flex flex-col min-h-0 h-full">
+      <ul className="space-y-1 flex-1 min-h-0">
+        {rows.map((row) => (
+          <li
+            key={row.key}
+            className="flex items-center justify-between gap-3 py-2.5 border-b border-white/[0.04] last:border-0"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="dashboard-event-icon text-base" aria-hidden>
+                {row.icon}
+              </span>
+              <span className="text-xs text-gray-400 truncate">{row.label}</span>
+            </div>
+            <span className="text-sm font-semibold text-white tabular-nums shrink-0">{row.value}</span>
+          </li>
+        ))}
+      </ul>
+      {onViewAll ? (
+        <button
+          type="button"
+          onClick={onViewAll}
+          className="mt-3 text-[11px] text-indigo-400 hover:text-indigo-300 text-left"
+        >
+          View all insights →
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function ActivityTimeline({ items = [] }) {
   return (
     <ul className="space-y-0 relative pl-1">
@@ -329,7 +381,7 @@ export function LiveDashboardPage({
   onSelectCamera,
   liveVideo,
   thumbStrip,
-  recentEvents,
+  cameraInsights,
   activityItems,
   cameraInfo,
   onTalk,
@@ -460,13 +512,13 @@ export function LiveDashboardPage({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 shrink-0 pb-2">
           <div className="dashboard-card p-4 min-h-[200px] max-h-[280px] lg:max-h-[300px] flex flex-col">
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Recent events</h2>
-              <button type="button" className="text-[11px] text-indigo-400 hover:text-indigo-300">
-                View all
-              </button>
+            <div className="flex justify-between items-center mb-3 gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Camera insights</h2>
+              <select className="dashboard-select text-[10px] py-1 px-2 w-auto" defaultValue="today" aria-label="Insights period">
+                <option value="today">Today</option>
+              </select>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">{recentEvents}</div>
+            <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">{cameraInsights}</div>
           </div>
 
           <div className="dashboard-card p-4 min-h-[200px] max-h-[280px] lg:max-h-[300px] flex flex-col">
