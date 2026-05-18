@@ -79,4 +79,37 @@ body {
   .dashboard-btn-ghost {
     @apply text-sm font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5;
   }
+  .dashboard-btn-icon {
+    @apply inline-flex items-center justify-center h-9 w-9 rounded-lg border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white transition-colors;
+  }
+  .dashboard-select {
+    @apply bg-[#0b1220]/90 border border-white/10 rounded-lg px-3 py-2 text-gray-200 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/30;
+  }
+  .dashboard-video-shell {
+    @apply relative rounded-2xl overflow-hidden border border-white/[0.08] bg-black shadow-[0_8px_40px_rgba(0,0,0,0.45)] ring-1 ring-white/[0.04];
+  }
+  .dashboard-video-chip {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-xs backdrop-blur-sm border border-white/10;
+  }
+  .dashboard-quick-action {
+    @apply flex flex-col items-start gap-1 rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#141c2e] to-[#0c111c] px-4 py-3.5 text-left transition-colors hover:border-indigo-500/30 hover:bg-[#151d2e] disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .dashboard-quick-action-active {
+    @apply border-red-500/40 bg-red-950/20;
+  }
+  .dashboard-quick-action-danger .dashboard-quick-action-icon {
+    @apply text-red-400;
+  }
+  .dashboard-quick-action-icon {
+    @apply text-lg leading-none mb-0.5;
+  }
+  .dashboard-device-card {
+    @apply rounded-2xl border border-white/[0.08] bg-gradient-to-b from-[#121a2a] to-[#0a0f18] overflow-hidden text-left transition-all hover:border-indigo-500/35 hover:shadow-lg hover:shadow-indigo-950/20;
+  }
+  .dashboard-event-row {
+    @apply flex items-start gap-2.5 py-2 border-b border-white/[0.04] last:border-0 text-left w-full;
+  }
+  .dashboard-event-icon {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-300 text-sm;
+  }
 }

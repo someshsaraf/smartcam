@@ -15,6 +15,8 @@ import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
 import { IconClose, MobilePageHeader } from "./mobileScreens";
 import {
   CameraInfoTable,
+  DeviceCard,
+  DeviceConfigTabs,
   DeviceDetailHeader,
   DevicesDashboardPage,
   LiveDashboardPage,
@@ -179,6 +181,23 @@ function formatBytes(n) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cameraDisplayMeta(cam) {
+  if (!cam) return { resolution: "—", fps: "—", ip: "—", bitrate: "—" };
+  const q = cam.settings?.quality || "medium";
+  const resolution =
+    q === "high" ? "1920 × 1080" : q === "low" ? "1280 × 720" : "1920 × 1080";
+  const fps = "25";
+  const bitrate = q === "high" ? "4096 kbps" : q === "low" ? "1024 kbps" : "2048 kbps";
+  let ip = "—";
+  try {
+    if (cam.url) ip = new URL(cam.url).hostname;
+    else if (cam.edge_base_url) ip = new URL(cam.edge_base_url).hostname;
+  } catch {
+    /* invalid url */
+  }
+  return { resolution, fps, ip, bitrate };
 }
 
 function formatTime(ts) {
@@ -451,6 +470,7 @@ function EventsPanel({
   className = "",
 }) {
   const isSidebar = variant === "sidebar";
+  const isCompact = variant === "compact";
   const isPage = variant === "page";
   const [events, setEvents] = useState([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -596,13 +616,16 @@ function EventsPanel({
   return (
     <div
       className={`flex flex-col min-h-0 ${
-        isSidebar
+        isCompact
           ? "bg-transparent"
-          : isPage
-            ? "rounded-none bg-[#0b1220]"
-            : "rounded-xl border border-gray-800 bg-[#070c16]"
+          : isSidebar
+            ? "bg-transparent"
+            : isPage
+              ? "rounded-none bg-[#0b1220]"
+              : "rounded-xl border border-gray-800 bg-[#070c16]"
       } ${className}`}
     >
+      {!isCompact ? (
       <div
         className={`shrink-0 space-y-2 ${
           isSidebar
@@ -762,9 +785,10 @@ function EventsPanel({
         </>
         )}
       </div>
+      ) : null}
       <div
         className={`flex-1 min-h-0 overflow-y-auto space-y-2 ${
-          isSidebar ? "px-0 py-2" : isPage ? "px-3 py-3" : "p-2"
+          isCompact ? "px-0 py-0 space-y-0" : isSidebar ? "px-0 py-2" : isPage ? "px-3 py-3" : "p-2"
         }`}
       >
         {events.length === 0 ? (
@@ -780,6 +804,36 @@ function EventsPanel({
               playingClip &&
               cameraIdsMatch(playingClip.camId, clip.camId) &&
               playingClip.name === clip.name;
+            if (isCompact) {
+              return (
+                <button
+                  key={ev.id}
+                  type="button"
+                  disabled={!canPlay || deleting}
+                  onClick={() => {
+                    if (!clip) return;
+                    onPlayClip({
+                      ...clip,
+                      camName: cameraName || clip.camName || "",
+                    });
+                  }}
+                  className={`dashboard-event-row ${isActive ? "bg-indigo-500/10" : ""}`}
+                >
+                  <span className="dashboard-event-icon" aria-hidden>
+                    🚶
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-medium text-gray-200">
+                      {formatEventType(ev.event_type)}
+                    </span>
+                    <span className="block text-[10px] text-gray-500 truncate">
+                      {cameraName || "Camera"} · {formatEventTime(ev.ts)}
+                    </span>
+                  </span>
+                </button>
+              );
+            }
+
             return (
               <div
                 key={ev.id}
@@ -1324,12 +1378,20 @@ function RecordingsTimeline({
             }
           />
         ) : isDashboard ? (
-          <div className="shrink-0 flex items-center justify-between gap-2 px-4 lg:px-6 py-3 border-b border-white/5">
+          <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 px-4 lg:px-6 py-3 border-b border-white/[0.06] bg-[#0a0f18]/60">
             <p className="text-sm text-gray-300">
               <span className="font-semibold text-white">{recordings.length}</span> recording
-              {recordings.length === 1 ? "" : "s"}
+              {recordings.length === 1 ? "" : "s"} found
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select className="dashboard-select text-xs w-auto" defaultValue="all" aria-label="Recording type">
+                <option value="all">All recordings</option>
+                <option value="motion">Motion only</option>
+              </select>
+              <select className="dashboard-select text-xs w-auto" defaultValue="newest" aria-label="Sort order">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
               {recordings.length > 0 && typeof onDeleteAll === "function" ? (
                 <button
                   type="button"
@@ -1476,6 +1538,11 @@ function RecordingsTimeline({
                           videoFallbackSrc={url}
                           className="w-full h-full object-cover pointer-events-none"
                         />
+                        {isDashboard ? (
+                          <span className="absolute top-2 left-2 z-10 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-600/90 text-white">
+                            Motion
+                          </span>
+                        ) : null}
                         {cardLayout ? (
                           <span className="absolute inset-0 flex items-center justify-center bg-black/25 group-active:bg-black/45 transition-colors">
                             <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-[#0b1220] shadow-lg">
@@ -1609,8 +1676,9 @@ function LiveTile({
   const showManual =
     recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
   const isHero = layout === "hero";
+  const isHeroShell = layout === "heroShell";
   const isThumb = layout === "thumb";
-  const heroLayout = isHero && !isThumb;
+  const heroLayout = (isHero || isHeroShell) && !isThumb;
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -1864,12 +1932,14 @@ function LiveTile({
       className={`flex flex-col min-h-0 h-full ${
         isThumb
           ? "rounded-none p-0 bg-transparent"
-          : heroLayout
-            ? "rounded-2xl p-0 bg-[#0a0f18] ring-1 ring-white/5 shadow-2xl overflow-hidden"
-            : "rounded-xl p-2 bg-[#111827]"
+          : isHeroShell
+            ? "rounded-none p-0 bg-transparent ring-0 shadow-none overflow-hidden"
+            : heroLayout
+              ? "rounded-2xl p-0 bg-[#0a0f18] ring-1 ring-white/5 shadow-2xl overflow-hidden"
+              : "rounded-xl p-2 bg-[#111827]"
       }`}
     >
-      {!isThumb && !heroLayout ? (
+      {!isThumb && !heroLayout && !isHeroShell ? (
       <div className="flex justify-between items-center text-xs mb-1 gap-2">
         <span className="truncate font-medium">{cam.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -1883,7 +1953,7 @@ function LiveTile({
         </div>
       </div>
       ) : null}
-      {!isThumb && !heroLayout && edgeHint ? (
+      {!isThumb && !heroLayout && !isHeroShell && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
           {cam.url ? (
@@ -1899,12 +1969,14 @@ function LiveTile({
         className={`relative flex-1 bg-black overflow-hidden touch-none ${
           isThumb
             ? "rounded-none min-h-0 h-full"
-            : heroLayout
-              ? "min-h-0 flex-1 rounded-none lg:min-h-[min(62vh,680px)]"
-              : `rounded-lg min-h-[100px] max-h-[200px]`
+            : isHeroShell
+              ? "min-h-0 flex-1 h-full rounded-none"
+              : heroLayout
+                ? "min-h-0 flex-1 rounded-none lg:min-h-[min(62vh,680px)]"
+                : `rounded-lg min-h-[100px] max-h-[200px]`
         }`}
       >
-        {heroLayout ? (
+        {heroLayout && !isHeroShell ? (
           <>
             <div className="absolute inset-x-0 top-0 h-14 mobile-video-gradient-top pointer-events-none z-[5]" />
             <div className="absolute inset-x-0 bottom-0 h-24 mobile-video-gradient-bottom pointer-events-none z-[5]" />
@@ -2038,7 +2110,7 @@ function LiveTile({
         </div>
         ) : null}
       </div>
-      {!isThumb && !heroLayout ? (
+      {!isThumb && !heroLayout && !isHeroShell ? (
       <p
         className="hidden sm:block text-[10px] text-gray-400 mt-1 font-mono break-all leading-snug"
         title={useWebRtc ? "WebRTC reader (low latency)" : "HLS playlist for video + synced overlay"}
@@ -2086,6 +2158,7 @@ export default function App() {
   const [mainTab, setMainTab] = useState("live");
   const [devicesView, setDevicesView] = useState("grid");
   const [deviceDetailId, setDeviceDetailId] = useState(null);
+  const [deviceDetailTab, setDeviceDetailTab] = useState("general");
   const [playingClip, setPlayingClip] = useState(null);
 
   const load = useCallback(async () => {
@@ -2699,19 +2772,51 @@ export default function App() {
     />
   );
 
+  const liveMeta = cameraDisplayMeta(mobileLiveCam);
+  const isPrimaryCamera =
+    mobileLiveCam && cams.length > 0 && cameraIdsMatch(cams[0].id, mobileLiveCam.id);
   const cameraInfoRows = mobileLiveCam
     ? [
-        ["Name", mobileLiveCam.name || "—"],
-        ["RTSP", mobileLiveCam.url || "—"],
-        ["Edge", mobileLiveCam.edge_base_url || "—"],
-        ["Mode", mobileLiveCam.settings?.recording_mode || "motion"],
-        ["Quality", mobileLiveCam.settings?.quality || "medium"],
+        ["Camera Name", mobileLiveCam.name || "—"],
+        ["Resolution", liveMeta.resolution],
+        ["Frame Rate", `${liveMeta.fps} FPS`],
+        ["Bitrate", liveMeta.bitrate],
+        ["Connection", "Excellent"],
+        ["Recording", mobileLiveCam.settings?.recording_mode || "motion"],
         [
           "Pre / Post",
           `${mobileLiveCam.settings?.pre_record_seconds ?? 10}s / ${mobileLiveCam.settings?.post_record_seconds ?? 50}s`,
         ],
       ]
     : [];
+  const liveActivityItems = [
+    { label: "Live view started", time: "Now", live: true },
+    ...(mobileRecording
+      ? [{ label: "Recording clip", time: "Now", detail: "Motion or manual capture" }]
+      : []),
+    ...(mobilePersonCount > 0
+      ? [
+          {
+            label: "Person detected",
+            time: "Now",
+            detail: `${mobilePersonCount} in frame`,
+          },
+        ]
+      : []),
+  ];
+  const handleLiveFullscreen = () => {
+    const el = document.querySelector(".dashboard-video-shell");
+    if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
+  };
+  const handleLiveRecord = () => {
+    if (!mobileLiveCam) return;
+    if ((mobileLiveCam.settings?.recording_mode || "motion") === "off") {
+      toggleManualRecording(mobileLiveCam);
+      return;
+    }
+    if (mobileRecording) return;
+    alert("Automatic motion recording is enabled for this camera.");
+  };
 
   return (
     <>
@@ -2725,11 +2830,19 @@ export default function App() {
         {showLivePanel ? (
           <LiveDashboardPage
             cameraName={mobileLiveCam?.name}
+            isPrimary={Boolean(isPrimaryCamera)}
             streamLabel={liveCams.length > 0 ? "LIVE" : "NO SIGNAL"}
             personCount={mobilePersonCount}
             recording={Boolean(mobileRecording)}
             onFindCameras={detectCameras}
             detecting={detecting}
+            onFullscreen={handleLiveFullscreen}
+            cameras={liveCams}
+            activeCameraId={effectiveActiveCameraId}
+            onSelectCamera={setActiveCameraId}
+            onRecord={mobileLiveCam ? handleLiveRecord : undefined}
+            recordDisabled={!mobileLiveCam?.edge_base_url}
+            activityItems={liveActivityItems}
             liveVideo={
               liveCams.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full min-h-[280px] p-8 text-center">
@@ -2737,7 +2850,7 @@ export default function App() {
                   <p className="text-gray-500 text-sm">Add cameras from the Devices page.</p>
                 </div>
               ) : mobileLiveCam ? (
-                renderLiveTile(mobileLiveCam, "hero")
+                renderLiveTile(mobileLiveCam, "heroShell")
               ) : null
             }
             thumbStrip={
@@ -2753,7 +2866,7 @@ export default function App() {
             }
             recentEvents={
               <EventsPanel
-                variant="sidebar"
+                variant="compact"
                 cameraId={effectiveActiveCameraId}
                 cameraName={activeCamera?.name ?? ""}
                 recordings={recordingsForActiveCamera}
@@ -2774,17 +2887,13 @@ export default function App() {
             cameras={cams}
             activeCameraId={effectiveActiveCameraId}
             onSelectCamera={(id) => setActiveCameraId(id)}
+            recordingsCount={recordingsForActiveCamera.length}
+            onSync={() => loadAllRecordings(cams, { sync: true })}
+            syncing={recordingsLoading}
+            renderCameraThumb={(c) => (
+              <div className="pointer-events-none h-full w-full">{renderLiveTile(c, "thumb")}</div>
+            )}
             timeline={<PlaybackTimelineBar recordings={recordingsForActiveCamera} />}
-            toolbar={
-              <button
-                type="button"
-                disabled={recordingsLoading || !cams.length}
-                onClick={() => loadAllRecordings(cams, { sync: true })}
-                className="dashboard-btn-secondary text-xs"
-              >
-                {recordingsLoading ? "…" : "Sync"}
-              </button>
-            }
             recordingsGrid={
               <RecordingsTimeline
                 recordings={recordingsForActiveCamera}
@@ -2825,6 +2934,7 @@ export default function App() {
             onViewChange={setDevicesView}
             onFindCameras={detectCameras}
             detecting={detecting}
+            deviceCount={cams.length}
             gridContent={
               <div>
                 {discoveredEdges.length > 0 ? (
@@ -2837,36 +2947,69 @@ export default function App() {
                     ))}
                   </div>
                 ) : null}
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {cams.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => { setDeviceDetailId(c.id); setDevicesView("detail"); setActiveCameraId(c.id); }}
-                      className="dashboard-card overflow-hidden text-left hover:ring-1 hover:ring-indigo-500/40 w-full"
-                    >
-                      <div className="aspect-video bg-[#0a0f18] overflow-hidden min-h-[100px] pointer-events-none">{renderLiveTile(c, "thumb")}</div>
-                      <div className="p-3 text-left"><p className="font-medium truncate">{c.name}</p><p className="text-[10px] text-gray-500 truncate">{c.edge_base_url || "—"}</p></div>
-                    </button>
-                  ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {cams.map((c, idx) => {
+                    const meta = cameraDisplayMeta(c);
+                    return (
+                      <DeviceCard
+                        key={c.id}
+                        name={c.name}
+                        isPrimary={idx === 0}
+                        online
+                        resolution={meta.resolution}
+                        fps={meta.fps}
+                        ip={meta.ip}
+                        preview={<div className="pointer-events-none h-full w-full">{renderLiveTile(c, "thumb")}</div>}
+                        onClick={() => {
+                          setDeviceDetailId(c.id);
+                          setDevicesView("detail");
+                          setActiveCameraId(c.id);
+                          setDeviceDetailTab("general");
+                        }}
+                        onMenu={() => openSettings(c)}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             }
             listContent={
               <div className="dashboard-card overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="text-[10px] uppercase text-gray-500 border-b border-white/10"><tr><th className="text-left p-3">Camera</th><th className="text-left p-3">Status</th><th className="text-right p-3">Actions</th></tr></thead>
+                  <thead className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                    <tr>
+                      <th className="text-left p-3">Camera name</th>
+                      <th className="text-left p-3">Status</th>
+                      <th className="text-left p-3">IP Address</th>
+                      <th className="text-left p-3">Resolution</th>
+                      <th className="text-left p-3">FPS</th>
+                      <th className="text-left p-3">Last seen</th>
+                      <th className="text-right p-3">Actions</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {cams.map((c) => (
-                      <tr key={c.id} className="border-b border-white/5">
-                        <td className="p-3">{c.name}</td>
-                        <td className="p-3 text-emerald-400 text-xs">Online</td>
-                        <td className="p-3 text-right space-x-2">
-                          <button type="button" className="dashboard-btn-ghost text-xs" onClick={() => { setActiveCameraId(c.id); setMainTab("live"); }}>Live</button>
-                          <button type="button" className="dashboard-btn-secondary text-xs" onClick={() => openSettings(c)}>Settings</button>
-                        </td>
-                      </tr>
-                    ))}
+                    {cams.map((c, idx) => {
+                      const meta = cameraDisplayMeta(c);
+                      return (
+                        <tr key={c.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                          <td className="p-3">
+                            <span className="font-medium">{c.name}</span>
+                            {idx === 0 ? (
+                              <span className="ml-2 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-200">Primary</span>
+                            ) : null}
+                          </td>
+                          <td className="p-3 text-emerald-400 text-xs">● Online</td>
+                          <td className="p-3 font-mono text-xs text-gray-400">{meta.ip}</td>
+                          <td className="p-3 text-xs text-gray-400">{meta.resolution}</td>
+                          <td className="p-3 text-xs text-gray-400">{meta.fps}</td>
+                          <td className="p-3 text-xs text-gray-500">Just now</td>
+                          <td className="p-3 text-right space-x-1">
+                            <button type="button" className="dashboard-btn-icon !h-8 !w-8" onClick={() => { setActiveCameraId(c.id); setMainTab("live"); }} title="Live">▶</button>
+                            <button type="button" className="dashboard-btn-icon !h-8 !w-8" onClick={() => openSettings(c)} title="Settings">⚙</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2876,15 +3019,55 @@ export default function App() {
                 <div className="flex flex-col flex-1 min-h-0">
                   <DeviceDetailHeader
                     cameraName={deviceDetailCam.name}
+                    isPrimary={cams.length > 0 && cameraIdsMatch(cams[0].id, deviceDetailCam.id)}
                     onBack={() => { setDevicesView("grid"); setDeviceDetailId(null); }}
                     onSettings={() => openSettings(deviceDetailCam)}
                   />
-                  <div className="flex-1 overflow-y-auto p-4 lg:p-6 grid grid-cols-1 xl:grid-cols-3 gap-4">
-                    <div className="xl:col-span-2 dashboard-card overflow-hidden min-h-[300px]">{renderLiveTile(deviceDetailCam, "hero")}</div>
-                    <div className="dashboard-card p-4">
-                      <CameraInfoTable rows={[["Name", deviceDetailCam.name], ["RTSP", deviceDetailCam.url || "—"], ["Edge", deviceDetailCam.edge_base_url || "—"]]} />
-                      <button type="button" className="dashboard-btn-primary w-full mt-4 text-sm" onClick={() => openSettings(deviceDetailCam)}>Open settings</button>
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <div className="shrink-0 p-4 lg:px-8 grid grid-cols-1 xl:grid-cols-3 gap-4 border-b border-white/[0.06]">
+                      <div className="xl:col-span-2 dashboard-video-shell min-h-[280px] lg:min-h-[340px]">
+                        {renderLiveTile(deviceDetailCam, "heroShell")}
+                      </div>
+                      <div className="dashboard-card p-4">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Camera details</h3>
+                        <CameraInfoTable
+                          rows={(() => {
+                            const m = cameraDisplayMeta(deviceDetailCam);
+                            return [
+                              ["IP Address", m.ip],
+                              ["Model", "Generic IP Camera"],
+                              ["Resolution", m.resolution],
+                              ["FPS", m.fps],
+                              ["Bitrate", m.bitrate],
+                              ["Last seen", "Just now"],
+                            ];
+                          })()}
+                        />
+                      </div>
                     </div>
+                    <DeviceConfigTabs activeTab={deviceDetailTab} onTabChange={setDeviceDetailTab}>
+                      {deviceDetailTab === "general" ? (
+                        <div className="max-w-2xl space-y-4">
+                          <div className="dashboard-card p-4 space-y-3">
+                            <h3 className="text-sm font-semibold">Camera information</h3>
+                            <p className="text-xs text-gray-500">Name: {deviceDetailCam.name}</p>
+                            <p className="text-xs text-gray-500 font-mono break-all">RTSP: {deviceDetailCam.url || "—"}</p>
+                          </div>
+                          <div className="dashboard-card p-4">
+                            <h3 className="text-sm font-semibold mb-3">Quick actions</h3>
+                            <div className="flex flex-wrap gap-2">
+                              <button type="button" className="dashboard-btn-secondary text-xs" onClick={() => { setActiveCameraId(deviceDetailCam.id); setMainTab("live"); }}>Open live view</button>
+                              <button type="button" className="dashboard-btn-primary text-xs" onClick={() => openSettings(deviceDetailCam)}>Edit settings</button>
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-indigo-300/80 bg-indigo-950/30 border border-indigo-500/20 rounded-lg px-3 py-2">
+                            All changes are saved from the settings dialog.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">Open camera settings to configure {deviceDetailTab} options.</p>
+                      )}
+                    </DeviceConfigTabs>
                   </div>
                 </div>
               ) : null
