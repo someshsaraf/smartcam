@@ -160,34 +160,34 @@ body {
   .dashboard-video-chip {
     @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/90 backdrop-blur-sm border border-white/10;
   }
-  /* Video overlay (desktop only): quick actions centered, zoom + fullscreen pinned right. */
+  /* Video overlay (desktop only): full mock-style cards centered on the video bottom. */
   .video-overlay-actions {
     position: relative;
     margin-top: 0.5rem;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .video-overlay-center {
-    grid-column: 2;
     display: flex;
-    align-items: center;
     justify-content: center;
+  }
+  .video-overlay-cards {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.5rem;
-    padding: 0.375rem 0.625rem;
-    border-radius: 9999px;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    width: min(100%, 44rem);
   }
-  .video-overlay-btn {
-    @apply inline-flex items-center justify-center h-9 w-9 rounded-full transition-colors border border-white/10 disabled:opacity-40;
+  .dashboard-quick-action-overlay {
+    @apply gap-2 px-2.5 py-2 rounded-lg border-white/[0.08] hover:border-white/[0.18];
+    background: rgba(15, 20, 31, 0.72);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
   }
-  .video-overlay-btn-active {
-    @apply ring-2 ring-red-400/40;
+  .dashboard-quick-action-overlay .dashboard-quick-action-icon-wrap {
+    @apply h-8 w-8;
+  }
+  .dashboard-quick-action-overlay .dashboard-quick-action-label {
+    @apply text-[12px];
+  }
+  .dashboard-quick-action-overlay .dashboard-quick-action-hint {
+    @apply text-[10px];
   }
   .live-quick-actions {
     display: grid;

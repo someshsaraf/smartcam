@@ -297,40 +297,20 @@ function QuickActionIconWrap({ children, tone = "indigo" }) {
   return <span className={`dashboard-quick-action-icon-wrap${toneSuffix}`}>{children}</span>;
 }
 
-function QuickActionButton({ icon, label, hint, onClick, disabled, active, danger, iconTone = "indigo" }) {
+function QuickActionButton({ icon, label, hint, onClick, disabled, active, danger, iconTone = "indigo", overlay = false }) {
+  const overlayClass = overlay ? " dashboard-quick-action-overlay" : "";
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`dashboard-quick-action ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
+      className={`dashboard-quick-action${overlayClass} ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
     >
       <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
       <span className="dashboard-quick-action-text">
         <span className="dashboard-quick-action-label">{label}</span>
         <span className="dashboard-quick-action-hint">{hint}</span>
       </span>
-    </button>
-  );
-}
-
-function VideoOverlayButton({ icon, label, onClick, disabled, active, tone }) {
-  const toneClass =
-    tone === "red"
-      ? active
-        ? "bg-red-600 ring-2 ring-red-400/40 text-white"
-        : "bg-black/55 hover:bg-black/70 text-white"
-      : "bg-black/55 hover:bg-black/70 text-white";
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      className={`video-overlay-btn ${toneClass} ${disabled ? "opacity-40 cursor-not-allowed" : ""} ${active ? "video-overlay-btn-active" : ""}`}
-    >
-      {icon}
     </button>
   );
 }
@@ -402,49 +382,64 @@ export function VideoOverlayActions({
   recording,
   recordDisabled,
 }) {
-  const iconSize = 18;
+  const size = 18;
   return (
     <div className="video-overlay-actions pointer-events-none">
-      <div className="video-overlay-center pointer-events-auto">
-        <VideoOverlayButton
-          icon={<Microphone2 size={iconSize} variant="Bulk" color="#c4b5fd" aria-hidden />}
+      <div className="video-overlay-cards pointer-events-auto">
+        <QuickActionButton
+          overlay
+          icon={<Microphone2 size={size} variant="Bulk" color="#a78bfa" aria-hidden />}
           label="Talk"
+          hint="Start conversation"
           onClick={onTalk}
           disabled={!onTalk}
+          iconTone="violet"
         />
-        <VideoOverlayButton
-          icon={<Camera size={iconSize} variant="Bulk" color="#7dd3fc" aria-hidden />}
+        <QuickActionButton
+          overlay
+          icon={<Camera size={size} variant="Bulk" color="#38bdf8" aria-hidden />}
           label="Snapshot"
+          hint="Capture image"
           onClick={onSnapshot}
           disabled={!onSnapshot}
+          iconTone="sky"
         />
-        <VideoOverlayButton
+        <QuickActionButton
+          overlay
           icon={
             <RecordCircle
-              size={iconSize + 2}
+              size={size}
               variant="Bulk"
-              color={recording ? "#fca5a5" : "#f87171"}
+              color={recording ? "#f87171" : "#ef4444"}
               className={recording ? "animate-pulse" : undefined}
               aria-hidden
             />
           }
-          label={recording ? "Stop recording" : "Record"}
+          label={recording ? "Recording" : "Record"}
+          hint={recording ? "Stop clip" : "Start recording"}
           onClick={onRecord}
           disabled={recordDisabled}
           active={recording}
-          tone="red"
+          danger
+          iconTone="red"
         />
-        <VideoOverlayButton
-          icon={<Notification size={iconSize} variant="Bulk" color="#fcd34d" aria-hidden />}
+        <QuickActionButton
+          overlay
+          icon={<Notification size={size} variant="Bulk" color="#fbbf24" aria-hidden />}
           label="Siren"
+          hint="Trigger alarm"
           onClick={onSiren}
           disabled={!onSiren}
+          iconTone="amber"
         />
-        <VideoOverlayButton
-          icon={<Lamp size={iconSize} variant="Bulk" color="#fde047" aria-hidden />}
+        <QuickActionButton
+          overlay
+          icon={<Lamp size={size} variant="Bulk" color="#facc15" aria-hidden />}
           label="Light"
+          hint="Toggle light"
           onClick={onLight}
           disabled={!onLight}
+          iconTone="amber"
         />
       </div>
     </div>
