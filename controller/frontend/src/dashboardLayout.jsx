@@ -19,6 +19,9 @@ import {
   Pet,
   Profile,
   RecordCircle,
+  Refresh,
+  SearchZoomIn,
+  SearchZoomOut,
   ShieldTick,
   VideoPlay,
   VideoSquare,
@@ -287,6 +290,27 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
   );
 }
 
+function VideoOverlayButton({ icon, label, onClick, disabled, active, tone }) {
+  const toneClass =
+    tone === "red"
+      ? active
+        ? "bg-red-600 ring-2 ring-red-400/40 text-white"
+        : "bg-black/55 hover:bg-black/70 text-white"
+      : "bg-black/55 hover:bg-black/70 text-white";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={`video-overlay-btn ${toneClass} ${disabled ? "opacity-40 cursor-not-allowed" : ""} ${active ? "video-overlay-btn-active" : ""}`}
+    >
+      {icon}
+    </button>
+  );
+}
+
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
   const size = 18;
   return (
@@ -341,6 +365,99 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         disabled={!onLight}
         iconTone="amber"
       />
+    </div>
+  );
+}
+
+export function VideoOverlayActions({
+  onTalk,
+  onSnapshot,
+  onRecord,
+  onSiren,
+  onLight,
+  recording,
+  recordDisabled,
+  onZoomIn,
+  onZoomOut,
+  zoomLabel = "1x",
+  onResetZoom,
+  onFullscreen,
+}) {
+  const iconSize = 18;
+  return (
+    <div className="video-overlay-actions pointer-events-none">
+      <div className="video-overlay-center pointer-events-auto">
+        <VideoOverlayButton
+          icon={<Microphone2 size={iconSize} variant="Bulk" color="#c4b5fd" aria-hidden />}
+          label="Talk"
+          onClick={onTalk}
+          disabled={!onTalk}
+        />
+        <VideoOverlayButton
+          icon={<Camera size={iconSize} variant="Bulk" color="#7dd3fc" aria-hidden />}
+          label="Snapshot"
+          onClick={onSnapshot}
+          disabled={!onSnapshot}
+        />
+        <VideoOverlayButton
+          icon={
+            <RecordCircle
+              size={iconSize + 2}
+              variant="Bulk"
+              color={recording ? "#fca5a5" : "#f87171"}
+              className={recording ? "animate-pulse" : undefined}
+              aria-hidden
+            />
+          }
+          label={recording ? "Stop recording" : "Record"}
+          onClick={onRecord}
+          disabled={recordDisabled}
+          active={recording}
+          tone="red"
+        />
+        <VideoOverlayButton
+          icon={<Notification size={iconSize} variant="Bulk" color="#fcd34d" aria-hidden />}
+          label="Siren"
+          onClick={onSiren}
+          disabled={!onSiren}
+        />
+        <VideoOverlayButton
+          icon={<Lamp size={iconSize} variant="Bulk" color="#fde047" aria-hidden />}
+          label="Light"
+          onClick={onLight}
+          disabled={!onLight}
+        />
+      </div>
+      <div className="video-overlay-right pointer-events-auto">
+        <VideoOverlayButton
+          icon={<SearchZoomOut size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
+          label="Zoom out"
+          onClick={onZoomOut}
+          disabled={!onZoomOut}
+        />
+        <button
+          type="button"
+          onClick={onResetZoom}
+          disabled={!onResetZoom}
+          title="Reset zoom"
+          aria-label="Reset zoom"
+          className={`video-overlay-zoom-label ${onResetZoom ? "" : "opacity-50"}`}
+        >
+          {zoomLabel}
+        </button>
+        <VideoOverlayButton
+          icon={<SearchZoomIn size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
+          label="Zoom in"
+          onClick={onZoomIn}
+          disabled={!onZoomIn}
+        />
+        <VideoOverlayButton
+          icon={<Maximize3 size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
+          label="Fullscreen"
+          onClick={onFullscreen}
+          disabled={!onFullscreen}
+        />
+      </div>
     </div>
   );
 }
@@ -575,11 +692,11 @@ export function LiveDashboardPage({
 
             <div className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full">{liveVideo}</div>
 
-            <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-8 mobile-video-gradient-bottom pointer-events-none">
-              <div className="flex items-end justify-between gap-2 pointer-events-auto">
+            <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-10 mobile-video-gradient-bottom pointer-events-none">
+              <div className="flex items-end justify-between gap-2 pointer-events-none">
                 {cameras.length > 0 && onSelectCamera ? (
                   <select
-                    className="dashboard-select text-xs max-w-[10rem] bg-black/60 backdrop-blur-sm"
+                    className="dashboard-select text-xs max-w-[10rem] bg-black/60 backdrop-blur-sm pointer-events-auto"
                     value={activeCameraId ?? ""}
                     onChange={(e) => onSelectCamera(Number(e.target.value))}
                   >
@@ -590,25 +707,26 @@ export function LiveDashboardPage({
                     ))}
                   </select>
                 ) : null}
-                <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono">
+                <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono pointer-events-auto">
                   <span>98%</span>
                   <Wifi size={14} variant="Bulk" color="#34d399" aria-hidden />
                 </span>
               </div>
+
+              <VideoOverlayActions
+                onTalk={onTalk}
+                onSnapshot={onSnapshot}
+                onRecord={onRecord}
+                onSiren={onSiren}
+                onLight={onLight}
+                recording={recording}
+                recordDisabled={recordDisabled}
+                onFullscreen={onFullscreen}
+              />
             </div>
           </div>
 
           {thumbStrip ? <div className="shrink-0">{thumbStrip}</div> : null}
-
-          <LiveQuickActions
-            onTalk={onTalk}
-            onSnapshot={onSnapshot}
-            onRecord={onRecord}
-            onSiren={onSiren}
-            onLight={onLight}
-            recording={recording}
-            recordDisabled={recordDisabled}
-          />
         </div>
 
         <div className="live-view-bottom-grid grid grid-cols-1 gap-4">
