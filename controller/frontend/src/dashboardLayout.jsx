@@ -713,20 +713,34 @@ export function LiveDashboardPage({
                 </span>
               </div>
 
-              <VideoOverlayActions
-                onTalk={onTalk}
-                onSnapshot={onSnapshot}
-                onRecord={onRecord}
-                onSiren={onSiren}
-                onLight={onLight}
-                recording={recording}
-                recordDisabled={recordDisabled}
-                onFullscreen={onFullscreen}
-              />
+              <div className="hidden lg:block">
+                <VideoOverlayActions
+                  onTalk={onTalk}
+                  onSnapshot={onSnapshot}
+                  onRecord={onRecord}
+                  onSiren={onSiren}
+                  onLight={onLight}
+                  recording={recording}
+                  recordDisabled={recordDisabled}
+                  onFullscreen={onFullscreen}
+                />
+              </div>
             </div>
           </div>
 
           {thumbStrip ? <div className="shrink-0">{thumbStrip}</div> : null}
+
+          <div className="lg:hidden">
+            <LiveQuickActions
+              onTalk={onTalk}
+              onSnapshot={onSnapshot}
+              onRecord={onRecord}
+              onSiren={onSiren}
+              onLight={onLight}
+              recording={recording}
+              recordDisabled={recordDisabled}
+            />
+          </div>
         </div>
 
         <div className="live-view-bottom-grid grid grid-cols-1 gap-4">
