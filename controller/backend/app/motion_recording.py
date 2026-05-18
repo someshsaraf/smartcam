@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import threading
 import time
 from typing import Any, Optional
@@ -18,7 +19,33 @@ from .mqtt_bridge import get_bridge
 
 logger = logging.getLogger(__name__)
 
-_MOTION_CLIP_TIMEOUT = httpx.Timeout(3.0, read=12.0)
+
+def _positive_float_env(name: str, default: float, *, lo: float = 0.1, hi: float = 120.0) -> float:
+    """Read a positive-float env var; fall back to default on missing/invalid."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %.2f", name, raw, default)
+        return default
+    if not (lo <= value <= hi):
+        logger.warning("%s=%.2f out of range [%.2f, %.2f]; using default %.2f", name, value, lo, hi, default)
+        return default
+    return value
+
+
+def _load_motion_clip_timeout() -> httpx.Timeout:
+    """Tunable trigger timeout — defaults sized for thumbnail upload over slow Wi-Fi."""
+    connect = _positive_float_env("SMARTCAM_MOTION_CLIP_CONNECT_SEC", 5.0)
+    write = _positive_float_env("SMARTCAM_MOTION_CLIP_WRITE_SEC", 15.0)
+    read = _positive_float_env("SMARTCAM_MOTION_CLIP_READ_SEC", 20.0)
+    pool = _positive_float_env("SMARTCAM_MOTION_CLIP_POOL_SEC", 5.0)
+    return httpx.Timeout(connect=connect, read=read, write=write, pool=pool)
+
+
+_MOTION_CLIP_TIMEOUT = _load_motion_clip_timeout()
 _MOTION_STATUS_TIMEOUT = httpx.Timeout(2.0, read=4.0)
 _STATUS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _STATUS_CACHE_TTL_SEC = 45.0
@@ -169,8 +196,9 @@ def _trigger_motion_clip(
     if thumb_b64:
         body["thumbnail_jpeg_b64"] = thumb_b64
     url = f"{edge.rstrip('/')}/recordings/motion/trigger"
-    try:
-        r = httpx.post(url, json=body, timeout=_MOTION_CLIP_TIMEOUT)
+
+    def _post(payload: dict[str, Any]) -> dict[str, Any]:
+        r = httpx.post(url, json=payload, timeout=_MOTION_CLIP_TIMEOUT)
         if r.status_code >= 400:
             logger.warning(
                 "motion clip trigger failed cam_id=%s status=%s body=%s",
@@ -185,6 +213,27 @@ def _trigger_motion_clip(
         if data.get("accepted"):
             cache_motion_status(cam_id, data)
         return data
+
+    try:
+        return _post(body)
+    except httpx.TimeoutException as e:
+        if thumb_b64:
+            logger.warning(
+                "motion clip trigger timed out cam_id=%s (likely thumbnail upload); retrying without thumbnail: %s",
+                cam_id,
+                e,
+            )
+            retry_body = {k: v for k, v in body.items() if k != "thumbnail_jpeg_b64"}
+            try:
+                return _post(retry_body)
+            except httpx.TimeoutException as e2:
+                logger.warning("motion clip trigger timed out (no-thumb retry) cam_id=%s: %s", cam_id, e2)
+                return {"accepted": False, "reason": f"timeout: {e2}"}
+            except Exception as e2:
+                logger.warning("motion clip trigger error (no-thumb retry) cam_id=%s: %s", cam_id, e2)
+                return {"accepted": False, "reason": str(e2)}
+        logger.warning("motion clip trigger timed out cam_id=%s: %s", cam_id, e)
+        return {"accepted": False, "reason": f"timeout: {e}"}
     except Exception as e:
         logger.warning("motion clip trigger error cam_id=%s: %s", cam_id, e)
         return {"accepted": False, "reason": str(e)}
