@@ -68,7 +68,36 @@ body {
     @apply rounded-xl border border-white/[0.08] bg-[#0f141f] shadow-[0_4px_24px_rgba(0,0,0,0.35)];
   }
   .dashboard-panel {
-    @apply dashboard-card p-4 flex flex-col min-h-[220px] lg:min-h-[240px];
+    @apply dashboard-card p-4 flex flex-col h-full;
+  }
+  /* Single scroll column for entire Live View body (mock: one page, not separate sections). */
+  .live-view-scroll {
+    @apply flex-1 min-h-0 overflow-y-auto overflow-x-hidden;
+  }
+  .live-view-inner {
+    @apply flex flex-col gap-4 px-4 lg:px-8 py-4 lg:py-5 pb-6 max-w-[1680px] w-full mx-auto;
+  }
+  .live-dashboard-page {
+    @apply flex flex-col flex-1 min-h-0;
+  }
+  @media (min-width: 1024px) {
+    .live-view-inner {
+      gap: 0.75rem;
+      padding-top: 0.75rem;
+      padding-bottom: 1rem;
+    }
+    .live-view-bottom-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+      align-items: stretch;
+    }
+    .live-view-bottom-grid .dashboard-panel {
+      min-height: 0;
+    }
+    .live-view-media-block .dashboard-quick-action {
+      @apply py-3;
+    }
   }
   .dashboard-panel-title {
     @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400;
@@ -97,19 +126,24 @@ body {
   .dashboard-video-shell-hero {
     width: 100%;
     aspect-ratio: 16 / 9;
-    min-height: 220px;
-    max-height: min(52vh, 640px);
+    min-height: 200px;
+    max-height: min(48vh, 560px);
   }
   .dashboard-video-shell-live {
-    max-height: min(46vh, 520px);
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: min(36vh, 400px);
+    min-height: 200px;
   }
   @media (min-width: 1024px) {
-    .dashboard-video-shell-hero {
-      min-height: 260px;
-      max-height: min(42vh, 480px);
-    }
     .dashboard-video-shell-live {
-      max-height: min(40vh, 460px);
+      max-height: clamp(200px, 32vh, 360px);
+      min-height: 200px;
+    }
+  }
+  @media (min-width: 1024px) and (min-height: 900px) {
+    .dashboard-video-shell-live {
+      max-height: clamp(220px, 36vh, 400px);
     }
   }
   .dashboard-video-chip {

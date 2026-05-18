@@ -404,12 +404,12 @@ export function CameraInsights({
   ];
 
   return (
-    <div className="flex flex-col min-h-0 h-full">
-      <ul className="space-y-0.5 flex-1 min-h-0">
+    <div className="flex flex-col">
+      <ul className="space-y-0.5">
         {rows.map((row) => (
           <li
             key={row.key}
-            className="flex items-center justify-between gap-3 py-2.5 border-b border-white/[0.05] last:border-0"
+            className="flex items-center justify-between gap-3 py-2 border-b border-white/[0.05] last:border-0"
           >
             <div className="flex items-center gap-3 min-w-0">
               <span className="dashboard-insight-icon" aria-hidden>
@@ -443,7 +443,7 @@ export function ActivityTimeline({ items = [] }) {
         items.map((item, i) => (
           <li
             key={`${item.label}-${item.time}-${i}`}
-            className="grid grid-cols-[4.5rem_1.75rem_1fr] gap-x-2 pb-4 last:pb-0 items-start relative"
+            className="grid grid-cols-[4.5rem_1.75rem_1fr] gap-x-2 pb-3 last:pb-0 items-start relative"
           >
             {i < items.length - 1 ? (
               <span
@@ -503,7 +503,7 @@ export function LiveDashboardPage({
   const hasLive = streamLabel === "LIVE";
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="live-dashboard-page flex flex-col flex-1 min-h-0">
       <DashboardPageHeader
         eyebrow="Camera"
         title={cameraName || "Live view"}
@@ -538,8 +538,9 @@ export function LiveDashboardPage({
         }
       />
 
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col px-4 lg:px-8 py-4 lg:py-5 gap-4">
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+      <div className="live-view-scroll">
+        <div className="live-view-inner">
+        <div className="flex flex-wrap items-center gap-2">
           {hasLive ? (
             <StatusPill variant="live">
               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
@@ -563,8 +564,8 @@ export function LiveDashboardPage({
           ) : null}
         </div>
 
-        <div className="flex flex-col shrink-0 gap-4">
-          <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full shrink-0">
+        <div className="live-view-media-block flex flex-col gap-4">
+          <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
               {hasLive ? (
                 <span className="pointer-events-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
@@ -619,19 +620,19 @@ export function LiveDashboardPage({
           />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 shrink-0 pb-2">
+        <div className="live-view-bottom-grid grid grid-cols-1 gap-4">
           <div className="dashboard-panel">
-            <div className="flex justify-between items-center mb-3 gap-2 shrink-0">
+            <div className="flex justify-between items-center mb-3 gap-2">
               <h2 className="dashboard-panel-title">Camera Insights</h2>
               <select className="dashboard-select text-[10px] py-1 px-2 w-auto" defaultValue="today" aria-label="Insights period">
                 <option value="today">Today</option>
               </select>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">{cameraInsights}</div>
+            {cameraInsights}
           </div>
 
           <div className="dashboard-panel">
-            <div className="flex items-center justify-between mb-3 shrink-0">
+            <div className="flex items-center justify-between mb-3">
               <h2 className="dashboard-panel-title">Activity Timeline</h2>
               {hasLive ? (
                 <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25">
@@ -640,15 +641,14 @@ export function LiveDashboardPage({
                 </span>
               ) : null}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              <ActivityTimeline items={activityItems} />
-            </div>
+            <ActivityTimeline items={activityItems} />
           </div>
 
           <div className="dashboard-panel">
             <h2 className="dashboard-panel-title mb-3">Camera Info</h2>
-            <div className="flex-1 min-h-0 overflow-y-auto">{cameraInfo}</div>
+            {cameraInfo}
           </div>
+        </div>
         </div>
       </div>
     </div>
