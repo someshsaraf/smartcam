@@ -387,6 +387,14 @@ function formatEventType(eventType) {
   return EVENT_TYPE_LABELS[t] || t.replace(/_/g, " ");
 }
 
+function timelineActivityKind(eventType) {
+  const t = String(eventType || "").toLowerCase();
+  if (t.includes("person")) return "person";
+  if (t.includes("vehicle")) return "vehicle";
+  if (t.includes("motion")) return "motion";
+  return undefined;
+}
+
 function formatEventTime(ts) {
   if (!ts) return "—";
   try {
@@ -2880,6 +2888,7 @@ export default function App() {
         time: formatTimelineClock(ev.ts),
         ts: ev.ts,
         detail: camLabel,
+        kind: timelineActivityKind(ev.event_type),
       });
     }
 
@@ -2889,6 +2898,7 @@ export default function App() {
         time: formatTimelineClock(nowIso),
         ts: nowIso,
         detail: camLabel,
+        kind: "person",
       });
     }
 
@@ -2898,6 +2908,7 @@ export default function App() {
         time: formatTimelineClock(nowIso),
         ts: nowIso,
         detail: camLabel,
+        kind: "recording",
       });
     }
 

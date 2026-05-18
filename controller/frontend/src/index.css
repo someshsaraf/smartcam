@@ -75,16 +75,16 @@ body {
     @apply flex-1 min-h-0 overflow-y-auto overflow-x-hidden;
   }
   .live-view-inner {
-    @apply flex flex-col gap-4 px-4 lg:px-8 py-4 lg:py-5 pb-6 max-w-[1680px] w-full mx-auto;
+    @apply flex flex-col gap-3 px-4 lg:px-8 py-3 lg:py-4 pb-5 max-w-[1680px] w-full mx-auto;
   }
   .live-dashboard-page {
     @apply flex flex-col flex-1 min-h-0;
   }
   @media (min-width: 1024px) {
     .live-view-inner {
-      gap: 0.75rem;
-      padding-top: 0.75rem;
-      padding-bottom: 1rem;
+      gap: 0.625rem;
+      padding-top: 0.625rem;
+      padding-bottom: 0.875rem;
     }
     .live-view-bottom-grid {
       display: grid;
@@ -95,9 +95,18 @@ body {
     .live-view-bottom-grid .dashboard-panel {
       min-height: 0;
     }
-    .live-view-media-block .dashboard-quick-action {
-      @apply py-3;
-    }
+  }
+  .dashboard-btn-sm {
+    @apply text-xs font-semibold px-3 py-1.5 rounded-lg;
+  }
+  .dashboard-btn-primary.dashboard-btn-sm {
+    @apply text-xs px-3 py-1.5;
+  }
+  .dashboard-btn-icon-sm {
+    @apply h-8 w-8 rounded-lg;
+  }
+  .dashboard-select-sm {
+    @apply text-xs px-2.5 py-1.5 min-h-0 leading-tight;
   }
   .dashboard-panel-title {
     @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400;
@@ -137,23 +146,23 @@ body {
   }
   @media (min-width: 1024px) {
     .dashboard-video-shell-live {
-      max-height: clamp(200px, 32vh, 360px);
+      max-height: clamp(220px, 38vh, 440px);
       min-height: 200px;
     }
   }
   @media (min-width: 1024px) and (min-height: 900px) {
     .dashboard-video-shell-live {
-      max-height: clamp(220px, 36vh, 400px);
+      max-height: clamp(240px, 42vh, 480px);
     }
   }
   .dashboard-video-chip {
-    @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-xs backdrop-blur-sm border border-white/10;
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/90 backdrop-blur-sm border border-white/10;
   }
   .dashboard-quick-action {
-    @apply flex flex-col items-start gap-2 rounded-xl border border-white/[0.06] bg-[#0f141f] px-4 py-3.5 text-left transition-colors hover:border-indigo-500/25 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply flex flex-col items-start gap-1 rounded-lg border border-white/[0.06] bg-[#0f141f] px-3 py-2 text-left transition-colors hover:border-indigo-500/25 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed;
   }
   .dashboard-quick-action-icon-wrap {
-    @apply flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c] text-indigo-300;
+    @apply flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-[#161d2c] text-indigo-300;
   }
   .dashboard-quick-action-icon-wrap-amber {
     @apply text-amber-300 bg-amber-950/40 border-amber-500/20;

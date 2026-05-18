@@ -3,6 +3,29 @@
  */
 
 import { useEffect, useState } from "react";
+import {
+  ArrowsPointingOutIcon,
+  Bars3Icon,
+  BellAlertIcon,
+  BellIcon,
+  BoltIcon,
+  BugAntIcon,
+  CameraIcon,
+  FilmIcon,
+  LightBulbIcon,
+  MicrophoneIcon,
+  PlayCircleIcon,
+  ShieldCheckIcon,
+  SpeakerWaveIcon,
+  Squares2X2Icon,
+  StopCircleIcon,
+  TruckIcon,
+  UserGroupIcon,
+  UserIcon,
+  VideoCameraIcon,
+  WifiIcon,
+} from "@heroicons/react/24/outline";
+import { StopCircleIcon as StopCircleIconSolid } from "@heroicons/react/24/solid";
 
 const NAV_ITEMS = [
   { id: "live", label: "Live View", icon: "live" },
@@ -12,49 +35,22 @@ const NAV_ITEMS = [
 ];
 
 function NavIcon({ name, className = "w-5 h-5" }) {
-  const c = className;
   switch (name) {
     case "live":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <rect x="3" y="5" width="14" height="12" rx="2" />
-          <path d="M17 9l4-2v10l-4-2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
+      return <VideoCameraIcon className={className} aria-hidden />;
     case "playback":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M10 8.5v7l5.5-3.5-5.5-3.5z" fill="currentColor" stroke="none" />
-        </svg>
-      );
+      return <PlayCircleIcon className={className} aria-hidden />;
     case "events":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <path d="M6 8h12M6 12h8M6 16h10" strokeLinecap="round" />
-          <rect x="4" y="4" width="16" height="16" rx="2" />
-        </svg>
-      );
+      return <BoltIcon className={className} aria-hidden />;
     case "devices":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <rect x="3" y="4" width="7" height="6" rx="1" />
-          <rect x="14" y="4" width="7" height="6" rx="1" />
-          <rect x="3" y="14" width="7" height="6" rx="1" />
-          <rect x="14" y="14" width="7" height="6" rx="1" />
-        </svg>
-      );
+      return <Squares2X2Icon className={className} aria-hidden />;
     default:
       return null;
   }
 }
 
 function ShieldLogo({ className = "w-5 h-5" }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <path d="M12 3l7 4v6c0 4.5-3 7.5-7 8-4-.5-7-3.5-7-8V7l7-4z" />
-    </svg>
-  );
+  return <ShieldCheckIcon className={className} aria-hidden />;
 }
 
 function LiveClock() {
@@ -166,9 +162,7 @@ export function VigilanceShell({
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="lg:hidden shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 border-b border-white/[0.06] mobile-glass">
           <button type="button" onClick={() => setMobileNavOpen(true)} className="p-2 rounded-lg border border-white/10 text-gray-300" aria-label="Open menu">
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
-            </svg>
+            <Bars3Icon className="w-5 h-5" aria-hidden />
           </button>
           <span className="text-sm font-semibold tracking-wide">VIGILANCE</span>
           <span className="w-9" />
@@ -206,28 +200,50 @@ export function VigilanceShell({
   );
 }
 
-export function DashboardPageHeader({ eyebrow, title, badge, subtitle, actions, subActions, children }) {
+export function DashboardPageHeader({ eyebrow, title, badge, subtitle, actions, subActions, children, compact = false }) {
+  const toolbar =
+    actions || subActions ? (
+      <div className={`flex items-center shrink-0 flex-wrap justify-end ${compact ? "gap-1.5" : "gap-2"}`}>
+        {actions}
+        {subActions}
+      </div>
+    ) : null;
+
   return (
-    <header className="shrink-0 border-b border-white/[0.06] bg-[#0a0f18]/95 backdrop-blur-sm px-4 lg:px-8 py-3 lg:py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <header
+      className={`shrink-0 border-b border-white/[0.06] bg-[#0a0f18]/95 backdrop-blur-sm px-4 lg:px-8 ${
+        compact ? "py-2 lg:py-2.5" : "py-3 lg:py-4"
+      }`}
+    >
+      <div className={`flex flex-wrap justify-between ${compact ? "items-center gap-2" : "items-start gap-3"}`}>
         <div className="min-w-0">
           {eyebrow ? (
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-indigo-400">{eyebrow}</p>
+            <p
+              className={`font-semibold uppercase text-indigo-400 ${
+                compact ? "text-[9px] tracking-[0.18em]" : "text-[10px] tracking-[0.22em]"
+              }`}
+            >
+              {eyebrow}
+            </p>
           ) : null}
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <h1 className="text-xl lg:text-2xl font-semibold text-white truncate">{title}</h1>
+          <div className={`flex items-center gap-2 flex-wrap ${compact ? "mt-0.5" : "mt-1"}`}>
+            <h1 className={`font-semibold text-white truncate ${compact ? "text-lg lg:text-xl" : "text-xl lg:text-2xl"}`}>
+              {title}
+            </h1>
             {badge ? (
               <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md bg-indigo-600/30 text-indigo-200 border border-indigo-500/40">
                 {badge}
               </span>
             ) : null}
           </div>
-          {subtitle ? <p className="text-xs text-gray-500 mt-1">{subtitle}</p> : null}
+          {subtitle ? <p className={`text-gray-500 ${compact ? "text-[11px] mt-0.5" : "text-xs mt-1"}`}>{subtitle}</p> : null}
           {children}
         </div>
-        {actions ? <div className="flex items-center gap-2 shrink-0 flex-wrap">{actions}</div> : null}
+        {compact ? toolbar : actions ? <div className="flex items-center gap-2 shrink-0 flex-wrap">{actions}</div> : null}
       </div>
-      {subActions ? <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-white/[0.04]">{subActions}</div> : null}
+      {!compact && subActions ? (
+        <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-white/[0.04]">{subActions}</div>
+      ) : null}
     </header>
   );
 }
@@ -240,7 +256,7 @@ function StatusPill({ variant, children }) {
         ? "border-red-500/50 bg-red-950/40 text-red-200"
         : "border-white/10 bg-white/5 text-gray-400";
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide px-3 py-1 rounded-full border ${styles}`}>
+    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2.5 py-0.5 rounded-full border ${styles}`}>
       {children}
     </span>
   );
@@ -265,42 +281,38 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
       className={`dashboard-quick-action ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
     >
       <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
-      <span className="font-semibold text-sm text-gray-100">{label}</span>
-      <span className="text-[11px] text-gray-500 leading-snug">{hint}</span>
+      <span className="font-semibold text-xs text-gray-100">{label}</span>
+      <span className="text-[10px] text-gray-500 leading-snug">{hint}</span>
     </button>
   );
 }
 
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
-  const iconClass = "w-[18px] h-[18px]";
+  const iconClass = "w-4 h-4";
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 shrink-0">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 shrink-0">
       <QuickActionButton
-        icon={
-          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M12 14a3 3 0 003-3V6a3 3 0 10-6 0v5a3 3 0 003 3z" />
-            <path d="M6 14h12v2a4 4 0 01-4 4h-4a4 4 0 01-4-4v-2z" strokeLinecap="round" />
-          </svg>
-        }
+        icon={<MicrophoneIcon className={iconClass} aria-hidden />}
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
       />
       <QuickActionButton
-        icon={
-          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M4 8h4l2-3h4l2 3h4v11H4V8z" strokeLinejoin="round" />
-            <circle cx="12" cy="13" r="3" />
-          </svg>
-        }
+        icon={<CameraIcon className={iconClass} aria-hidden />}
         label="Snapshot"
         hint="Capture image"
         onClick={onSnapshot}
         disabled={!onSnapshot}
       />
       <QuickActionButton
-        icon={<span className={`h-2.5 w-2.5 rounded-full ${recording ? "bg-red-400 animate-pulse" : "bg-red-500"}`} />}
+        icon={
+          recording ? (
+            <StopCircleIconSolid className={`${iconClass} text-red-400 animate-pulse`} aria-hidden />
+          ) : (
+            <StopCircleIcon className={`${iconClass} text-red-500`} aria-hidden />
+          )
+        }
         label={recording ? "Recording" : "Record"}
         hint={recording ? "Stop clip" : "Start recording"}
         onClick={onRecord}
@@ -310,11 +322,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="red"
       />
       <QuickActionButton
-        icon={
-          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M14 10V6a2 2 0 00-4 0v4M6 10h12l-1 10H7L6 10z" strokeLinejoin="round" />
-          </svg>
-        }
+        icon={<BellAlertIcon className={iconClass} aria-hidden />}
         label="Siren"
         hint="Trigger alarm"
         onClick={onSiren}
@@ -322,11 +330,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="amber"
       />
       <QuickActionButton
-        icon={
-          <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M9 18h6M10 22h4M12 2v2M5 8l1.5 1.5M19 8L17.5 9.5M4 14h16a2 2 0 002-2 8 8 0 00-8-8H10a8 8 0 00-8 8 2 2 0 002 2z" strokeLinecap="round" />
-          </svg>
-        }
+        icon={<LightBulbIcon className={iconClass} aria-hidden />}
         label="Light"
         hint="Toggle light"
         onClick={onLight}
@@ -341,52 +345,31 @@ function InsightIcon({ type }) {
   const c = "w-4 h-4";
   switch (type) {
     case "people":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <circle cx="12" cy="7" r="3" />
-          <path d="M6 20v-1a6 6 0 0112 0v1" strokeLinecap="round" />
-        </svg>
-      );
+      return <UserGroupIcon className={c} aria-hidden />;
     case "vehicles":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <path d="M6 16h12M6 16l-1-4h14l-1 4M8 16v2M16 16v2M7 12l1-4h8l1 4" strokeLinejoin="round" />
-        </svg>
-      );
+      return <TruckIcon className={c} aria-hidden />;
     case "animals":
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <circle cx="8" cy="9" r="2" />
-          <circle cx="16" cy="9" r="2" />
-          <path d="M6 18c1-2 3-3 6-3s5 1 6 3" strokeLinecap="round" />
-        </svg>
-      );
+      return <BugAntIcon className={c} aria-hidden />;
     default:
-      return (
-        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
-        </svg>
-      );
+      return <FilmIcon className={c} aria-hidden />;
   }
 }
 
-function TimelineEventIcon({ live }) {
+function TimelineEventIcon({ live, kind }) {
   const c = "w-3.5 h-3.5";
-  if (live) {
-    return (
-      <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-        <rect x="3" y="6" width="12" height="10" rx="1.5" />
-        <path d="M15 10l5-2v8l-5-2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
+  if (live || kind === "live") {
+    return <VideoCameraIcon className={c} aria-hidden />;
   }
-  return (
-    <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <circle cx="12" cy="7" r="3" />
-      <path d="M6 20v-1a6 6 0 0112 0v1" strokeLinecap="round" />
-    </svg>
-  );
+  if (kind === "vehicle") {
+    return <TruckIcon className={c} aria-hidden />;
+  }
+  if (kind === "motion") {
+    return <BoltIcon className={c} aria-hidden />;
+  }
+  if (kind === "recording") {
+    return <FilmIcon className={c} aria-hidden />;
+  }
+  return <UserIcon className={c} aria-hidden />;
 }
 
 export function CameraInsights({
@@ -461,7 +444,7 @@ export function ActivityTimeline({ items = [] }) {
                   : "bg-indigo-600/15 border-indigo-500/25 text-indigo-300"
               }`}
             >
-              <TimelineEventIcon live={item.live} />
+              <TimelineEventIcon live={item.live} kind={item.kind} />
             </span>
             <div className="min-w-0 pt-0.5">
               <p className="text-[13px] text-gray-100 font-medium leading-snug">{item.label}</p>
@@ -505,34 +488,37 @@ export function LiveDashboardPage({
   return (
     <div className="live-dashboard-page flex flex-col flex-1 min-h-0">
       <DashboardPageHeader
+        compact
         eyebrow="Camera"
         title={cameraName || "Live view"}
         badge={isPrimary ? "Primary" : null}
         actions={
           <>
-            <button type="button" disabled={detecting} onClick={onFindCameras} className="dashboard-btn-primary text-xs hidden sm:inline-flex">
+            <button
+              type="button"
+              disabled={detecting}
+              onClick={onFindCameras}
+              className="dashboard-btn-primary dashboard-btn-sm hidden sm:inline-flex"
+            >
               {detecting ? "…" : "+ Add Camera"}
             </button>
-            <button type="button" className="dashboard-btn-icon" aria-label="Notifications">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-                <path d="M15 17h5l-1.4-1.4A6 6 0 0118 11V8a6 6 0 00-12 0v3a6 6 0 01-.6 2.6L4 17h5" />
-                <path d="M10 20a2 2 0 004 0" />
-              </svg>
+            <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Notifications">
+              <BellIcon className="w-3.5 h-3.5" aria-hidden />
             </button>
-            <span className="dashboard-btn-icon rounded-full bg-indigo-600/30 text-xs font-bold text-indigo-100">A</span>
+            <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
+              A
+            </span>
           </>
         }
         subActions={
           <>
-            <select className="dashboard-select text-xs" defaultValue="high" aria-label="Stream quality">
+            <select className="dashboard-select dashboard-select-sm" defaultValue="high" aria-label="Stream quality">
               <option value="high">High Quality 1080p</option>
               <option value="medium">Medium 720p</option>
               <option value="low">Low 480p</option>
             </select>
-            <button type="button" onClick={onFullscreen} className="dashboard-btn-icon" aria-label="Fullscreen">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-                <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+            <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
+              <ArrowsPointingOutIcon className="w-3.5 h-3.5" aria-hidden />
             </button>
           </>
         }
@@ -543,9 +529,7 @@ export function LiveDashboardPage({
         <div className="flex flex-wrap items-center gap-2">
           {hasLive ? (
             <StatusPill variant="live">
-              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                <circle cx="12" cy="12" r="4" />
-              </svg>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
               Live
             </StatusPill>
           ) : (
@@ -564,7 +548,7 @@ export function LiveDashboardPage({
           ) : null}
         </div>
 
-        <div className="live-view-media-block flex flex-col gap-4">
+        <div className="live-view-media-block flex flex-col gap-2.5">
           <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
               {hasLive ? (
@@ -574,9 +558,15 @@ export function LiveDashboardPage({
               ) : null}
               <LiveClock />
               <span className="flex gap-1.5 pointer-events-none opacity-80">
-                <span className="dashboard-video-chip">📷</span>
-                <span className="dashboard-video-chip">🎤</span>
-                <span className="dashboard-video-chip">🔊</span>
+                <span className="dashboard-video-chip" aria-hidden>
+                  <CameraIcon className="w-3.5 h-3.5" />
+                </span>
+                <span className="dashboard-video-chip" aria-hidden>
+                  <MicrophoneIcon className="w-3.5 h-3.5" />
+                </span>
+                <span className="dashboard-video-chip" aria-hidden>
+                  <SpeakerWaveIcon className="w-3.5 h-3.5" />
+                </span>
               </span>
             </div>
 
@@ -599,9 +589,7 @@ export function LiveDashboardPage({
                 ) : null}
                 <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono">
                   <span>98%</span>
-                  <svg className="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M2 20h20v2H2v-2zm2-4h2v4H4v-4zm4-6h2v10H8V10zm4-3h2v13h-2V7zm4 2h2v11h-2V9z" />
-                  </svg>
+                  <WifiIcon className="w-4 h-4 text-emerald-400" aria-hidden />
                 </span>
               </div>
             </div>
