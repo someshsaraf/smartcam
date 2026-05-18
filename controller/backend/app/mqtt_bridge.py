@@ -13,7 +13,7 @@ import paho.mqtt.client as mqtt
 from . import camera_store
 from .agent_debug import agent_log
 from .events_store import attach_recording_filename
-from .recordings_sync import upsert_from_mqtt_stop
+from .recordings_sync import sync_camera_recordings_background, upsert_from_mqtt_stop
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ class MqttRecordingBridge:
         self._lock = threading.Lock()
         self._state: dict[int, dict[str, Any]] = {}
         self._active_clip_rids: dict[int, set[str]] = {}
+        self._pending_clip_rids: dict[int, set[str]] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._client: Optional[mqtt.Client] = None
@@ -115,6 +116,25 @@ class MqttRecordingBridge:
             for cid, row in self._state.items():
                 out[str(cid)] = dict(row)
             return {"cameras": out}
+
+    def mark_motion_clip_pending(self, cam_id: int, recording_id: str) -> None:
+        """Block re-trigger from HTTP accept until edge MQTT Stop."""
+        rid = str(recording_id or "").strip()
+        if not rid:
+            return
+        with self._lock:
+            self._pending_clip_rids.setdefault(int(cam_id), set()).add(rid)
+
+    def motion_clip_in_progress(self, cam_id: int) -> bool:
+        """True from HTTP trigger accept until MQTT Stop (blocks re-trigger)."""
+        with self._lock:
+            cid = int(cam_id)
+            if self._pending_clip_rids.get(cid):
+                return True
+            if self._active_clip_rids.get(cid):
+                return True
+            row = self._state.get(cid, {})
+            return bool(row.get("recording"))
 
     def reconcile_recording_state(self) -> None:
         """
@@ -179,12 +199,15 @@ class MqttRecordingBridge:
         with self._lock:
             prev = self._state.get(cid, {})
             clip_refs = self._active_clip_rids.setdefault(cid, set())
+            pending_refs = self._pending_clip_rids.setdefault(cid, set())
             if status == "Stop":
                 if rid:
                     clip_refs.discard(rid)
+                    pending_refs.discard(rid)
                 else:
                     clip_refs.clear()
-                recording_on = len(clip_refs) > 0
+                    pending_refs.clear()
+                recording_on = len(clip_refs) > 0 or len(pending_refs) > 0
                 self._state[cid] = {
                     "recording": recording_on,
                     "status": "Stop",
@@ -196,9 +219,11 @@ class MqttRecordingBridge:
             elif status == "Start":
                 if rid:
                     clip_refs.add(rid)
+                    pending_refs.discard(rid)
                 self._state[cid] = {
                     "recording": self._recording_active_for_camera(cid, status, payload)
-                    or len(clip_refs) > 0,
+                    or len(clip_refs) > 0
+                    or len(pending_refs) > 0,
                     "status": status,
                     "recording_id": payload.get("recording_id"),
                     "timestamp": payload.get("timestamp"),
@@ -249,6 +274,7 @@ class MqttRecordingBridge:
                         fn,
                         e,
                     )
+                sync_camera_recordings_background(cid)
             if fn and rid:
                 try:
                     n = attach_recording_filename(cid, rid, fn)

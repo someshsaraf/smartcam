@@ -122,6 +122,26 @@ def sync_all_cameras(
     return results
 
 
+def sync_camera_recordings_background(
+    cam_id: int,
+    *,
+    recordings_dir: Optional[Path] = None,
+) -> None:
+    """Refresh one camera's catalog from edge/local without blocking MQTT handler."""
+
+    def _run() -> None:
+        try:
+            sync_camera_recordings(cam_id, recordings_dir=recordings_dir)
+        except Exception as e:
+            logger.warning("recordings sync failed cam_id=%s: %s", cam_id, e)
+
+    threading.Thread(
+        target=_run,
+        name=f"recordings-sync-{cam_id}",
+        daemon=True,
+    ).start()
+
+
 def sync_all_cameras_background(recordings_root: Path) -> None:
     def _run() -> None:
         with _SYNC_LOCK:

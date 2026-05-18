@@ -180,65 +180,16 @@ function hlsPlaylistUrlForCamera(cam, viaApi = true) {
 }
 
 function formatBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  const bytes = Number(n);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "…";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toLocaleString();
-}
-
-function formatCountdown(seconds) {
-  const s = Math.max(0, Math.floor(Number(seconds) || 0));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  if (m > 0) return `${m}:${String(r).padStart(2, "0")}`;
-  return `${r}s`;
-}
-
-function motionClipRemainingSec(status) {
-  if (!status?.active) return null;
-  const endsAt = Number(status.ends_at);
-  if (Number.isFinite(endsAt) && endsAt > 1e9) {
-    return Math.max(0, Math.floor(endsAt - Date.now() / 1000));
-  }
-  if (typeof status.remaining_seconds === "number") {
-    return Math.max(0, Math.floor(status.remaining_seconds));
-  }
-  return null;
-}
-
-function motionClipIsActive(status) {
-  if (!status || typeof status !== "object") return false;
-  if (status.active) return true;
-  const phase = status.phase;
-  return phase === "starting" || phase === "post_roll" || phase === "materializing";
-}
-
-/** Short countdown label for the recording indicator (e.g. "0:18"). */
-function motionClipCountdownLabel(status) {
-  if (!motionClipIsActive(status)) return null;
-  if (status.phase === "materializing") return null;
-  const rem = motionClipRemainingSec(status);
-  if (rem == null) return null;
-  return formatCountdown(rem);
-}
-
-/** Re-render live tiles every second while a motion clip countdown is visible. */
-function useMotionClipCountdownTicker(motionClipById) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const hasCountdown = Object.values(motionClipById || {}).some(
-      (st) =>
-        motionClipIsActive(st) &&
-        (st.phase === "post_roll" || st.phase === "starting" || st.phase === "materializing")
-    );
-    if (!hasCountdown) return undefined;
-    const iv = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(iv);
-  }, [motionClipById]);
 }
 
 function edgeBaseUrlForCamera(cameras, camId) {
@@ -2085,8 +2036,6 @@ export default function App() {
   const [activeCameraId, setActiveCameraId] = useState(null);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
-  /** Motion clip in progress on Pi edge (cam id → status from edge). */
-  const [motionClipById, setMotionClipById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
   /** Phase 1: controller `/ws/detections` → per-camera inference + person debug */
   const [detectionsById, setDetectionsById] = useState({});
@@ -2164,7 +2113,7 @@ export default function App() {
   }, [cams]);
 
   useEffect(() => {
-    loadAllRecordings(cams);
+    loadAllRecordings(cams, { sync: true });
   }, [cams, loadAllRecordings]);
 
   useEffect(() => {
@@ -2200,50 +2149,8 @@ export default function App() {
     };
   }, [cams]);
 
-  useEffect(() => {
-    const edgeCams = cams.filter(
-      (c) =>
-        c.edge_base_url &&
-        isSetCameraId(c.id) &&
-        (c.settings?.recording_mode || "motion") === "motion"
-    );
-    if (!edgeCams.length) return undefined;
-    let cancelled = false;
-    const poll = async () => {
-      for (const c of edgeCams) {
-        try {
-          const res = await fetch(`${API}/cameras/${c.id}/recordings/motion/status`);
-          if (!res.ok || cancelled) continue;
-          const st = await res.json();
-          if (cancelled || !st || typeof st !== "object") continue;
-          setMotionClipById((prev) => {
-            const prevSt = prev[c.id];
-            const wasActive = motionClipIsActive(prevSt);
-            const nowActive = motionClipIsActive(st);
-            const next = { ...prev, [c.id]: st };
-            if (wasActive && !nowActive) {
-              loadAllRecordingsRef.current(camsRef.current, { sync: true });
-            } else if (st.filename && st.filename !== prevSt?.filename) {
-              loadAllRecordingsRef.current(camsRef.current, { sync: false });
-            }
-            return next;
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-    poll();
-    const iv = window.setInterval(poll, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(iv);
-    };
-  }, [cams]);
-
   const camsRef = useRef(cams);
   const loadAllRecordingsRef = useRef(loadAllRecordings);
-  const motionClipByIdRef = useRef(motionClipById);
   const recordingByIdRef = useRef(recordingById);
   const manualRecordingByIdRef = useRef(manualRecordingById);
 
@@ -2253,9 +2160,6 @@ export default function App() {
   useEffect(() => {
     loadAllRecordingsRef.current = loadAllRecordings;
   }, [loadAllRecordings]);
-  useEffect(() => {
-    motionClipByIdRef.current = motionClipById;
-  }, [motionClipById]);
   useEffect(() => {
     recordingByIdRef.current = recordingById;
   }, [recordingById]);
@@ -2271,9 +2175,10 @@ export default function App() {
       const list = camsRef.current;
       const load = loadAllRecordingsRef.current;
       if (!list?.length || typeof load !== "function") return;
-      load(list);
-      window.setTimeout(() => load(camsRef.current), 1500);
-      window.setTimeout(() => load(camsRef.current), 4000);
+      const opts = { sync: true };
+      load(list, opts);
+      window.setTimeout(() => load(camsRef.current, opts), 1500);
+      window.setTimeout(() => load(camsRef.current, opts), 4000);
     };
     const connect = () => {
       try {
@@ -2612,6 +2517,8 @@ export default function App() {
             ? body.filename.trim()
             : null;
         if (stoppedName) {
+          const stoppedSize =
+            typeof body.size === "number" && body.size > 0 ? body.size : null;
           setAllRecordings((prev) => {
             const key = recordingKey({ camId: cam.id, name: stoppedName });
             if (prev.some((r) => recordingKey(r) === key)) return prev;
@@ -2620,7 +2527,7 @@ export default function App() {
                 camId: cam.id,
                 camName: cam.name,
                 name: stoppedName,
-                size: 0,
+                size: stoppedSize ?? 0,
                 mtime: Date.now() / 1000,
               },
               ...prev,
@@ -2716,9 +2623,7 @@ export default function App() {
     mobileLiveCam &&
     ((mobileLiveCam.settings?.recording_mode || "motion") === "off"
       ? manualRecordingById[mobileLiveCam.id] === true
-      : recordingActiveForCam(recordingById, mobileLiveCam.id) ||
-        motionClipIsActive(motionClipById[mobileLiveCam.id]));
-  useMotionClipCountdownTicker(motionClipById);
+      : recordingActiveForCam(recordingById, mobileLiveCam.id));
   const showLivePanel = mainTab === "live";
   const showClipsPanel = mainTab === "clips";
   const showEventsPanel = mainTab === "events";
@@ -2734,8 +2639,7 @@ export default function App() {
       recording={
         (c.settings?.recording_mode || "motion") === "off"
           ? manualRecordingById[c.id] === true
-          : recordingActiveForCam(recordingById, c.id) ||
-            motionClipIsActive(motionClipById[c.id])
+          : recordingActiveForCam(recordingById, c.id)
       }
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}
@@ -2748,11 +2652,7 @@ export default function App() {
           ? detectionSystem.overlay_delay_ms
           : undefined
       }
-      motionClipCountdown={
-        (c.settings?.recording_mode || "motion") === "motion"
-          ? motionClipCountdownLabel(motionClipById[c.id])
-          : null
-      }
+      motionClipCountdown={null}
     />
   );
 

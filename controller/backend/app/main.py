@@ -709,7 +709,7 @@ def camera_motion_clip_trigger(cam_id: int, body: Optional[dict[str, Any]] = Non
 
 @app.get("/cameras/{cam_id}/recordings/motion/status")
 def camera_motion_clip_status(cam_id: int):
-    """Always HTTP 200 — never 502 when the Pi edge is slow or offline."""
+    """Legacy/debug poll of Pi clip state. UI uses MQTT Start/Stop via /ws/recording."""
     try:
         c = camera_store.get_camera(cam_id)
         if not c:
