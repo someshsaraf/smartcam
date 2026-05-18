@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import {
   API,
@@ -395,6 +395,23 @@ function formatEventTime(ts) {
     return d.toLocaleString();
   } catch {
     return ts;
+  }
+}
+
+/** Clock time for activity timeline (e.g. 10:24 PM). */
+function formatTimelineClock(ts) {
+  if (!ts) return "—";
+  try {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return "—";
   }
 }
 
@@ -1940,7 +1957,7 @@ function LiveTile({
         isThumb
           ? "rounded-none p-0 bg-transparent"
           : isHeroShell
-            ? "rounded-none p-0 bg-transparent ring-0 shadow-none overflow-hidden"
+            ? "rounded-none p-0 bg-transparent ring-0 shadow-none overflow-hidden h-full w-full"
             : heroLayout
               ? "rounded-2xl p-0 bg-[#0a0f18] ring-1 ring-white/5 shadow-2xl overflow-hidden"
               : "rounded-xl p-2 bg-[#111827]"
@@ -2018,11 +2035,13 @@ function LiveTile({
           style={{ transform: `scale(${scale})` }}
         >
           {useWebRtc ? (
-            <div className="relative w-full h-full min-h-[140px]">
+            <div className={`relative w-full h-full ${isHeroShell ? "min-h-full" : "min-h-[140px]"}`}>
               <iframe
                 title={cam.name}
                 src={streamUrl}
-                className="w-full h-full min-h-[140px] border-0 bg-black pointer-events-none"
+                className={`w-full h-full border-0 bg-black pointer-events-none ${
+                  isHeroShell ? "min-h-full" : "min-h-[140px]"
+                }`}
                 allow="autoplay; fullscreen"
                 sandbox="allow-scripts allow-same-origin allow-autoplay allow-fullscreen"
               />
@@ -2041,7 +2060,9 @@ function LiveTile({
             <div className="relative w-full h-full min-h-[140px] bg-black">
               <video
                 ref={videoRef}
-                className="absolute inset-0 w-full h-full object-contain bg-black"
+                className={`absolute inset-0 w-full h-full bg-black ${
+                  isHeroShell ? "object-cover" : "object-contain"
+                }`}
                 playsInline
                 muted
                 autoPlay
@@ -2169,6 +2190,8 @@ export default function App() {
   const [playingClip, setPlayingClip] = useState(null);
   /** Person-detected events today for Camera insights (active camera). */
   const [insightsPeopleToday, setInsightsPeopleToday] = useState(0);
+  const [todayEvents, setTodayEvents] = useState([]);
+  const [liveSessionStarted, setLiveSessionStarted] = useState(() => new Date().toISOString());
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/cameras`);
@@ -2300,6 +2323,7 @@ export default function App() {
         : null;
     if (!isSetCameraId(camId)) {
       setInsightsPeopleToday(0);
+      setTodayEvents([]);
       return undefined;
     }
     let cancelled = false;
@@ -2312,10 +2336,16 @@ export default function App() {
         if (!res.ok || cancelled) return;
         const data = await res.json();
         const rows = Array.isArray(data.events) ? data.events : [];
-        const count = rows.filter((ev) => ev?.event_type === "person_detected").length;
-        if (!cancelled) setInsightsPeopleToday(count);
+        const personRows = rows.filter((ev) => ev?.event_type === "person_detected");
+        if (!cancelled) {
+          setInsightsPeopleToday(personRows.length);
+          setTodayEvents(personRows);
+        }
       } catch {
-        if (!cancelled) setInsightsPeopleToday(0);
+        if (!cancelled) {
+          setInsightsPeopleToday(0);
+          setTodayEvents([]);
+        }
       }
     };
     load();
@@ -2325,6 +2355,10 @@ export default function App() {
       window.clearInterval(iv);
     };
   }, [activeCameraId, cams]);
+
+  useEffect(() => {
+    setLiveSessionStarted(new Date().toISOString());
+  }, [activeCameraId]);
 
   useEffect(() => {
     let ws;
@@ -2832,21 +2866,53 @@ export default function App() {
         ],
       ]
     : [];
-  const liveActivityItems = [
-    { label: "Live view started", time: "Now", live: true },
-    ...(mobileRecording
-      ? [{ label: "Recording clip", time: "Now", detail: "Motion or manual capture" }]
-      : []),
-    ...(mobilePersonCount > 0
-      ? [
-          {
-            label: "Person detected",
-            time: "Now",
-            detail: `${mobilePersonCount} in frame`,
-          },
-        ]
-      : []),
-  ];
+  const liveActivityItems = useMemo(() => {
+    const nowIso = new Date().toISOString();
+    const items = [];
+
+    for (const ev of [...todayEvents].sort((a, b) => {
+      const ta = new Date(a?.ts || 0).getTime();
+      const tb = new Date(b?.ts || 0).getTime();
+      return tb - ta;
+    }).slice(0, 8)) {
+      items.push({
+        label: formatEventType(ev.event_type),
+        time: formatTimelineClock(ev.ts),
+        ts: ev.ts,
+      });
+    }
+
+    if (mobilePersonCount > 0) {
+      items.unshift({
+        label: "Person detected",
+        time: formatTimelineClock(nowIso),
+        ts: nowIso,
+        detail: `${mobilePersonCount} in frame`,
+      });
+    }
+
+    if (mobileRecording) {
+      items.unshift({
+        label: "Recording clip",
+        time: formatTimelineClock(nowIso),
+        ts: nowIso,
+        detail: "Motion or manual capture",
+      });
+    }
+
+    items.push({
+      label: "Live view started",
+      time: formatTimelineClock(liveSessionStarted),
+      ts: liveSessionStarted,
+      live: true,
+    });
+
+    return items.sort((a, b) => {
+      const ta = new Date(a.ts || 0).getTime();
+      const tb = new Date(b.ts || 0).getTime();
+      return tb - ta;
+    });
+  }, [todayEvents, mobilePersonCount, mobileRecording, liveSessionStarted]);
   const handleLiveFullscreen = () => {
     const el = document.querySelector(".dashboard-video-shell");
     if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});

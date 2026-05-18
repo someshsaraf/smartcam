@@ -341,25 +341,33 @@ export function CameraInsights({
 
 export function ActivityTimeline({ items = [] }) {
   return (
-    <ul className="space-y-0 relative pl-1">
+    <ul className="space-y-0 relative">
       {items.length === 0 ? (
         <li className="text-xs text-gray-500 py-2">No activity yet.</li>
       ) : (
         items.map((item, i) => (
-          <li key={`${item.label}-${i}`} className="flex gap-3 pb-4 last:pb-0 relative">
+          <li
+            key={`${item.label}-${item.time}-${i}`}
+            className="grid grid-cols-[4.75rem_0.75rem_1fr] gap-x-2.5 pb-4 last:pb-0 items-start relative"
+          >
             {i < items.length - 1 ? (
-              <span className="absolute left-[5px] top-3 bottom-0 w-px bg-indigo-500/25" aria-hidden />
+              <span
+                className="absolute left-[5.35rem] top-3 bottom-0 w-px bg-indigo-500/30"
+                aria-hidden
+              />
             ) : null}
+            <span className="text-[11px] text-gray-500 font-mono tabular-nums text-right pt-0.5 shrink-0">
+              {item.time}
+            </span>
             <span
-              className={`relative z-[1] mt-1 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-[#121a2a] ${
+              className={`relative z-[1] mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-[#121a2a] justify-self-center ${
                 item.live ? "bg-emerald-400" : "bg-indigo-500"
               }`}
             />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-gray-200 font-medium">{item.label}</p>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-200 font-medium leading-snug">{item.label}</p>
               {item.detail ? <p className="text-[10px] text-gray-500 mt-0.5">{item.detail}</p> : null}
             </div>
-            <span className="text-[10px] text-gray-500 font-mono shrink-0 tabular-nums">{item.time}</span>
           </li>
         ))
       )}
@@ -454,8 +462,8 @@ export function LiveDashboardPage({
           ) : null}
         </div>
 
-        <div className="flex flex-col flex-1 min-h-0 gap-4">
-          <div className="dashboard-video-shell flex-1 min-h-[min(42vh,520px)] lg:min-h-0">
+        <div className="flex flex-col shrink-0 gap-4">
+          <div className="dashboard-video-shell dashboard-video-shell-hero w-full shrink-0">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
               {hasLive ? (
                 <span className="pointer-events-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
@@ -470,7 +478,7 @@ export function LiveDashboardPage({
               </span>
             </div>
 
-            <div className="absolute inset-0 z-10">{liveVideo}</div>
+            <div className="absolute inset-0 z-10 [&>div]:h-full [&>motion.div]:h-full">{liveVideo}</div>
 
             <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-8 mobile-video-gradient-bottom pointer-events-none">
               <div className="flex items-end justify-between gap-2 pointer-events-auto">

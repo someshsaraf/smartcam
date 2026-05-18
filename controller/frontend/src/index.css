@@ -88,6 +88,18 @@ body {
   .dashboard-video-shell {
     @apply relative rounded-2xl overflow-hidden border border-white/[0.08] bg-black shadow-[0_8px_40px_rgba(0,0,0,0.45)] ring-1 ring-white/[0.04];
   }
+  .dashboard-video-shell-hero {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    min-height: min(42vh, 380px);
+    max-height: min(68vh, 820px);
+  }
+  @media (min-width: 1024px) {
+    .dashboard-video-shell-hero {
+      min-height: min(50vh, 520px);
+      max-height: min(62vh, 720px);
+    }
+  }
   .dashboard-video-chip {
     @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-xs backdrop-blur-sm border border-white/10;
   }
