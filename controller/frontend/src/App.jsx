@@ -2948,6 +2948,9 @@ export default function App() {
         clipCount={allRecordings.length}
         eventCount={0}
         cameraCount={cams.length}
+        cameras={liveCams}
+        activeCameraId={effectiveActiveCameraId}
+        onSelectCamera={setActiveCameraId}
       >
         {showLivePanel ? (
           <LiveDashboardPage

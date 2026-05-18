@@ -206,18 +206,21 @@ body {
       gap: 0.75rem;
     }
   }
-  /* Mock tile: icon top-left, title + subtitle below, comfortable padding (~165×72). */
+  /* Mock tile: icon on the left, title + subtitle stacked to the right. */
   .dashboard-quick-action {
-    @apply flex flex-col items-start gap-2 rounded-xl border border-white/[0.06] bg-[#0f141f] px-4 py-3 text-left transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed min-w-0;
+    @apply flex flex-row items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0f141f] px-3.5 py-3 text-left transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed min-w-0;
+  }
+  .dashboard-quick-action-text {
+    @apply flex flex-col min-w-0;
   }
   .dashboard-quick-action-label {
-    @apply text-sm font-semibold text-gray-100 leading-tight;
+    @apply text-sm font-semibold text-gray-100 leading-tight truncate;
   }
   .dashboard-quick-action-hint {
-    @apply text-[11px] text-gray-500 leading-tight;
+    @apply text-[11px] text-gray-500 leading-tight truncate mt-0.5;
   }
   .dashboard-quick-action-icon-wrap {
-    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c];
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-[#161d2c];
   }
   .dashboard-quick-action-icon-wrap-violet {
     @apply bg-violet-900/30 border-violet-500/25;

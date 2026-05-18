@@ -75,9 +75,13 @@ export function VigilanceShell({
   clipCount = 0,
   eventCount = 0,
   cameraCount = 0,
+  cameras = [],
+  activeCameraId,
+  onSelectCamera,
   children,
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const hasCameraSelector = Array.isArray(cameras) && cameras.length > 0 && typeof onSelectCamera === "function";
 
   const badgeFor = (id) => {
     if (id === "clips" && clipCount > 0) return clipCount > 99 ? "99+" : clipCount;
@@ -125,6 +129,25 @@ export function VigilanceShell({
         </div>
         <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto">{NAV_ITEMS.map((i) => navButton(i))}</nav>
         <div className="p-4 border-t border-white/[0.06] space-y-3">
+          {hasCameraSelector ? (
+            <label className="block space-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">Camera View</span>
+              <select
+                className="dashboard-select dashboard-select-sm w-full"
+                value={activeCameraId ?? ""}
+                onChange={(e) => {
+                  const selectedId = Number(e.target.value);
+                  if (Number.isFinite(selectedId)) onSelectCamera(selectedId);
+                }}
+              >
+                {cameras.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/30 p-3">
             <div className="flex items-start gap-2">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
@@ -203,7 +226,7 @@ export function VigilanceShell({
   );
 }
 
-export function DashboardPageHeader({ eyebrow, title, badge, subtitle, actions, subActions, children, compact = false }) {
+export function DashboardPageHeader({ eyebrow, title, badge, badges, subtitle, actions, subActions, children, compact = false }) {
   const toolbar =
     actions || subActions ? (
       <div className={`flex items-center shrink-0 flex-wrap justify-end ${compact ? "gap-1.5" : "gap-2"}`}>
@@ -238,6 +261,7 @@ export function DashboardPageHeader({ eyebrow, title, badge, subtitle, actions, 
                 {badge}
               </span>
             ) : null}
+            {badges}
           </div>
           {subtitle ? <p className={`text-gray-500 ${compact ? "text-[11px] mt-0.5" : "text-xs mt-1"}`}>{subtitle}</p> : null}
           {children}
@@ -282,8 +306,10 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
       className={`dashboard-quick-action ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
     >
       <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
-      <span className="dashboard-quick-action-label">{label}</span>
-      <span className="dashboard-quick-action-hint">{hint}</span>
+      <span className="dashboard-quick-action-text">
+        <span className="dashboard-quick-action-label">{label}</span>
+        <span className="dashboard-quick-action-hint">{hint}</span>
+      </span>
     </button>
   );
 }
@@ -575,6 +601,29 @@ export function LiveDashboardPage({
         eyebrow="Camera"
         title={cameraName || "Live view"}
         badge={isPrimary ? "Primary" : null}
+        badges={
+          <>
+            {hasLive ? (
+              <StatusPill variant="live">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
+                Live
+              </StatusPill>
+            ) : (
+              <StatusPill variant="offline">No signal</StatusPill>
+            )}
+            {recording ? (
+              <StatusPill variant="recording">
+                <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                Recording
+              </StatusPill>
+            ) : null}
+            {personCount > 0 ? (
+              <span className="text-[11px] text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10">
+                {personCount} person{personCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
+          </>
+        }
         actions={
           <>
             <button
@@ -609,28 +658,6 @@ export function LiveDashboardPage({
 
       <div className="live-view-scroll">
         <div className="live-view-inner">
-        <div className="flex flex-wrap items-center gap-2">
-          {hasLive ? (
-            <StatusPill variant="live">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
-              Live
-            </StatusPill>
-          ) : (
-            <StatusPill variant="offline">No signal</StatusPill>
-          )}
-          {recording ? (
-            <StatusPill variant="recording">
-              <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-              Recording
-            </StatusPill>
-          ) : null}
-          {personCount > 0 ? (
-            <span className="text-[11px] text-indigo-300 px-2.5 py-1 rounded-full border border-indigo-500/30 bg-indigo-500/10">
-              {personCount} person{personCount === 1 ? "" : "s"}
-            </span>
-          ) : null}
-        </div>
-
         <div className="live-view-media-block flex flex-col gap-2.5">
           <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
@@ -656,20 +683,7 @@ export function LiveDashboardPage({
             <div className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full">{liveVideo}</div>
 
             <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-10 mobile-video-gradient-bottom pointer-events-none">
-              <div className="flex items-end justify-between gap-2 pointer-events-none">
-                {cameras.length > 0 && onSelectCamera ? (
-                  <select
-                    className="dashboard-select text-xs max-w-[10rem] bg-black/60 backdrop-blur-sm pointer-events-auto"
-                    value={activeCameraId ?? ""}
-                    onChange={(e) => onSelectCamera(Number(e.target.value))}
-                  >
-                    {cameras.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
+              <div className="flex items-end justify-end gap-2 pointer-events-none">
                 <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono pointer-events-auto">
                   <span>98%</span>
                   <Wifi size={14} variant="Bulk" color="#34d399" aria-hidden />
