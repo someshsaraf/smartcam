@@ -20,8 +20,6 @@ import {
   Profile,
   RecordCircle,
   Refresh,
-  SearchZoomIn,
-  SearchZoomOut,
   ShieldTick,
   VideoPlay,
   VideoSquare,
@@ -377,11 +375,6 @@ export function VideoOverlayActions({
   onLight,
   recording,
   recordDisabled,
-  onZoomIn,
-  onZoomOut,
-  zoomLabel = "1x",
-  onResetZoom,
-  onFullscreen,
 }) {
   const iconSize = 18;
   return (
@@ -426,36 +419,6 @@ export function VideoOverlayActions({
           label="Light"
           onClick={onLight}
           disabled={!onLight}
-        />
-      </div>
-      <div className="video-overlay-right pointer-events-auto">
-        <VideoOverlayButton
-          icon={<SearchZoomOut size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
-          label="Zoom out"
-          onClick={onZoomOut}
-          disabled={!onZoomOut}
-        />
-        <button
-          type="button"
-          onClick={onResetZoom}
-          disabled={!onResetZoom}
-          title="Reset zoom"
-          aria-label="Reset zoom"
-          className={`video-overlay-zoom-label ${onResetZoom ? "" : "opacity-50"}`}
-        >
-          {zoomLabel}
-        </button>
-        <VideoOverlayButton
-          icon={<SearchZoomIn size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
-          label="Zoom in"
-          onClick={onZoomIn}
-          disabled={!onZoomIn}
-        />
-        <VideoOverlayButton
-          icon={<Maximize3 size={16} variant="Outline" color="#e5e7eb" aria-hidden />}
-          label="Fullscreen"
-          onClick={onFullscreen}
-          disabled={!onFullscreen}
         />
       </div>
     </div>
@@ -722,7 +685,6 @@ export function LiveDashboardPage({
                   onLight={onLight}
                   recording={recording}
                   recordDisabled={recordDisabled}
-                  onFullscreen={onFullscreen}
                 />
               </div>
             </div>
