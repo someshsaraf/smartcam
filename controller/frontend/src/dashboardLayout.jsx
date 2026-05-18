@@ -565,6 +565,21 @@ export function ActivityTimeline({ items = [] }) {
   );
 }
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.5;
+
+function clampZoom(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return ZOOM_MIN;
+  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+  return Math.round(clamped * 10) / 10;
+}
+
+function formatZoomLabel(value) {
+  const z = clampZoom(value);
+  return Number.isInteger(z) ? `${z}x` : `${z.toFixed(1)}x`;
+}
+
 export function LiveDashboardPage({
   cameraName,
   isPrimary,
@@ -588,11 +603,20 @@ export function LiveDashboardPage({
   onSiren,
   onLight,
   recordDisabled,
-  onZoomIn,
-  onZoomOut,
-  onResetZoom,
-  zoomLabel = "1x",
 }) {
+  const [zoom, setZoom] = useState(ZOOM_MIN);
+  useEffect(() => {
+    setZoom(ZOOM_MIN);
+  }, [activeCameraId]);
+
+  const handleZoomIn = () => setZoom((z) => clampZoom(z + ZOOM_STEP));
+  const handleZoomOut = () => setZoom((z) => clampZoom(z - ZOOM_STEP));
+  const handleResetZoom = () => setZoom(ZOOM_MIN);
+
+  const canZoomIn = zoom < ZOOM_MAX;
+  const canZoomOut = zoom > ZOOM_MIN;
+  const isZoomed = zoom > ZOOM_MIN;
+  const zoomLabel = formatZoomLabel(zoom);
   const hasLive = streamLabel === "LIVE";
 
   return (
@@ -653,8 +677,8 @@ export function LiveDashboardPage({
             <span className="dashboard-zoom-group" role="group" aria-label="Zoom">
               <button
                 type="button"
-                onClick={onZoomOut}
-                disabled={!onZoomOut}
+                onClick={handleZoomOut}
+                disabled={!canZoomOut}
                 className="dashboard-zoom-btn"
                 aria-label="Zoom out"
                 title="Zoom out"
@@ -663,8 +687,8 @@ export function LiveDashboardPage({
               </button>
               <button
                 type="button"
-                onClick={onResetZoom}
-                disabled={!onResetZoom}
+                onClick={handleResetZoom}
+                disabled={!isZoomed}
                 className="dashboard-zoom-label"
                 aria-label="Reset zoom"
                 title="Reset zoom"
@@ -673,8 +697,8 @@ export function LiveDashboardPage({
               </button>
               <button
                 type="button"
-                onClick={onZoomIn}
-                disabled={!onZoomIn}
+                onClick={handleZoomIn}
+                disabled={!canZoomIn}
                 className="dashboard-zoom-btn"
                 aria-label="Zoom in"
                 title="Zoom in"
@@ -713,7 +737,17 @@ export function LiveDashboardPage({
               </span>
             </div>
 
-            <div className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full">{liveVideo}</div>
+            <div
+              className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full"
+              style={{
+                transform: isZoomed ? `scale(${zoom})` : undefined,
+                transformOrigin: "center center",
+                transition: "transform 180ms ease-out",
+                willChange: isZoomed ? "transform" : undefined,
+              }}
+            >
+              {liveVideo}
+            </div>
 
             <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-10 mobile-video-gradient-bottom pointer-events-none">
               <div className="flex items-end justify-end gap-2 pointer-events-none">
