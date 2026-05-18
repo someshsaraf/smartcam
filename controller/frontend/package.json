@@ -12,8 +12,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@heroicons/react": "^2.2.0",
     "hls.js": "^1.6.16",
+    "lucide-react": "^1.16.0",
     "react": "^18",
     "react-dom": "^18"
   },

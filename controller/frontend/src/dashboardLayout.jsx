@@ -4,37 +4,30 @@
 
 import { useEffect, useState } from "react";
 import {
-  ArrowsPointingOutIcon,
-  Bars3Icon,
-  BellIcon,
-  BoltIcon,
-  BugAntIcon,
-  CameraIcon,
-  FilmIcon,
-  LightBulbIcon,
-  MicrophoneIcon,
-  PlayCircleIcon,
-  ShieldCheckIcon,
-  SpeakerWaveIcon,
-  Squares2X2Icon,
-  TruckIcon,
-  UserGroupIcon,
-  UserIcon,
-  VideoCameraIcon,
-  WifiIcon,
-} from "@heroicons/react/24/outline";
-import {
-  BoltIcon as BoltIconSolid,
-  BugAntIcon as BugAntIconSolid,
-  FilmIcon as FilmIconSolid,
-  PlayCircleIcon as PlayCircleIconSolid,
-  ShieldCheckIcon as ShieldCheckIconSolid,
-  Squares2X2Icon as Squares2X2IconSolid,
-  TruckIcon as TruckIconSolid,
-  UserGroupIcon as UserGroupIconSolid,
-  UserIcon as UserIconSolid,
-  VideoCameraIcon as VideoCameraIconSolid,
-} from "@heroicons/react/24/solid";
+  Activity,
+  Bell,
+  Bug,
+  Camera,
+  Circle,
+  Dog,
+  Film,
+  HardDrive,
+  LayoutGrid,
+  Lightbulb,
+  Maximize2,
+  Menu,
+  Mic,
+  Play,
+  PlaySquare,
+  ShieldCheck,
+  User,
+  Users,
+  Video,
+  Volume2,
+  Wifi,
+  Zap,
+  Car,
+} from "lucide-react";
 
 const NAV_ITEMS = [
   { id: "live", label: "Live View", icon: "live" },
@@ -46,20 +39,20 @@ const NAV_ITEMS = [
 function NavIcon({ name, className = "w-5 h-5" }) {
   switch (name) {
     case "live":
-      return <VideoCameraIconSolid className={className} aria-hidden />;
+      return <Video className={className} strokeWidth={1.75} aria-hidden />;
     case "playback":
-      return <PlayCircleIconSolid className={className} aria-hidden />;
+      return <PlaySquare className={className} strokeWidth={1.75} aria-hidden />;
     case "events":
-      return <BoltIconSolid className={className} aria-hidden />;
+      return <Activity className={className} strokeWidth={1.75} aria-hidden />;
     case "devices":
-      return <Squares2X2IconSolid className={className} aria-hidden />;
+      return <HardDrive className={className} strokeWidth={1.75} aria-hidden />;
     default:
       return null;
   }
 }
 
 function ShieldLogo({ className = "w-5 h-5" }) {
-  return <ShieldCheckIconSolid className={className} aria-hidden />;
+  return <ShieldCheck className={className} strokeWidth={1.75} aria-hidden />;
 }
 
 function LiveClock() {
@@ -171,7 +164,7 @@ export function VigilanceShell({
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="lg:hidden shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 border-b border-white/[0.06] mobile-glass">
           <button type="button" onClick={() => setMobileNavOpen(true)} className="p-2 rounded-lg border border-white/10 text-gray-300" aria-label="Open menu">
-            <Bars3Icon className="w-5 h-5" aria-hidden />
+            <Menu className="w-5 h-5" strokeWidth={1.75} aria-hidden />
           </button>
           <span className="text-sm font-semibold tracking-wide">VIGILANCE</span>
           <span className="w-9" />
@@ -301,14 +294,14 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
   return (
     <div className="live-quick-actions">
       <QuickActionButton
-        icon={<MicrophoneIcon className={`${iconClass} text-indigo-400`} strokeWidth={1.5} aria-hidden />}
+        icon={<Mic className={`${iconClass} text-indigo-300`} strokeWidth={1.75} aria-hidden />}
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
       />
       <QuickActionButton
-        icon={<CameraIcon className={`${iconClass} text-indigo-400`} strokeWidth={1.5} aria-hidden />}
+        icon={<Camera className={`${iconClass} text-sky-300`} strokeWidth={1.75} aria-hidden />}
         label="Snapshot"
         hint="Capture image"
         onClick={onSnapshot}
@@ -316,8 +309,10 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
       />
       <QuickActionButton
         icon={
-          <span
-            className={`h-2 w-2 rounded-full ${recording ? "bg-red-400 animate-pulse" : "bg-red-500"}`}
+          <Circle
+            className={`${iconClass} ${recording ? "text-red-400 animate-pulse" : "text-red-500"}`}
+            strokeWidth={2}
+            fill="currentColor"
             aria-hidden
           />
         }
@@ -330,7 +325,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="red"
       />
       <QuickActionButton
-        icon={<BellIcon className={`${iconClass} text-amber-400`} strokeWidth={1.5} aria-hidden />}
+        icon={<Bell className={`${iconClass} text-amber-300`} strokeWidth={1.75} aria-hidden />}
         label="Siren"
         hint="Trigger alarm"
         onClick={onSiren}
@@ -338,7 +333,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="amber"
       />
       <QuickActionButton
-        icon={<LightBulbIcon className={`${iconClass} text-amber-400`} strokeWidth={1.5} aria-hidden />}
+        icon={<Lightbulb className={`${iconClass} text-amber-300`} strokeWidth={1.75} aria-hidden />}
         label="Light"
         hint="Toggle light"
         onClick={onLight}
@@ -350,34 +345,34 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
 }
 
 function InsightIcon({ type }) {
-  const c = "w-4 h-4 text-indigo-300";
+  const c = "w-4 h-4";
   switch (type) {
     case "people":
-      return <UserGroupIconSolid className={c} aria-hidden />;
+      return <Users className={`${c} text-indigo-300`} strokeWidth={1.75} aria-hidden />;
     case "vehicles":
-      return <TruckIconSolid className={c} aria-hidden />;
+      return <Car className={`${c} text-sky-300`} strokeWidth={1.75} aria-hidden />;
     case "animals":
-      return <BugAntIconSolid className={c} aria-hidden />;
+      return <Dog className={`${c} text-amber-300`} strokeWidth={1.75} aria-hidden />;
     default:
-      return <FilmIconSolid className={c} aria-hidden />;
+      return <Film className={`${c} text-rose-300`} strokeWidth={1.75} aria-hidden />;
   }
 }
 
 function TimelineEventIcon({ live, kind }) {
   const c = "w-3.5 h-3.5";
   if (live || kind === "live") {
-    return <VideoCameraIconSolid className={c} aria-hidden />;
+    return <Video className={c} strokeWidth={1.75} aria-hidden />;
   }
   if (kind === "vehicle") {
-    return <TruckIconSolid className={c} aria-hidden />;
+    return <Car className={c} strokeWidth={1.75} aria-hidden />;
   }
   if (kind === "motion") {
-    return <BoltIconSolid className={c} aria-hidden />;
+    return <Zap className={c} strokeWidth={1.75} aria-hidden />;
   }
   if (kind === "recording") {
-    return <FilmIconSolid className={c} aria-hidden />;
+    return <Film className={c} strokeWidth={1.75} aria-hidden />;
   }
-  return <UserIconSolid className={c} aria-hidden />;
+  return <User className={c} strokeWidth={1.75} aria-hidden />;
 }
 
 export function CameraInsights({
@@ -511,7 +506,7 @@ export function LiveDashboardPage({
               {detecting ? "…" : "+ Add Camera"}
             </button>
             <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Notifications">
-              <BellIcon className="w-3.5 h-3.5" aria-hidden />
+              <Bell className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
             </button>
             <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
               A
@@ -526,7 +521,7 @@ export function LiveDashboardPage({
               <option value="low">Low 480p</option>
             </select>
             <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
-              <ArrowsPointingOutIcon className="w-3.5 h-3.5" aria-hidden />
+              <Maximize2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
             </button>
           </>
         }
@@ -567,13 +562,13 @@ export function LiveDashboardPage({
               <LiveClock />
               <span className="flex gap-1.5 pointer-events-none opacity-80">
                 <span className="dashboard-video-chip" aria-hidden>
-                  <CameraIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  <Camera className="w-3.5 h-3.5" strokeWidth={1.75} />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <MicrophoneIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  <Mic className="w-3.5 h-3.5" strokeWidth={1.75} />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <SpeakerWaveIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  <Volume2 className="w-3.5 h-3.5" strokeWidth={1.75} />
                 </span>
               </span>
             </div>
@@ -597,7 +592,7 @@ export function LiveDashboardPage({
                 ) : null}
                 <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono">
                   <span>98%</span>
-                  <WifiIcon className="w-4 h-4 text-emerald-400" aria-hidden />
+                  <Wifi className="w-4 h-4 text-emerald-400" strokeWidth={1.75} aria-hidden />
                 </span>
               </div>
             </div>
