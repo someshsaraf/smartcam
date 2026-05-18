@@ -4,30 +4,27 @@
 
 import { useEffect, useState } from "react";
 import {
-  Activity,
-  Bell,
-  Bug,
   Camera,
-  Circle,
-  Dog,
-  Film,
-  HardDrive,
-  LayoutGrid,
-  Lightbulb,
-  Maximize2,
-  Menu,
-  Mic,
-  Play,
-  PlaySquare,
-  ShieldCheck,
-  User,
-  Users,
-  Video,
-  Volume2,
-  Wifi,
-  Zap,
   Car,
-} from "lucide-react";
+  Cd,
+  Element4,
+  Flash,
+  HambergerMenu,
+  Lamp,
+  Maximize3,
+  Microphone2,
+  MonitorRecorder,
+  Notification,
+  People,
+  Pet,
+  Profile,
+  RecordCircle,
+  ShieldTick,
+  VideoPlay,
+  VideoSquare,
+  VolumeHigh,
+  Wifi,
+} from "iconsax-react";
 
 const NAV_ITEMS = [
   { id: "live", label: "Live View", icon: "live" },
@@ -37,22 +34,25 @@ const NAV_ITEMS = [
 ];
 
 function NavIcon({ name, className = "w-5 h-5" }) {
+  const sizeMatch = /w-(\d+)/.exec(className);
+  const size = sizeMatch ? Number(sizeMatch[1]) * 4 : 20;
+  const common = { size, variant: "Bulk", className };
   switch (name) {
     case "live":
-      return <Video className={className} strokeWidth={1.75} aria-hidden />;
+      return <VideoSquare {...common} color="#a5b4fc" aria-hidden />;
     case "playback":
-      return <PlaySquare className={className} strokeWidth={1.75} aria-hidden />;
+      return <VideoPlay {...common} color="#a5b4fc" aria-hidden />;
     case "events":
-      return <Activity className={className} strokeWidth={1.75} aria-hidden />;
+      return <Flash {...common} color="#a5b4fc" aria-hidden />;
     case "devices":
-      return <HardDrive className={className} strokeWidth={1.75} aria-hidden />;
+      return <Element4 {...common} color="#a5b4fc" aria-hidden />;
     default:
       return null;
   }
 }
 
 function ShieldLogo({ className = "w-5 h-5" }) {
-  return <ShieldCheck className={className} strokeWidth={1.75} aria-hidden />;
+  return <ShieldTick className={className} size={20} variant="Bulk" color="#a5b4fc" aria-hidden />;
 }
 
 function LiveClock() {
@@ -164,7 +164,7 @@ export function VigilanceShell({
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="lg:hidden shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 border-b border-white/[0.06] mobile-glass">
           <button type="button" onClick={() => setMobileNavOpen(true)} className="p-2 rounded-lg border border-white/10 text-gray-300" aria-label="Open menu">
-            <Menu className="w-5 h-5" strokeWidth={1.75} aria-hidden />
+            <HambergerMenu className="w-5 h-5" size={20} variant="Outline" color="#e5e7eb" aria-hidden />
           </button>
           <span className="text-sm font-semibold tracking-wide">VIGILANCE</span>
           <span className="w-9" />
@@ -265,13 +265,11 @@ function StatusPill({ variant, children }) {
 }
 
 function QuickActionIconWrap({ children, tone = "indigo" }) {
-  const toneClass =
-    tone === "amber"
-      ? "dashboard-quick-action-icon-wrap dashboard-quick-action-icon-wrap-amber"
-      : tone === "red"
-        ? "dashboard-quick-action-icon-wrap dashboard-quick-action-icon-wrap-red"
-        : "dashboard-quick-action-icon-wrap";
-  return <span className={toneClass}>{children}</span>;
+  const toneSuffix =
+    tone === "amber" || tone === "red" || tone === "sky" || tone === "violet" || tone === "rose"
+      ? ` dashboard-quick-action-icon-wrap-${tone}`
+      : "";
+  return <span className={`dashboard-quick-action-icon-wrap${toneSuffix}`}>{children}</span>;
 }
 
 function QuickActionButton({ icon, label, hint, onClick, disabled, active, danger, iconTone = "indigo" }) {
@@ -290,29 +288,32 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
 }
 
 export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
-  const iconClass = "w-4 h-4";
+  const size = 18;
   return (
     <div className="live-quick-actions">
       <QuickActionButton
-        icon={<Mic className={`${iconClass} text-indigo-300`} strokeWidth={1.75} aria-hidden />}
+        icon={<Microphone2 size={size} variant="Bulk" color="#a78bfa" aria-hidden />}
         label="Talk"
         hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
+        iconTone="violet"
       />
       <QuickActionButton
-        icon={<Camera className={`${iconClass} text-sky-300`} strokeWidth={1.75} aria-hidden />}
+        icon={<Camera size={size} variant="Bulk" color="#38bdf8" aria-hidden />}
         label="Snapshot"
         hint="Capture image"
         onClick={onSnapshot}
         disabled={!onSnapshot}
+        iconTone="sky"
       />
       <QuickActionButton
         icon={
-          <Circle
-            className={`${iconClass} ${recording ? "text-red-400 animate-pulse" : "text-red-500"}`}
-            strokeWidth={2}
-            fill="currentColor"
+          <RecordCircle
+            size={size}
+            variant="Bulk"
+            color={recording ? "#f87171" : "#ef4444"}
+            className={recording ? "animate-pulse" : undefined}
             aria-hidden
           />
         }
@@ -325,7 +326,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="red"
       />
       <QuickActionButton
-        icon={<Bell className={`${iconClass} text-amber-300`} strokeWidth={1.75} aria-hidden />}
+        icon={<Notification size={size} variant="Bulk" color="#fbbf24" aria-hidden />}
         label="Siren"
         hint="Trigger alarm"
         onClick={onSiren}
@@ -333,7 +334,7 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
         iconTone="amber"
       />
       <QuickActionButton
-        icon={<Lightbulb className={`${iconClass} text-amber-300`} strokeWidth={1.75} aria-hidden />}
+        icon={<Lamp size={size} variant="Bulk" color="#facc15" aria-hidden />}
         label="Light"
         hint="Toggle light"
         onClick={onLight}
@@ -345,34 +346,33 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
 }
 
 function InsightIcon({ type }) {
-  const c = "w-4 h-4";
   switch (type) {
     case "people":
-      return <Users className={`${c} text-indigo-300`} strokeWidth={1.75} aria-hidden />;
+      return <People size={18} variant="Bulk" color="#a78bfa" aria-hidden />;
     case "vehicles":
-      return <Car className={`${c} text-sky-300`} strokeWidth={1.75} aria-hidden />;
+      return <Car size={18} variant="Bulk" color="#38bdf8" aria-hidden />;
     case "animals":
-      return <Dog className={`${c} text-amber-300`} strokeWidth={1.75} aria-hidden />;
+      return <Pet size={18} variant="Bulk" color="#fbbf24" aria-hidden />;
     default:
-      return <Film className={`${c} text-rose-300`} strokeWidth={1.75} aria-hidden />;
+      return <MonitorRecorder size={18} variant="Bulk" color="#fb7185" aria-hidden />;
   }
 }
 
 function TimelineEventIcon({ live, kind }) {
-  const c = "w-3.5 h-3.5";
+  const size = 14;
   if (live || kind === "live") {
-    return <Video className={c} strokeWidth={1.75} aria-hidden />;
+    return <VideoSquare size={size} variant="Bulk" color="#a5b4fc" aria-hidden />;
   }
   if (kind === "vehicle") {
-    return <Car className={c} strokeWidth={1.75} aria-hidden />;
+    return <Car size={size} variant="Bulk" color="#38bdf8" aria-hidden />;
   }
   if (kind === "motion") {
-    return <Zap className={c} strokeWidth={1.75} aria-hidden />;
+    return <Flash size={size} variant="Bulk" color="#fbbf24" aria-hidden />;
   }
   if (kind === "recording") {
-    return <Film className={c} strokeWidth={1.75} aria-hidden />;
+    return <Cd size={size} variant="Bulk" color="#fb7185" aria-hidden />;
   }
-  return <User className={c} strokeWidth={1.75} aria-hidden />;
+  return <Profile size={size} variant="Bulk" color="#a5b4fc" aria-hidden />;
 }
 
 export function CameraInsights({
@@ -506,7 +506,7 @@ export function LiveDashboardPage({
               {detecting ? "…" : "+ Add Camera"}
             </button>
             <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Notifications">
-              <Bell className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
+              <Notification size={14} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
             <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
               A
@@ -521,7 +521,7 @@ export function LiveDashboardPage({
               <option value="low">Low 480p</option>
             </select>
             <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
-              <Maximize2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
+              <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
           </>
         }
@@ -562,13 +562,13 @@ export function LiveDashboardPage({
               <LiveClock />
               <span className="flex gap-1.5 pointer-events-none opacity-80">
                 <span className="dashboard-video-chip" aria-hidden>
-                  <Camera className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <Camera size={14} variant="Outline" color="#f1f5f9" />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <Mic className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <Microphone2 size={14} variant="Outline" color="#f1f5f9" />
                 </span>
                 <span className="dashboard-video-chip" aria-hidden>
-                  <Volume2 className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <VolumeHigh size={14} variant="Outline" color="#f1f5f9" />
                 </span>
               </span>
             </div>
@@ -592,7 +592,7 @@ export function LiveDashboardPage({
                 ) : null}
                 <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono">
                   <span>98%</span>
-                  <Wifi className="w-4 h-4 text-emerald-400" strokeWidth={1.75} aria-hidden />
+                  <Wifi size={14} variant="Bulk" color="#34d399" aria-hidden />
                 </span>
               </div>
             </div>
