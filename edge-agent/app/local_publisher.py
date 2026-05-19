@@ -416,18 +416,21 @@ class LocalPublisher:
         cfg.config_dir.mkdir(parents=True, exist_ok=True)
         return cfg.config_dir / _CONFIG_FILENAME
 
-    def _terminate_proc(self) -> None:
+    def _terminate_proc(self, *, fast: bool = False) -> None:
         proc = self._proc
         self._proc = None
         if proc is None:
             return
+        grace = 1.0 if fast else 4.0
         try:
+            if proc.poll() is not None:
+                return
             proc.terminate()
-            proc.wait(timeout=8)
+            proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
-                proc.wait(timeout=3)
+                proc.wait(timeout=1.0)
             except Exception as e:
                 logger.warning("LocalPublisher kill: %s", e)
         except Exception as e:
@@ -530,8 +533,8 @@ class LocalPublisher:
         self._missing_logged = False
         self._apply()
 
-    def stop(self) -> None:
-        """Stop the supervisor and join the debounce timer."""
+    def stop(self, *, fast: bool = True) -> None:
+        """Stop the supervisor and join the debounce timer. ``fast=True`` for Ctrl+C."""
         with self._lock:
             self._stopped = True
             timer = self._debounce_timer
@@ -539,11 +542,11 @@ class LocalPublisher:
         if timer is not None:
             try:
                 timer.cancel()
-                timer.join(timeout=3)
+                timer.join(timeout=0.5 if fast else 2.0)
             except Exception as e:
                 logger.debug("LocalPublisher timer cancel: %s", e)
         with self._lock:
-            self._terminate_proc()
+            self._terminate_proc(fast=fast)
             self._last_yaml = ""
 
     def update_settings(self, settings: dict[str, Any]) -> None:

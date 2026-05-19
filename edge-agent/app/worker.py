@@ -98,12 +98,40 @@ def _fps_for_quality(quality: Any) -> float:
     return 25.0
 
 
+def _kill_subprocess(proc: Optional[subprocess.Popen], *, grace_sec: float = 1.5) -> None:
+    """Terminate then kill; bounded wait so Ctrl+C shutdown does not hang."""
+    if proc is None:
+        return
+    try:
+        if proc.poll() is not None:
+            return
+        proc.terminate()
+        proc.wait(timeout=max(0.1, grace_sec))
+    except Exception:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=1.0)
+        except Exception:
+            pass
+
+
 def _configure_rtsp_capture(cap: cv2.VideoCapture) -> None:
     """Shrink internal queue where supported so stale frames are dropped sooner."""
     try:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
+    for prop, ms in (
+        (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None), 4000),
+        (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None), 4000),
+    ):
+        if prop is None:
+            continue
+        try:
+            cap.set(prop, ms)
+        except Exception:
+            pass
 
 
 def _flip_if_needed(frame: Any, flip: bool) -> Any:
@@ -162,6 +190,8 @@ class EdgeRecorder:
         self._pm_status: dict[str, Any] = {}
         self._pm_buf: collections.deque[tuple[float, bytes]] = collections.deque()
         self._pm_buffer_thread: Optional[threading.Thread] = None
+        self._buffer_cap_lock = threading.Lock()
+        self._buffer_cap: Optional[cv2.VideoCapture] = None
         self._last_external_clip_trigger = 0.0
         self._external_clip_cooldown_until = 0.0
         self._clip_busy_lock = threading.Lock()
@@ -260,19 +290,32 @@ class EdgeRecorder:
         with self._lock:
             return dict(self._settings)
 
-    def _terminate_ffmpeg(self) -> None:
-        proc = self._ffmpeg_proc
-        self._ffmpeg_proc = None
-        if proc is None:
-            return
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
+    def _release_buffer_cap(self) -> None:
+        with self._buffer_cap_lock:
+            cap = self._buffer_cap
+            self._buffer_cap = None
+        if cap is not None:
             try:
-                proc.kill()
+                cap.release()
             except Exception:
                 pass
+
+    def _terminate_ffmpeg(self, *, fast: bool = False) -> None:
+        proc = self._ffmpeg_proc
+        self._ffmpeg_proc = None
+        _kill_subprocess(proc, grace_sec=0.5 if fast else 2.0)
+
+    def _interruptible_sleep(self, seconds: float) -> bool:
+        """Sleep in small slices; return True if stop was requested."""
+        end = time.monotonic() + max(0.0, seconds)
+        while time.monotonic() < end:
+            if self._stop.is_set():
+                return True
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.1, remaining))
+        return self._stop.is_set()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -288,14 +331,16 @@ class EdgeRecorder:
             )
             self._pm_buffer_thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, fast: bool = True) -> None:
+        """Stop recorder threads and child processes. ``fast=True`` (default) for Ctrl+C."""
         self._stop.set()
-        self.stop_manual_recording()
         with self._pm_lock:
             self._capture_active = False
             self._materialize_count = 0
             self._pm_status = {}
-        self._terminate_ffmpeg()
+        self._release_buffer_cap()
+        self.stop_manual_recording(fast=fast)
+        self._terminate_ffmpeg(fast=fast)
         if self._mqtt:
             try:
                 self._mqtt.loop_stop()
@@ -303,8 +348,11 @@ class EdgeRecorder:
             except Exception:
                 pass
             self._mqtt = None
+        join_sec = 2.0 if fast else 8.0
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=join_sec)
+        if self._pm_buffer_thread and self._pm_buffer_thread.is_alive():
+            self._pm_buffer_thread.join(timeout=join_sec)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -529,8 +577,12 @@ class EdgeRecorder:
             if st.get("recording_mode") != "motion":
                 if cap is not None:
                     cap.release()
+                    with self._buffer_cap_lock:
+                        if self._buffer_cap is cap:
+                            self._buffer_cap = None
                     cap = None
-                time.sleep(0.5)
+                if self._interruptible_sleep(0.5):
+                    break
                 continue
             flip = bool(st.get("flip_180", False))
             fps = _fps_for_quality(st.get("quality"))
@@ -543,16 +595,23 @@ class EdgeRecorder:
                     cap.release()
                 cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
                 _configure_rtsp_capture(cap)
+                with self._buffer_cap_lock:
+                    self._buffer_cap = cap
                 if not cap.isOpened():
-                    time.sleep(2.0)
+                    if self._interruptible_sleep(2.0):
+                        break
                     continue
 
             loop_t0 = time.perf_counter()
             ok, frame = cap.read()
             if not ok or frame is None:
                 cap.release()
+                with self._buffer_cap_lock:
+                    if self._buffer_cap is cap:
+                        self._buffer_cap = None
                 cap = None
-                time.sleep(1.0)
+                if self._interruptible_sleep(1.0):
+                    break
                 continue
 
             frame = _flip_if_needed(frame, flip)
@@ -577,10 +636,14 @@ class EdgeRecorder:
                         self._pm_buf.append((now_ts, blob))
 
             elapsed = time.perf_counter() - loop_t0
-            time.sleep(max(0.0, period - elapsed))
+            if self._interruptible_sleep(max(0.0, period - elapsed)):
+                break
 
         if cap is not None:
             cap.release()
+        with self._buffer_cap_lock:
+            if self._buffer_cap is cap:
+                self._buffer_cap = None
 
     def _run_external_motion_clip(
         self,
@@ -843,7 +906,7 @@ class EdgeRecorder:
         )
         return {"active": True, "filename": out_path.name, "recording_id": self._manual_rid}
 
-    def stop_manual_recording(self) -> dict[str, Any]:
+    def stop_manual_recording(self, *, fast: bool = False) -> dict[str, Any]:
         with self._manual_lock:
             proc = self._manual_proc
             out_path = self._manual_out_path
@@ -854,26 +917,21 @@ class EdgeRecorder:
         if proc is None:
             return {"active": False, "filename": None}
         filename = out_path.name if out_path else ""
+        if fast or self._stop.is_set():
+            _kill_subprocess(proc, grace_sec=0.5)
+            return {"active": False, "filename": filename or None}
         try:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGINT)
-                proc.wait(timeout=20)
+                proc.wait(timeout=8)
         except Exception:
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+            _kill_subprocess(proc, grace_sec=1.0)
         playable_name = ""
         if out_path is not None and out_path.is_file():
-            time.sleep(1.0)
+            time.sleep(0.5)
             ok = finalize_mp4_for_mobile(out_path)
             if not ok:
-                time.sleep(1.5)
+                time.sleep(0.75)
                 ok = finalize_mp4_for_mobile(out_path)
             if ok and mp4_ios_playable(out_path):
                 playable_name = out_path.name
@@ -999,9 +1057,9 @@ class EdgeRecorder:
                         )
             time.sleep(0.2)
 
-        self._terminate_ffmpeg()
+        self._terminate_ffmpeg(fast=self._stop.is_set())
         stop_filename = ""
-        if last_filename:
+        if last_filename and not self._stop.is_set():
             last_seg = out_dir / last_filename
             if last_seg.is_file():
                 time.sleep(0.5)
@@ -1010,12 +1068,13 @@ class EdgeRecorder:
                     stop_filename = last_filename
                 else:
                     remove_invalid_mp4(last_seg)
-        self._publish(
-            status="Stop",
-            recording_id=rid,
-            local_path=out_dir.resolve().as_posix(),
-            filename=stop_filename or None,
-        )
+        if not self._stop.is_set():
+            self._publish(
+                status="Stop",
+                recording_id=rid,
+                local_path=out_dir.resolve().as_posix(),
+                filename=stop_filename or None,
+            )
 
     def _run_motion_idle_session(self) -> None:
         """Motion mode: only the rolling buffer thread runs; clips come from the controller."""

@@ -7,6 +7,7 @@ from . import env_loader  # noqa: F401  # loads edge-agent/.env
 import asyncio
 import base64
 import binascii
+import concurrent.futures
 import logging
 import os
 import re
@@ -175,15 +176,32 @@ async def lifespan(_app: FastAPI):
             )
         yield
     finally:
-        if _recorder is not None:
-            _recorder.stop()
-            _recorder = None
-        if _zc_pub is not None:
-            _zc_pub.unregister()
-            _zc_pub = None
-        if _publisher is not None:
-            _publisher.stop()
-            _publisher = None
+        rec = _recorder
+        pub = _publisher
+        zc = _zc_pub
+        _recorder = None
+        _publisher = None
+        _zc_pub = None
+
+        def _stop_rec() -> None:
+            if rec is not None:
+                rec.stop(fast=True)
+
+        def _stop_pub() -> None:
+            if pub is not None:
+                pub.stop(fast=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futs = []
+            if rec is not None:
+                futs.append(pool.submit(_stop_rec))
+            if pub is not None:
+                futs.append(pool.submit(_stop_pub))
+            if futs:
+                concurrent.futures.wait(futs, timeout=5.0)
+
+        if zc is not None:
+            zc.unregister()
 
 
 app = FastAPI(title="Surveillance Edge Agent", lifespan=lifespan)
