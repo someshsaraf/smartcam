@@ -114,6 +114,27 @@ body {
   .dashboard-zoom-label {
     @apply inline-flex items-center justify-center min-w-[2.25rem] h-8 px-2 text-[11px] font-mono font-semibold text-white/90 border-x border-white/10 hover:bg-white/5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed;
   }
+  .dashboard-zoom-group-header .dashboard-zoom-btn {
+    @apply h-7 w-7;
+  }
+  .dashboard-zoom-group-header .dashboard-zoom-label {
+    @apply h-7 min-w-[1.75rem] px-1.5 text-[10px];
+  }
+  .live-quick-actions-icons {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.375rem;
+    flex-shrink: 0;
+    padding: 0.125rem 0;
+  }
+  .dashboard-quick-action-icon-only {
+    @apply inline-flex items-center justify-center rounded-xl border border-white/[0.06] bg-[#0f141f] p-2 transition-colors hover:border-indigo-500/20 hover:bg-[#121a28] disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .dashboard-quick-action-icon-only .dashboard-quick-action-icon-wrap {
+    @apply h-9 w-9;
+  }
   .dashboard-select-sm {
     @apply text-xs px-2.5 py-1.5 min-h-0 leading-tight;
   }

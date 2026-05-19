@@ -231,7 +231,7 @@ export function VigilanceShell({
 export function DashboardPageHeader({ eyebrow, title, badge, badges, subtitle, actions, subActions, children, compact = false }) {
   const toolbar =
     actions || subActions ? (
-      <div className={`flex items-center shrink-0 flex-wrap justify-end ${compact ? "gap-1.5" : "gap-2"}`}>
+      <div className={`flex items-center shrink-0 flex-nowrap justify-end ${compact ? "gap-1" : "gap-2"}`}>
         {actions}
         {subActions}
       </div>
@@ -243,19 +243,23 @@ export function DashboardPageHeader({ eyebrow, title, badge, badges, subtitle, a
         compact ? "py-2 lg:py-2.5" : "py-3 lg:py-4"
       }`}
     >
-      <div className={`flex flex-wrap justify-between ${compact ? "items-center gap-2" : "items-start gap-3"}`}>
-        <div className="min-w-0">
+      <div
+        className={`flex ${compact ? "items-center justify-between gap-2 w-full flex-nowrap" : "flex-wrap justify-between items-start gap-3"}`}
+      >
+        <div className={compact ? "min-w-0 flex-1" : "min-w-0"}>
           {eyebrow ? (
             <p
               className={`font-semibold uppercase text-indigo-400 ${
-                compact ? "text-[9px] tracking-[0.18em]" : "text-[10px] tracking-[0.22em]"
+                compact ? "hidden lg:block text-[9px] tracking-[0.18em]" : "text-[10px] tracking-[0.22em]"
               }`}
             >
               {eyebrow}
             </p>
           ) : null}
-          <div className={`flex items-center gap-2 flex-wrap ${compact ? "mt-0.5" : "mt-1"}`}>
-            <h1 className={`font-semibold text-white truncate ${compact ? "text-lg lg:text-xl" : "text-xl lg:text-2xl"}`}>
+          <div className={`flex items-center gap-2 min-w-0 ${compact ? "lg:mt-0.5" : "mt-1 flex-wrap"}`}>
+            <h1
+              className={`font-semibold text-white truncate ${compact ? "text-base sm:text-lg lg:text-xl" : "text-xl lg:text-2xl"}`}
+            >
               {title}
             </h1>
             {badge ? (
@@ -329,27 +333,40 @@ function QuickActionButton({ icon, label, hint, onClick, disabled, active, dange
   );
 }
 
-export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
-  const size = 18;
+function QuickActionIconButton({ icon, label, onClick, disabled, active, danger, iconTone = "indigo" }) {
   return (
-    <div className="live-quick-actions">
-      <QuickActionButton
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={`dashboard-quick-action-icon-only ${active ? "dashboard-quick-action-active" : ""} ${danger ? "dashboard-quick-action-danger" : ""}`}
+    >
+      <QuickActionIconWrap tone={iconTone}>{icon}</QuickActionIconWrap>
+    </button>
+  );
+}
+
+export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
+  const size = 20;
+  return (
+    <div className="live-quick-actions-icons" role="toolbar" aria-label="Quick actions">
+      <QuickActionIconButton
         icon={<Microphone2 size={size} variant="Bulk" color="#a78bfa" aria-hidden />}
         label="Talk"
-        hint="Start conversation"
         onClick={onTalk}
         disabled={!onTalk}
         iconTone="violet"
       />
-      <QuickActionButton
+      <QuickActionIconButton
         icon={<Camera size={size} variant="Bulk" color="#38bdf8" aria-hidden />}
         label="Snapshot"
-        hint="Capture image"
         onClick={onSnapshot}
         disabled={!onSnapshot}
         iconTone="sky"
       />
-      <QuickActionButton
+      <QuickActionIconButton
         icon={
           <RecordCircle
             size={size}
@@ -359,26 +376,23 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
             aria-hidden
           />
         }
-        label={recording ? "Recording" : "Record"}
-        hint={recording ? "Stop clip" : "Start recording"}
+        label={recording ? "Stop recording" : "Record"}
         onClick={onRecord}
         disabled={recordDisabled}
         active={recording}
         danger
         iconTone="red"
       />
-      <QuickActionButton
+      <QuickActionIconButton
         icon={<Notification size={size} variant="Bulk" color="#fbbf24" aria-hidden />}
         label="Siren"
-        hint="Trigger alarm"
         onClick={onSiren}
         disabled={!onSiren}
         iconTone="amber"
       />
-      <QuickActionButton
+      <QuickActionIconButton
         icon={<Lamp size={size} variant="Bulk" color="#facc15" aria-hidden />}
         label="Light"
-        hint="Toggle light"
         onClick={onLight}
         disabled={!onLight}
         iconTone="amber"
@@ -631,6 +645,41 @@ export function LiveDashboardPage({
   const zoomLabel = formatZoomLabel(zoom);
   const hasLive = streamLabel === "LIVE";
 
+  const headerZoomGroup = (visibilityClass = "inline-flex") => (
+    <span className={`dashboard-zoom-group dashboard-zoom-group-header ${visibilityClass}`} role="group" aria-label="Zoom">
+      <button
+        type="button"
+        onClick={handleZoomOut}
+        disabled={!canZoomOut}
+        className="dashboard-zoom-btn"
+        aria-label="Zoom out"
+        title="Zoom out"
+      >
+        <SearchZoomOut size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+      </button>
+      <button
+        type="button"
+        onClick={handleResetZoom}
+        disabled={!isZoomed}
+        className="dashboard-zoom-label"
+        aria-label="Reset zoom"
+        title="Reset zoom"
+      >
+        {zoomLabel}
+      </button>
+      <button
+        type="button"
+        onClick={handleZoomIn}
+        disabled={!canZoomIn}
+        className="dashboard-zoom-btn"
+        aria-label="Zoom in"
+        title="Zoom in"
+      >
+        <SearchZoomIn size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+      </button>
+    </span>
+  );
+
   return (
     <div className="live-dashboard-page flex flex-col flex-1 min-h-0">
       <DashboardPageHeader
@@ -677,6 +726,15 @@ export function LiveDashboardPage({
             <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
               A
             </span>
+            {headerZoomGroup("lg:hidden")}
+            <button
+              type="button"
+              onClick={onFullscreen}
+              className="dashboard-btn-icon dashboard-btn-icon-sm lg:hidden"
+              aria-label="Fullscreen"
+            >
+              <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+            </button>
           </>
         }
         subActions={
@@ -686,39 +744,13 @@ export function LiveDashboardPage({
               <option value="medium">Medium 720p</option>
               <option value="low">Low 480p</option>
             </select>
-            <span className="dashboard-zoom-group hidden lg:inline-flex" role="group" aria-label="Zoom">
-              <button
-                type="button"
-                onClick={handleZoomOut}
-                disabled={!canZoomOut}
-                className="dashboard-zoom-btn"
-                aria-label="Zoom out"
-                title="Zoom out"
-              >
-                <SearchZoomOut size={14} variant="Outline" color="#cbd5e1" aria-hidden />
-              </button>
-              <button
-                type="button"
-                onClick={handleResetZoom}
-                disabled={!isZoomed}
-                className="dashboard-zoom-label"
-                aria-label="Reset zoom"
-                title="Reset zoom"
-              >
-                {zoomLabel}
-              </button>
-              <button
-                type="button"
-                onClick={handleZoomIn}
-                disabled={!canZoomIn}
-                className="dashboard-zoom-btn"
-                aria-label="Zoom in"
-                title="Zoom in"
-              >
-                <SearchZoomIn size={14} variant="Outline" color="#cbd5e1" aria-hidden />
-              </button>
-            </span>
-            <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
+            {headerZoomGroup("hidden lg:inline-flex")}
+            <button
+              type="button"
+              onClick={onFullscreen}
+              className="dashboard-btn-icon dashboard-btn-icon-sm hidden lg:inline-flex"
+              aria-label="Fullscreen"
+            >
               <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
           </>
