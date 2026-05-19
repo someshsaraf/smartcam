@@ -731,8 +731,15 @@ export function LiveDashboardPage({
           <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full">
             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
               {hasLive ? (
-                <span className="pointer-events-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
+                <span className="pointer-events-auto inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
                   Live
+                  {recording ? (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.75)] ring-1 ring-white/80 animate-pulse"
+                      aria-label="Recording"
+                      title="Recording"
+                    />
+                  ) : null}
                 </span>
               ) : null}
               <LiveClock />
