@@ -259,11 +259,23 @@ export function DashboardPageHeader({ eyebrow, title, badge, badges, subtitle, a
               {title}
             </h1>
             {badge ? (
-              <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md bg-indigo-600/30 text-indigo-200 border border-indigo-500/40">
+              <span
+                className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md bg-indigo-600/30 text-indigo-200 border border-indigo-500/40 ${
+                  compact ? "hidden lg:inline-flex" : ""
+                }`}
+              >
                 {badge}
               </span>
             ) : null}
-            {badges}
+            {badges ? (
+              <span
+                className={`items-center gap-2 flex-wrap ${
+                  compact ? "hidden lg:inline-flex" : "inline-flex"
+                }`}
+              >
+                {badges}
+              </span>
+            ) : null}
           </div>
           {subtitle ? <p className={`text-gray-500 ${compact ? "text-[11px] mt-0.5" : "text-xs mt-1"}`}>{subtitle}</p> : null}
           {children}

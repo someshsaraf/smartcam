@@ -2013,7 +2013,7 @@ function LiveTile({
             <div className="absolute inset-x-0 bottom-0 h-24 mobile-video-gradient-bottom pointer-events-none z-[5]" />
           </>
         ) : null}
-        {recording ? (
+        {recording && !isHeroShell ? (
           <div
             className={`absolute z-20 flex items-center gap-1.5 ${
               heroLayout ? "top-3 right-3" : "top-2 right-2"
@@ -2082,7 +2082,7 @@ function LiveTile({
             </div>
           )}
         </div>
-        {!isThumb ? (
+        {!isThumb && !isHeroShell ? (
         <div
           className={`absolute z-10 pointer-events-auto flex items-center gap-1 ${
             heroLayout
