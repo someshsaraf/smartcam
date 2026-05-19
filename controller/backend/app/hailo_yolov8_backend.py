@@ -43,23 +43,23 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _person_confidence_unified() -> float:
-    """Single person threshold for overlay, arming, and recording (default 90%)."""
-    if os.environ.get("SMARTCAM_PERSON_DISPLAY_CONFIDENCE") is not None:
-        return _env_float("SMARTCAM_PERSON_DISPLAY_CONFIDENCE", 0.90, 0.01, 0.99)
-    if os.environ.get("SMARTCAM_PERSON_RECORD_CONFIDENCE") is not None:
-        return _env_float("SMARTCAM_PERSON_RECORD_CONFIDENCE", 0.90, 0.01, 0.99)
+def _person_confidence_fallback() -> float:
+    """Legacy single threshold when display/record are not set separately."""
     if os.environ.get("SMARTCAM_PERSON_CONFIDENCE") is not None:
         return _env_float("SMARTCAM_PERSON_CONFIDENCE", 0.90, 0.01, 0.99)
     return 0.90
 
 
 def _person_display_confidence() -> float:
-    return _person_confidence_unified()
+    if os.environ.get("SMARTCAM_PERSON_DISPLAY_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_DISPLAY_CONFIDENCE", 0.90, 0.01, 0.99)
+    return _person_confidence_fallback()
 
 
 def _person_record_confidence() -> float:
-    return _person_confidence_unified()
+    if os.environ.get("SMARTCAM_PERSON_RECORD_CONFIDENCE") is not None:
+        return _env_float("SMARTCAM_PERSON_RECORD_CONFIDENCE", 0.90, 0.01, 0.99)
+    return _person_confidence_fallback()
 
 
 def _person_hold_confidence() -> float:
@@ -414,6 +414,22 @@ class HailoYolov8Detector:
                 logger.exception(self._error)
                 return False
 
+    def _clahe_clip_for_l_channel(self, l_ch: np.ndarray) -> float:
+        """Use stronger CLAHE in dark frames only — helps real people without boosting chairs in normal light."""
+        base = _clahe_clip_limit()
+        if not _env_bool("SMARTCAM_CLAHE_ADAPTIVE", True):
+            return base
+        try:
+            mean_l = float(np.mean(l_ch))
+        except Exception:
+            return base
+        dark_below = _env_float("SMARTCAM_CLAHE_DARK_MEAN_L", 95.0, 30.0, 200.0)
+        if mean_l >= dark_below:
+            return base
+        boost = _env_float("SMARTCAM_CLAHE_DARK_BOOST", 1.35, 1.0, 2.5)
+        max_clip = _env_float("SMARTCAM_CLAHE_MAX_CLIP", 4.5, 2.0, 8.0)
+        return min(max_clip, base * boost)
+
     def _enhance_low_light(self, frame_bgr: np.ndarray) -> np.ndarray:
         """CLAHE on L channel — helps seated/profile subjects in very dark scenes."""
         if not _env_bool("SMARTCAM_LOW_LIGHT_BOOST", True):
@@ -424,8 +440,9 @@ class HailoYolov8Detector:
             tile = _clahe_tile_size()
             lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
             l_ch, a_ch, b_ch = cv2.split(lab)
+            clip = self._clahe_clip_for_l_channel(l_ch)
             clahe = cv2.createCLAHE(
-                clipLimit=_clahe_clip_limit(),
+                clipLimit=clip,
                 tileGridSize=(tile, tile),
             )
             l_ch = clahe.apply(l_ch)
