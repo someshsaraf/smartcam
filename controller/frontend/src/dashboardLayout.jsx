@@ -726,11 +726,11 @@ export function LiveDashboardPage({
             <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
               A
             </span>
-            {headerZoomGroup("lg:hidden")}
+            {headerZoomGroup()}
             <button
               type="button"
               onClick={onFullscreen}
-              className="dashboard-btn-icon dashboard-btn-icon-sm lg:hidden"
+              className="dashboard-btn-icon dashboard-btn-icon-sm"
               aria-label="Fullscreen"
             >
               <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
@@ -738,22 +738,11 @@ export function LiveDashboardPage({
           </>
         }
         subActions={
-          <>
-            <select className="dashboard-select dashboard-select-sm hidden lg:inline-flex" defaultValue="high" aria-label="Stream quality">
-              <option value="high">High Quality 1080p</option>
-              <option value="medium">Medium 720p</option>
-              <option value="low">Low 480p</option>
-            </select>
-            {headerZoomGroup("hidden lg:inline-flex")}
-            <button
-              type="button"
-              onClick={onFullscreen}
-              className="dashboard-btn-icon dashboard-btn-icon-sm hidden lg:inline-flex"
-              aria-label="Fullscreen"
-            >
-              <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
-            </button>
-          </>
+          <select className="dashboard-select dashboard-select-sm hidden lg:inline-flex" defaultValue="high" aria-label="Stream quality">
+            <option value="high">High Quality 1080p</option>
+            <option value="medium">Medium 720p</option>
+            <option value="low">Low 480p</option>
+          </select>
         }
       />
 

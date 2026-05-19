@@ -106,7 +106,12 @@ body {
     @apply h-8 w-8 rounded-lg;
   }
   .dashboard-zoom-group {
-    @apply inline-flex items-center rounded-lg border border-white/10 overflow-hidden bg-[#0b1220]/60;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+    background: rgba(11, 18, 32, 0.6);
   }
   .dashboard-zoom-btn {
     @apply inline-flex h-8 w-8 items-center justify-center text-gray-300 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
