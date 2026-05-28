@@ -1,9 +1,0 @@
-# Local MediaMTX binary from scripts/install_mediamtx.sh (not a Python wheel)
-bin/mediamtx
-# Managed Mosquitto (generated when CONTROLLER_MQTT_HOST is set)
-data/mosquitto.smartcam.conf
-data/mosquitto.passwd
-data/mosquitto_persistence/
-data/mediamtx.stderr.log
-data/events.db
-data/recordings.db

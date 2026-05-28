@@ -1,3 +1,0 @@
-# Controller (Pi 5): Python deps for the FastAPI backend.
-# Install: cd controller && pip install -r requirements.txt
--r backend/requirements.txt
