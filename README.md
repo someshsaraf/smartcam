@@ -12,7 +12,9 @@ LAN surveillance stack: **Pi 4 edge agents** (record, detect motion, optional lo
 | Path | Role |
 |------|------|
 | [`edge-agent/`](edge-agent/) | FastAPI on each camera Pi |
-| [`controller/`](controller/) | FastAPI backend + React UI on the hub Pi |
+| [`controller/`](controller/) | FastAPI backend + React UI on the hub Pi (see [controller/README.md](controller/README.md)) |
+
+**Partial clone:** if `controller/frontend/` is missing, `./start.sh controller` still installs and runs the **API**; copy the full `controller/frontend` tree from a complete checkout or use OpenAPI at `/docs`.
 | [`docs/`](docs/) | Architecture and full setup ([`docs/SETUP_PI4.md`](docs/SETUP_PI4.md), [`docs/SETUP_PI5.md`](docs/SETUP_PI5.md)) |
 
 First-time install (venv, models, Mosquitto, MediaMTX) is in those guides and in [`edge-agent/README.md`](edge-agent/README.md) and [`controller/README.md`](controller/README.md). Below is the minimal **how to start** each service after dependencies are installed.

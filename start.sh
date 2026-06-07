@@ -35,8 +35,11 @@ Targets:
 Options:
   --install, -i       Install dependencies before start
   --backend-only      Controller: uvicorn only
-  --frontend-only     Controller: Vite only
+  --frontend-only     Controller: Vite only (requires controller/frontend/)
   --help, -h          Show this help
+
+If controller/frontend/ is missing (partial clone), install/start skips the UI
+and runs the API only unless you pass --frontend-only (which errors).
 
 Environment:
   SMARTCAM_API_PORT     Controller API (default 8000)
@@ -89,6 +92,18 @@ fi
 
 log() { printf '[smartcam] %s\n' "$*"; }
 die() { log "ERROR: $*"; exit 1; }
+
+controller_has_frontend() {
+  [[ -f "$FRONTEND_ROOT/package.json" ]]
+}
+
+controller_pythonpath_export() {
+  if [[ -d "$CONTROLLER_SHARED" ]]; then
+    export PYTHONPATH="$CONTROLLER_SHARED"
+  else
+    export PYTHONPATH="$BACKEND_ROOT"
+  fi
+}
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
@@ -144,7 +159,7 @@ controller_setup() {
   fi
   # shellcheck disable=SC1091
   source "$venv/bin/activate"
-  export PYTHONPATH="$CONTROLLER_SHARED"
+  controller_pythonpath_export
   python -m pip install --upgrade pip -q
   pip install -r "$BACKEND_ROOT/requirements.txt" -q
   if [[ ! -x "$BACKEND_ROOT/bin/mediamtx" ]]; then
@@ -156,6 +171,13 @@ controller_setup() {
 }
 
 controller_setup_frontend() {
+  if ! controller_has_frontend; then
+    if [[ "$FRONTEND_ONLY" -eq 1 ]]; then
+      die "Missing $FRONTEND_ROOT (need package.json) for --frontend-only."
+    fi
+    log "Skipping frontend install: no $FRONTEND_ROOT — use a full SmartCam tree or API-only: ./start.sh controller --backend-only"
+    return 0
+  fi
   need_cmd npm
   (cd "$FRONTEND_ROOT" && npm install)
 }
@@ -165,7 +187,7 @@ controller_start_backend() {
   [[ -d "$venv" ]] || die "Run: ./start.sh controller --install"
   # shellcheck disable=SC1091
   source "$venv/bin/activate"
-  export PYTHONPATH="$CONTROLLER_SHARED"
+  controller_pythonpath_export
   cd "$BACKEND_ROOT"
   local host
   host="$(lan_hint_from_env)"
@@ -175,6 +197,15 @@ controller_start_backend() {
 }
 
 controller_start_frontend() {
+  if ! controller_has_frontend; then
+    if [[ "$FRONTEND_ONLY" -eq 1 ]]; then
+      die "Missing $FRONTEND_ROOT for --frontend-only."
+    fi
+    local host
+    host="$(lan_hint_from_env)"
+    log "Skipping Vite: no controller/frontend — open http://${host}:${CONTROLLER_API_PORT}/docs on the LAN."
+    return 0
+  fi
   [[ -d "$FRONTEND_ROOT/node_modules" ]] || die "Run: ./start.sh controller --install"
   cd "$FRONTEND_ROOT"
   # Drop stale Vite pre-bundles so UI picks up App.jsx changes after git pull.
