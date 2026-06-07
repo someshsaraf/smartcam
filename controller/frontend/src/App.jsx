@@ -154,12 +154,24 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
   );
 }
 
+/** RTSP source URL — API / JSON may expose `url` or `main_stream` only. */
+function cameraRtspUrl(cam) {
+  if (!cam || typeof cam !== "object") return "";
+  return (
+    (cam.url && String(cam.url).trim()) ||
+    (cam.main_stream && String(cam.main_stream).trim()) ||
+    (cam.mainStream && String(cam.mainStream).trim()) ||
+    ""
+  );
+}
+
 function streamPathForCamera(cam) {
   if (cam.mediamtx_path && String(cam.mediamtx_path).trim()) {
     return String(cam.mediamtx_path).trim().replace(/^\//, "");
   }
-  const url = cam.url || "";
-  return url.split("/").pop() || "camera";
+  const url = cameraRtspUrl(cam);
+  const parts = url.split("/").filter(Boolean);
+  return parts[parts.length - 1] || "camera";
 }
 
 function streamUrlForCamera(cam) {
@@ -193,7 +205,8 @@ function cameraDisplayMeta(cam) {
   const bitrate = q === "high" ? "4096 kbps" : q === "low" ? "1024 kbps" : "2048 kbps";
   let ip = "—";
   try {
-    if (cam.url) ip = new URL(cam.url).hostname;
+    const rtsp = cameraRtspUrl(cam);
+    if (rtsp) ip = new URL(rtsp).hostname;
     else if (cam.edge_base_url) ip = new URL(cam.edge_base_url).hostname;
   } catch {
     /* invalid url */
@@ -1700,6 +1713,7 @@ function LiveTile({
   const [scale, setScale] = useState(1);
   const [streamError, setStreamError] = useState("");
   const [edgeHint, setEdgeHint] = useState("");
+  const rtspSource = cameraRtspUrl(cam);
   const streamUrl = streamUrlForCamera(cam);
   const hlsProxyUrl = hlsPlaylistUrlForCamera(cam, true);
   const hlsDirectUrl = hlsPlaylistUrlForCamera(cam, false);
@@ -1726,7 +1740,7 @@ function LiveTile({
     setEdgeHint("");
     setHlsUrl(hlsProxyUrl);
     setScale(1);
-  }, [cam.id, cam.url, hlsProxyUrl]);
+  }, [cam.id, rtspSource, hlsProxyUrl]);
 
   /** Wheel over <iframe> does not bubble; capture on the tile so zoom never hits the reader page. */
   useEffect(() => {
@@ -1881,7 +1895,7 @@ function LiveTile({
       video.removeAttribute("src");
       video.load();
     };
-  }, [cam.id, cam.url, hlsUrl, hlsProxyUrl, hlsDirectUrl, useWebRtc]);
+  }, [cam.id, rtspSource, hlsUrl, hlsProxyUrl, hlsDirectUrl, useWebRtc]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1987,10 +2001,10 @@ function LiveTile({
       {!isThumb && !heroLayout && !isHeroShell && edgeHint ? (
         <p className="text-[10px] text-amber-400/95 mb-1 leading-snug">
           {edgeHint}
-          {cam.url ? (
+          {rtspSource ? (
             <>
               {" "}
-              RTSP: <span className="font-mono text-gray-300">{cam.url}</span>
+              RTSP: <span className="font-mono text-gray-300">{rtspSource}</span>
             </>
           ) : null}
         </p>
@@ -2201,9 +2215,22 @@ export default function App() {
   const [liveSessionStarted, setLiveSessionStarted] = useState(() => new Date().toISOString());
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/cameras`);
-    const data = await res.json();
-    setCams(data);
+    try {
+      const res = await fetch(`${API}/cameras`);
+      const data = await res.json();
+      const raw = Array.isArray(data) ? data : data?.cameras ?? data?.items ?? [];
+      const list = Array.isArray(raw) ? raw : [];
+      setCams(
+        list.map((c) => {
+          if (!c || typeof c !== "object") return c;
+          const url = cameraRtspUrl(c);
+          return url ? { ...c, url } : { ...c };
+        }),
+      );
+    } catch (e) {
+      console.error("[cameras] load failed:", e);
+      setCams([]);
+    }
   }, []);
 
   const loadAllRecordings = useCallback(async (cameraList, { sync = false } = {}) => {
@@ -2551,7 +2578,7 @@ export default function App() {
       : "";
     const url =
       (override != null && String(override).trim()) ||
-      (cam.url != null && String(cam.url).trim()) ||
+      cameraRtspUrl(cam) ||
       "";
     if (!url) {
       window.alert(
@@ -2579,7 +2606,7 @@ export default function App() {
     setSettingsCam(cam);
     setConnectionForm({
       name: cam.name || "",
-      url: cam.url || "",
+      url: cameraRtspUrl(cam) || "",
       edge_base_url: cam.edge_base_url || "",
     });
     const res = await fetch(`${API}/cameras/${cam.id}/settings`);
@@ -2627,7 +2654,7 @@ export default function App() {
       if (nameTrim !== (settingsCam.name || "").trim()) {
         connBody.name = nameTrim;
       }
-      if (urlTrim && urlTrim !== (settingsCam.url || "")) {
+      if (urlTrim && urlTrim !== (cameraRtspUrl(settingsCam) || "")) {
         connBody.url = urlTrim;
       }
       const prevEdge = settingsCam.edge_base_url || "";
@@ -3172,7 +3199,7 @@ export default function App() {
                           <div className="dashboard-card p-4 space-y-3">
                             <h3 className="text-sm font-semibold">Camera information</h3>
                             <p className="text-xs text-gray-500">Name: {deviceDetailCam.name}</p>
-                            <p className="text-xs text-gray-500 font-mono break-all">RTSP: {deviceDetailCam.url || "—"}</p>
+                            <p className="text-xs text-gray-500 font-mono break-all">RTSP: {cameraRtspUrl(deviceDetailCam) || "—"}</p>
                           </div>
                           <div className="dashboard-card p-4">
                             <h3 className="text-sm font-semibold mb-3">Quick actions</h3>

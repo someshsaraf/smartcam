@@ -252,7 +252,14 @@ def load_cameras_from_json_file(path: str) -> int:
         if not isinstance(item, dict) or "id" not in item:
             print(f"[camera_store] skip invalid entry in {path}: {item!r}")
             continue
-        add_camera(item)
+        row = dict(item)
+        # UI + MediaMTX glue expect `url` (RTSP); JSON often only has `main_stream`.
+        url = str(row.get("url") or "").strip()
+        if not url:
+            ms = row.get("main_stream") or row.get("mainStream")
+            if ms:
+                row["url"] = str(ms).strip()
+        add_camera(row)
         count += 1
     return count
 
