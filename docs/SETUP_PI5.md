@@ -60,11 +60,20 @@ controller backend env (`CONTROLLER_MQTT_USER`, `CONTROLLER_MQTT_PASSWORD`).
 
 ## 3. Install MediaMTX
 
-MediaMTX is the WebRTC reader that the React UI iframes for live tiles. The
-controller starts it automatically as long as the binary is on `PATH`.
+MediaMTX serves HLS/WebRTC for live tiles. `./start.sh controller` starts it
+when a usable binary exists: `controller/backend/bin/mediamtx` (recommended),
+`mediamtx` on `PATH`, or `/usr/local/bin/mediamtx`.
+
+**Easiest (no sudo):** from the SmartCam repo root, install deps once — this
+downloads a verified release into `controller/backend/bin/`:
 
 ```bash
-# Use the same upstream tarball you used on the Pi 4.
+./start.sh controller --install
+```
+
+**Manual system install** (optional — same binary as Pi 4):
+
+```bash
 cd /tmp
 VER=v1.18.1
 curl -L -O "https://github.com/bluenviron/mediamtx/releases/download/${VER}/mediamtx_${VER}_linux_arm64.tar.gz"

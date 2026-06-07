@@ -212,10 +212,14 @@ controller_start_mediamtx() {
       bin="$(command -v mediamtx)"
     elif [[ -x "$BACKEND_ROOT/bin/mediamtx" ]]; then
       bin="$BACKEND_ROOT/bin/mediamtx"
+    elif [[ -x /usr/local/bin/mediamtx ]]; then
+      bin="/usr/local/bin/mediamtx"
+    elif [[ -x /usr/bin/mediamtx ]]; then
+      bin="/usr/bin/mediamtx"
     fi
   fi
   if [[ -z "$bin" ]]; then
-    log "WARN: mediamtx not found — install to PATH or set CONTROLLER_MEDIAMTX_BIN (docs/SETUP_PI5.md). HLS/WebRTC will not work."
+    log "WARN: mediamtx not found — run ./start.sh controller --install (downloads to controller/backend/bin/) or install to PATH /usr/local/bin (docs/SETUP_PI5.md). HLS/WebRTC will not work."
     return 0
   fi
   log "Starting MediaMTX ($bin) with $cfg …"
