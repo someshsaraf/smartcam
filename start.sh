@@ -98,8 +98,9 @@ controller_has_frontend() {
 }
 
 controller_pythonpath_export() {
+  # Always include BACKEND_ROOT so `import app.main` works even when shared/ exists.
   if [[ -d "$CONTROLLER_SHARED" ]]; then
-    export PYTHONPATH="$CONTROLLER_SHARED"
+    export PYTHONPATH="$CONTROLLER_SHARED:$BACKEND_ROOT"
   else
     export PYTHONPATH="$BACKEND_ROOT"
   fi
@@ -189,10 +190,13 @@ controller_start_backend() {
   source "$venv/bin/activate"
   controller_pythonpath_export
   cd "$BACKEND_ROOT"
+  if ! python -c "import app.main" 2>&1; then
+    die "Cannot import app.main from $BACKEND_ROOT — sync backend/app/main.py, run ./start.sh controller --install, then: cd $BACKEND_ROOT && source .venv/bin/activate && python -c 'import app.main'"
+  fi
   local host
   host="$(lan_hint_from_env)"
   log "Controller API: http://0.0.0.0:${CONTROLLER_API_PORT} (docs: http://${host}:${CONTROLLER_API_PORT}/docs)"
-  uvicorn app.main:app --host 0.0.0.0 --port "$CONTROLLER_API_PORT" 2>&1 | sed_prefix backend &
+  uvicorn app.main:app --app-dir "$BACKEND_ROOT" --host 0.0.0.0 --port "$CONTROLLER_API_PORT" 2>&1 | sed_prefix backend &
   PIDS+=("$!")
 }
 

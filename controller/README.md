@@ -5,6 +5,9 @@ Expected layout:
 | Path | Purpose |
 |------|---------|
 | `backend/` | FastAPI app (`uvicorn app.main:app`), `requirements.txt`, `.env` |
+
+**Backend entry:** `app/main.py` in this repo is a **minimal** API: it wires `GET /cameras` to `camera_store`, stubs recordings/events/WebSockets, and **does not** run MediaMTX/Hailo. Use it when your Pi checkout had no `main.py` and the UI always showed “No cameras yet”. If you already run a **full** controller build on the Pi, keep that `main.py` and only ensure it returns `camera_store` cameras (or merge routes).
+
 | `frontend/` | React + Vite dashboard (`package.json`, `npm run dev`) |
 | `shared/` | Optional Python package path added to `PYTHONPATH` when present |
 
@@ -40,8 +43,26 @@ See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and 
 
 3. **Confirm the API, not only the file**
 
+   ```bash
+   # If this prints nothing or "Failed to connect", nothing is listening on :8000.
+   curl -sS -o /tmp/smartcam_cameras.body -w "http_code=%{http_code} bytes=%{size_download}\n" \
+     http://127.0.0.1:8000/cameras
+   head -c 300 /tmp/smartcam_cameras.body; echo
+   ```
+
+   `python3 -m json.tool` fails with **Expecting value: line 1 column 1** when the **body is empty** (wrong port, API not running, or TLS/proxy stripping the response). Fix the process first, then:
+
+   **Do not paste the error message into the shell** — lines like `(char 0)` contain `(` and can trigger **`-bash: syntax error near unexpected token '('`**.
+
+   From `controller/backend` you can run:
+
+   `bash scripts/curl-smoke.sh http://127.0.0.1:8000`
+
+   `curl -s http://127.0.0.1:8000/ | python3 -m json.tool`  
+   should show `service` / `ok` / `cameras` from this repo’s minimal `app.main`.
+
    `curl -s http://127.0.0.1:8000/cameras | python3 -m json.tool`  
-   You should see a **non-empty JSON array** of objects with at least `id` and **`url`** (RTSP). If your file only has `main_stream`, the backend should copy that to `url` when loading `camera_store` (recent versions); the UI also maps `main_stream` → `url` when loading.
+   should show a **JSON array** (possibly `[]`) of camera objects with at least `id` and **`url`** (RTSP). If your file only has `main_stream`, the backend should copy that to `url` when loading `camera_store` (recent versions); the UI also maps `main_stream` → `url` when loading.
 
 4. **If the list is populated but the tile is black**  
    Live tiles use **`GET /cameras/{id}/hls/index.m3u8`** (or WebRTC) via **MediaMTX** on the controller. Ensure **MediaMTX** is installed, `ffmpeg` works, and the controller logs show paths for your camera. Check **`GET /cameras/{id}/stream_health`** in `/docs` for RTSP pull errors.

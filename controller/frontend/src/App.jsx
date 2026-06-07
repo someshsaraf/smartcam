@@ -2213,10 +2213,29 @@ export default function App() {
   const [insightsPeopleToday, setInsightsPeopleToday] = useState(0);
   const [todayEvents, setTodayEvents] = useState([]);
   const [liveSessionStarted, setLiveSessionStarted] = useState(() => new Date().toISOString());
+  const [camerasLoadError, setCamerasLoadError] = useState("");
 
   const load = useCallback(async () => {
     try {
+      setCamerasLoadError("");
       const res = await fetch(`${API}/cameras`);
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          msg = await readApiError(res);
+        } catch {
+          /* keep msg */
+        }
+        setCamerasLoadError(msg);
+        setCams([]);
+        return;
+      }
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        setCamerasLoadError(`Expected JSON from ${API}/cameras, got: ${ct || "unknown"}`);
+        setCams([]);
+        return;
+      }
       const data = await res.json();
       const raw = Array.isArray(data) ? data : data?.cameras ?? data?.items ?? [];
       const list = Array.isArray(raw) ? raw : [];
@@ -2229,9 +2248,10 @@ export default function App() {
       );
     } catch (e) {
       console.error("[cameras] load failed:", e);
+      setCamerasLoadError(e instanceof Error ? e.message : String(e));
       setCams([]);
     }
-  }, []);
+  }, [API]);
 
   const loadAllRecordings = useCallback(async (cameraList, { sync = false } = {}) => {
     if (!cameraList.length) {
@@ -2998,8 +3018,18 @@ export default function App() {
             liveVideo={
               liveCams.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full min-h-[280px] p-8 text-center">
-                  <p className="text-gray-300 font-medium mb-1">No cameras yet</p>
-                  <p className="text-gray-500 text-sm">Add cameras from the Devices page.</p>
+                  {camerasLoadError ? (
+                    <>
+                      <p className="text-amber-300 font-medium mb-1">Could not load cameras</p>
+                      <p className="text-gray-400 text-sm mb-2 break-all max-w-md">{camerasLoadError}</p>
+                      <p className="text-gray-500 text-xs font-mono">API: {API}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-gray-300 font-medium mb-1">No cameras yet</p>
+                      <p className="text-gray-500 text-sm">Add cameras from the Devices page.</p>
+                    </>
+                  )}
                 </div>
               ) : mobileLiveCam ? (
                 renderLiveTile(mobileLiveCam, "heroShell")
