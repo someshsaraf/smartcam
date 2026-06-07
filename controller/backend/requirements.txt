@@ -1,0 +1,17 @@
+# SmartCam controller (Pi 5): FastAPI, WebSockets, RTSP frames, MQTT, MediaMTX glue.
+# Install Hailo runtime separately: docs/SETUP_PI5.md §4b (hailo_platform is not on PyPI).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+pydantic-settings>=2.0
+python-multipart>=0.0.9
+
+numpy>=1.26
+opencv-python-headless>=4.8
+
+httpx>=0.27
+paho-mqtt>=2.0
+PyYAML>=6.0
+zeroconf>=0.130
+
+pytest>=8.0

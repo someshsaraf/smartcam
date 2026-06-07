@@ -136,6 +136,7 @@ trap cleanup EXIT INT TERM
 # --- Controller (Pi 5) ---
 controller_setup() {
   need_cmd python3
+  [[ -f "$BACKEND_ROOT/requirements.txt" ]] || die "Missing $BACKEND_ROOT/requirements.txt — git pull or copy from the SmartCam repo."
   local venv="$BACKEND_ROOT/.venv"
   if [[ ! -d "$venv" ]]; then
     log "Creating controller venv (--system-site-packages for apt python3-hailort)…"
