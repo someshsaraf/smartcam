@@ -20,15 +20,31 @@ See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and 
 ## `cameras.json` and live video
 
 1. **`SMARTCAM_CAMERAS_JSON` must be visible to the backend process**  
-   Exporting it in an interactive shell is not enough if you start the API with **systemd**, **cron**, or another user. Put `Environment=SMARTCAM_CAMERAS_JSON=/home/somesh/smartcam/controller/backend/data/cameras.json` in the unit file, or `export` in the same script that runs `uvicorn`.
+   Exporting it in an interactive shell is not enough if you start the API with **systemd**, **cron**, or another user. Prefer putting it in **`controller/backend/.env`** (same folder as uvicorn’s working directory is typical):
 
-2. **Confirm the API sees cameras** (on the Pi):
+   ```env
+   SMARTCAM_CAMERAS_JSON=/home/somesh/smartcam/controller/backend/data/cameras.json
+   ```
+
+   This repo’s `camera_store` loads that `.env` **on import** (before reading the variable), so you do not need a shell `export` if `.env` is present. Otherwise use systemd `Environment=…` or export in the script that starts `uvicorn`.
+
+   After changing `.env` or `cameras.json`, **restart the API**. From a Python shell on the Pi you can force a re-read (if you use this `camera_store`):
+
+   `python3 -c "from app.camera_store import reload_cameras_from_json; print(reload_cameras_from_json())"`
+
+2. **Watch backend stdout on startup** for a line like:
+
+   `[camera_store] (startup) registry has N camera(s). …`
+
+   If `N` is `0`, the JSON path is wrong, the file is empty/invalid, or **your running app does not import this module** (different codebase on the Pi).
+
+3. **Confirm the API, not only the file**
 
    `curl -s http://127.0.0.1:8000/cameras | python3 -m json.tool`  
    You should see a **non-empty JSON array** of objects with at least `id` and **`url`** (RTSP). If your file only has `main_stream`, the backend should copy that to `url` when loading `camera_store` (recent versions); the UI also maps `main_stream` → `url` when loading.
 
-3. **If the list is populated but the tile is black**  
+4. **If the list is populated but the tile is black**  
    Live tiles use **`GET /cameras/{id}/hls/index.m3u8`** (or WebRTC) via **MediaMTX** on the controller. Ensure **MediaMTX** is installed, `ffmpeg` works, and the controller logs show paths for your camera. Check **`GET /cameras/{id}/stream_health`** in `/docs` for RTSP pull errors.
 
-4. **`mediamtx_path` in JSON**  
+5. **`mediamtx_path` in JSON**  
    If you run multiple cameras with the same last URL segment (e.g. both use `…/stream1`), set a unique **`mediamtx_path`** per camera to match the path names in the generated MediaMTX config.

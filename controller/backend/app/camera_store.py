@@ -23,6 +23,23 @@ from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
+
+def _preload_backend_dotenv() -> None:
+    """Load backend/.env before reading SMARTCAM_* so JSON path works without shell export."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    for rel in ("../.env", "../../.env"):
+        p = os.path.normpath(os.path.join(here, rel))
+        if os.path.isfile(p):
+            load_dotenv(p, override=False)
+            return
+
+
+_preload_backend_dotenv()
+
 _cameras: Dict[int, dict] = {}
 _change_listeners: List[Callable] = []
 _selected_camera_id: Optional[int] = None
@@ -230,8 +247,9 @@ def _cameras_json_candidates() -> List[str]:
 def load_cameras_from_json_file(path: str) -> int:
     """
     Load cameras from JSON. Accepts a list of objects or {"cameras": [...]}.
-    Each object must include integer "id". Returns number of cameras loaded.
+    Each object must include integer "id" (or "camera_id"). Returns number loaded.
     """
+    path = os.path.normpath(os.path.expanduser(path or ""))
     if not path or not os.path.isfile(path):
         return 0
     try:
@@ -249,10 +267,15 @@ def load_cameras_from_json_file(path: str) -> int:
 
     count = 0
     for item in raw:
-        if not isinstance(item, dict) or "id" not in item:
-            print(f"[camera_store] skip invalid entry in {path}: {item!r}")
+        if not isinstance(item, dict):
+            print(f"[camera_store] skip non-object in {path}: {item!r}")
             continue
         row = dict(item)
+        if "id" not in row and row.get("camera_id") is not None:
+            row["id"] = row["camera_id"]
+        if "id" not in row:
+            print(f"[camera_store] skip entry without id in {path}: {item!r}")
+            continue
         # UI + MediaMTX glue expect `url` (RTSP); JSON often only has `main_stream`.
         url = str(row.get("url") or "").strip()
         if not url:
@@ -296,4 +319,31 @@ def _init_store() -> None:
     bootstrap_default_cameras()
 
 
+def _log_registry_startup(reason: str = "startup") -> None:
+    n = len(list_cameras())
+    ej = os.path.expanduser(os.environ.get("SMARTCAM_CAMERAS_JSON", "").strip())
+    bits: List[str] = [f"[camera_store] ({reason}) registry has {n} camera(s)."]
+    if ej:
+        bits.append(f"SMARTCAM_CAMERAS_JSON={ej!r} file_exists={os.path.isfile(ej)}")
+    else:
+        bits.append("SMARTCAM_CAMERAS_JSON not set.")
+        for cand in _cameras_json_candidates():
+            p = os.path.normpath(os.path.expanduser(cand))
+            if os.path.isfile(p):
+                bits.append(f"Found default JSON: {p!r}")
+                break
+        else:
+            bits.append("No default data/cameras.json on candidate paths.")
+    print(" ".join(bits), flush=True)
+
+
+def reload_cameras_from_json() -> int:
+    """Clear registry and re-run init (JSON → env VIGI → bootstrap). For REPL or an admin HTTP route."""
+    clear_cameras()
+    _init_store()
+    _log_registry_startup("reload")
+    return len(list_cameras())
+
+
 _init_store()
+_log_registry_startup()
