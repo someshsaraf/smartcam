@@ -171,7 +171,12 @@ function streamPathForCamera(cam) {
   }
   const url = cameraRtspUrl(cam);
   const parts = url.split("/").filter(Boolean);
-  return parts[parts.length - 1] || "camera";
+  const last = parts[parts.length - 1] || "";
+  // VIGI/TP-Link URLs often end in /stream1 — controller MediaMTX paths are usually per-camera id (cam0, …).
+  if (cam.id != null && String(cam.id) !== "" && /^stream\d*$/i.test(last)) {
+    return `cam${cam.id}`;
+  }
+  return last || (cam.id != null ? `cam${cam.id}` : "camera");
 }
 
 function streamUrlForCamera(cam) {

@@ -72,3 +72,8 @@ See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and 
 
 6. **`edge_base_url` with a VIGI-only setup**  
    If live video is **direct RTSP** to the VIGI (e.g. `192.168.2.42`) and you do **not** have a Pi 4 agent online, omit **`edge_base_url`** or set it to `null`. Otherwise the UI may poll `http://<edge>/health` and show warnings for an offline Pi. The UI now skips that check when the RTSP host and edge host differ.
+
+7. **Gray live tile (broken document / blank WebRTC)**  
+   - **WebRTC** uses `VITE_MEDIAMTX_BASE` + a **path** that must match `mediamtx.generated.yml` on the Pi 5. For VIGI URLs ending in `/stream1`, the UI now defaults the path to **`cam{camera_id}`** (e.g. `cam0`) unless you set **`mediamtx_path`** on the camera. If your server uses another name, set `mediamtx_path` to match.  
+   - Set **`VITE_LIVE_WEBRTC=0`** in `.env` to use **HLS** (often more reliable on phones). Restart Vite.  
+   - Confirm MediaMTX is up: `ss -tlnp | grep -E '8888|8889'` on the controller.
