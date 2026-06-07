@@ -2072,8 +2072,13 @@ function LiveTile({
                 assumedAspect={{ w: 16, h: 9 }}
               />
               {edgeHint && !personDetections(drawFaces).length ? (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-2 text-center text-[10px] text-gray-400/90">
-                  WebRTC reader — see message above.
+                <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 p-3 text-center bg-black/35">
+                  <p className="text-[11px] text-amber-200 max-w-[min(100%,24rem)] leading-snug">{edgeHint}</p>
+                  <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-snug">
+                    WebRTC reader — fix edge / MediaMTX (:8889), or set{" "}
+                    <span className="font-mono text-gray-300">VITE_LIVE_WEBRTC=0</span> in{" "}
+                    <span className="font-mono text-gray-300">.env</span> and restart Vite for HLS.
+                  </p>
                 </div>
               ) : null}
             </div>

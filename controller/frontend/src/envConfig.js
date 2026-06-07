@@ -91,6 +91,8 @@ export function preferNativeHlsPlayback() {
 /**
  * WebRTC iframe reader (MediaMTX :8889). Disabled on iOS/narrow mobile — Safari shows a
  * blank iframe while detection overlays still render on assumed 16:9.
+ * Also disabled on touch-first devices (coarse pointer + no hover) — Android tablets often
+ * get a broken embed even when HLS works.
  * Set VITE_LIVE_WEBRTC=0 to force HLS everywhere.
  */
 export function preferWebRtcLive() {
@@ -100,5 +102,12 @@ export function preferWebRtcLive() {
   const enabled = v === "1" || v === "true" || v === "yes" || v === "on";
   if (!enabled) return false;
   if (preferNativeHlsPlayback()) return false;
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse) and (hover: none)").matches
+  ) {
+    return false;
+  }
   return true;
 }
