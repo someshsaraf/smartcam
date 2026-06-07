@@ -15,22 +15,6 @@ def _backend_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _rtsp_url(cam: dict) -> str:
-    return (
-        str(cam.get("url") or "").strip()
-        or str(cam.get("main_stream") or "").strip()
-        or str(cam.get("mainStream") or "").strip()
-    )
-
-
-def _path_key(cam: dict) -> str:
-    raw = str(cam.get("mediamtx_path") or "").strip()
-    if raw:
-        safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in raw)
-        return safe or "cam"
-    return f"cam{int(cam.get('id', 0))}"
-
-
 def main() -> int:
     backend = _backend_root()
     os.chdir(backend)
@@ -38,13 +22,14 @@ def main() -> int:
         sys.path.insert(0, backend)
 
     from app import camera_store
+    from app.mediamtx_paths import mediamtx_path_key, rtsp_url
 
     cams = camera_store.list_cameras()
     usable: list[dict] = []
     for c in cams:
         if not isinstance(c, dict):
             continue
-        u = _rtsp_url(c)
+        u = rtsp_url(c)
         if not u or not (u.startswith("rtsp://") or u.startswith("rtsps://")):
             continue
         usable.append(c)
@@ -103,8 +88,8 @@ def main() -> int:
         "paths:",
     ]
     for cam in usable:
-        pk = _path_key(cam)
-        src = _rtsp_url(cam)
+        pk = mediamtx_path_key(cam)
+        src = rtsp_url(cam)
         lines.append(f"  {pk}:")
         lines.append(f"    source: {json.dumps(src)}")
         lines.append("")

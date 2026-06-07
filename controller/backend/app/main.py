@@ -13,10 +13,12 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List
 
-from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from . import camera_store
+from .mediamtx_paths import mediamtx_path_key
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "recording_mode": "motion",
@@ -200,20 +202,42 @@ def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     return {
-        "ok": False,
+        "ok": None,
         "summary": [
-            "Minimal controller build: no MediaMTX ingest here. "
-            "Use the full controller image or add mediamtx + HLS routes for live video."
+            "Minimal build: no RTSP probe. HLS uses GET /cameras/{id}/hls/index.m3u8 → "
+            "307 redirect to MediaMTX (:8888). Set SMARTCAM_HLS_ORIGIN if HLS is not on the API host."
         ],
     }
 
 
+def _hls_public_base(request: Request) -> str:
+    """Origin for MediaMTX HLS (browser follows 307 here)."""
+    env = os.environ.get("SMARTCAM_HLS_ORIGIN", "").strip().rstrip("/")
+    if env:
+        return env
+    port_raw = os.environ.get("SMARTCAM_HLS_PORT", "8888").strip()
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 8888
+    if port < 1 or port > 65535:
+        port = 8888
+    u = request.url
+    host = u.hostname or "127.0.0.1"
+    scheme = u.scheme or "http"
+    return f"{scheme}://{host}:{port}"
+
+
 @app.get("/cameras/{camera_id}/hls/index.m3u8")
-def hls_stub(camera_id: int) -> None:
-    raise HTTPException(
-        status_code=503,
-        detail="HLS not available in minimal controller — deploy full backend with MediaMTX.",
-    )
+def hls_playlist_redirect(camera_id: int, request: Request) -> RedirectResponse:
+    """Redirect to MediaMTX so hls.js can use same-origin API URL first, then follow to :8888."""
+    row = camera_store.get_camera(camera_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    cam = dict(row)
+    path = mediamtx_path_key(cam)
+    target = f"{_hls_public_base(request)}/{path}/index.m3u8"
+    return RedirectResponse(url=target, status_code=307)
 
 
 @app.websocket("/ws/recording")
