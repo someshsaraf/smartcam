@@ -69,3 +69,6 @@ See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and 
 
 5. **`mediamtx_path` in JSON**  
    If you run multiple cameras with the same last URL segment (e.g. both use `…/stream1`), set a unique **`mediamtx_path`** per camera to match the path names in the generated MediaMTX config.
+
+6. **`edge_base_url` with a VIGI-only setup**  
+   If live video is **direct RTSP** to the VIGI (e.g. `192.168.2.42`) and you do **not** have a Pi 4 agent online, omit **`edge_base_url`** or set it to `null`. Otherwise the UI may poll `http://<edge>/health` and show warnings for an offline Pi. The UI now skips that check when the RTSP host and edge host differ.

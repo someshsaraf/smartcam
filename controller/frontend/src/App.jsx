@@ -1759,6 +1759,18 @@ function LiveTile({
   useEffect(() => {
     const edge = cam.edge_base_url;
     if (!edge) return undefined;
+    const rtsp = cameraRtspUrl(cam);
+    if (rtsp) {
+      try {
+        // Edge is optional metadata (e.g. future Pi 4) while video is direct LAN RTSP (VIGI).
+        // Do not block the tile when the edge is offline but the camera IP is different.
+        if (new URL(String(edge).trim()).hostname !== new URL(rtsp).hostname) {
+          return undefined;
+        }
+      } catch {
+        /* invalid URL — still try edge health */
+      }
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -1782,7 +1794,7 @@ function LiveTile({
     return () => {
       cancelled = true;
     };
-  }, [cam.edge_base_url]);
+  }, [cam.edge_base_url, rtspSource]);
 
   useEffect(() => {
     if (useWebRtc) return undefined;
