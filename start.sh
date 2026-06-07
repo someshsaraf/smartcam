@@ -167,7 +167,8 @@ controller_setup() {
   python -m pip install --upgrade pip -q
   pip install -r "$BACKEND_ROOT/requirements.txt" -q
   if [[ ! -x "$BACKEND_ROOT/bin/mediamtx" ]]; then
-    if [[ -x "$BACKEND_ROOT/scripts/install_mediamtx.sh" ]]; then
+    # Use -f not -x: the script is often invoked via `bash` and may be 644 in the tree.
+    if [[ -f "$BACKEND_ROOT/scripts/install_mediamtx.sh" ]]; then
       log "Installing controller MediaMTX…"
       bash "$BACKEND_ROOT/scripts/install_mediamtx.sh"
     fi
