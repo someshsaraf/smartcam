@@ -2115,6 +2115,18 @@ function LiveTile({
                 className="absolute inset-0 z-10 w-full h-full pointer-events-none"
                 aria-hidden="true"
               />
+              {streamError ? (
+                <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/85">
+                  <p className="text-[12px] text-amber-200 font-medium px-2">{streamError}</p>
+                  <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-relaxed px-2">
+                    HLS: open{" "}
+                    <span className="font-mono text-gray-300 break-all text-[9px]">{hlsUrl}</span> in a
+                    browser tab. If you see HTTP 503, this build has no ingest — use the full controller
+                    with MediaMTX. Otherwise check path <span className="font-mono">cam{cam.id}</span> vs{" "}
+                    <span className="font-mono">mediamtx.generated.yml</span>.
+                  </p>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
