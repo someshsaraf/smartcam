@@ -6,7 +6,7 @@ Expected layout:
 |------|---------|
 | `backend/` | FastAPI app (`uvicorn app.main:app`), `requirements.txt`, `.env` |
 
-**Backend entry:** `app/main.py` in this repo is a **minimal** API: it wires `GET /cameras` to `camera_store`, stubs recordings/events/WebSockets, and **does not** run MediaMTX/Hailo. Use it when your Pi checkout had no `main.py` and the UI always showed “No cameras yet”. If you already run a **full** controller build on the Pi, keep that `main.py` and only ensure it returns `camera_store` cameras (or merge routes).
+**Backend entry:** `app/main.py` in this repo is a **minimal** API: it wires `GET /cameras` to `camera_store`, stubs recordings/events/WebSockets, and **does not** run MediaMTX/Hailo inside the API process. Repo-root **`./start.sh controller`** starts **MediaMTX** (generated config) before uvicorn when the `mediamtx` binary is available. Use the minimal `main.py` when your Pi checkout had no `main.py` and the UI always showed “No cameras yet”. If you already run a **full** controller build on the Pi, keep that `main.py` and only ensure it returns `camera_store` cameras (or merge routes).
 
 | `frontend/` | React + Vite dashboard (`package.json`, `npm run dev`) |
 | `shared/` | Optional Python package path added to `PYTHONPATH` when present |
@@ -16,7 +16,7 @@ Some clones or minimal checkouts only contain **`backend/`**. In that case the d
 1. **Full repository** — `git pull` / re-clone so `controller/frontend/` exists, then `./start.sh controller --install` again, or  
 2. **API only** — `./start.sh controller --install` (with the updated `start.sh`) skips npm when `frontend/` is missing; use **`http://<pi5>:8000/docs`** for OpenAPI.
 
-From repo root, `./start.sh controller` does the same: backend starts, Vite is skipped if there is no `package.json` under `controller/frontend`.
+From repo root, `./start.sh controller` does the same: **MediaMTX** (if installed and cameras have RTSP URLs), then backend, then Vite if `controller/frontend/package.json` exists.
 
 See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and Hailo.
 

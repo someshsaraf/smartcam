@@ -45,6 +45,7 @@ Environment:
   SMARTCAM_API_PORT     Controller API (default 8000)
   SMARTCAM_UI_PORT      Controller UI  (default 5173)
   SMARTCAM_EDGE_PORT    Edge agent HTTP (default 8080)
+  CONTROLLER_MEDIAMTX_BIN  Optional path to mediamtx binary (else PATH or backend/bin/mediamtx)
 
 Examples:
   ./start.sh controller --install
@@ -142,8 +143,10 @@ lan_hint_from_env() {
 PIDS=()
 cleanup() {
   log "Stopping…"
-  for pid in "${PIDS[@]:-}"; do
-    kill "$pid" 2>/dev/null || true
+  local i
+  # Stop frontend/API before MediaMTX (reverse of startup order).
+  for (( i = ${#PIDS[@]} - 1; i >= 0; i-- )); do
+    kill "${PIDS[i]}" 2>/dev/null || true
   done
   wait 2>/dev/null || true
 }
@@ -181,6 +184,43 @@ controller_setup_frontend() {
   fi
   need_cmd npm
   (cd "$FRONTEND_ROOT" && npm install)
+}
+
+controller_start_mediamtx() {
+  [[ "$FRONTEND_ONLY" -eq 1 ]] && return 0
+  local venv="$BACKEND_ROOT/.venv"
+  if [[ ! -d "$venv" ]]; then
+    log "WARN: no venv — skip MediaMTX (run ./start.sh controller --install)."
+    return 0
+  fi
+  # shellcheck disable=SC1091
+  source "$venv/bin/activate"
+  controller_pythonpath_export
+  cd "$BACKEND_ROOT"
+  if ! python "$BACKEND_ROOT/scripts/generate_controller_mediamtx_yaml.py" 2>&1 | sed_prefix yaml; then
+    log "WARN: MediaMTX YAML generation failed — skip starting mediamtx."
+    return 0
+  fi
+  local cfg="$BACKEND_ROOT/data/mediamtx.generated.yml"
+  if [[ ! -f "$cfg" ]]; then
+    log "WARN: $cfg missing (no RTSP cameras?) — skip MediaMTX."
+    return 0
+  fi
+  local bin="${CONTROLLER_MEDIAMTX_BIN:-}"
+  if [[ -z "$bin" ]]; then
+    if command -v mediamtx >/dev/null 2>&1; then
+      bin="$(command -v mediamtx)"
+    elif [[ -x "$BACKEND_ROOT/bin/mediamtx" ]]; then
+      bin="$BACKEND_ROOT/bin/mediamtx"
+    fi
+  fi
+  if [[ -z "$bin" ]]; then
+    log "WARN: mediamtx not found — install to PATH or set CONTROLLER_MEDIAMTX_BIN (docs/SETUP_PI5.md). HLS/WebRTC will not work."
+    return 0
+  fi
+  log "Starting MediaMTX ($bin) with $cfg …"
+  "$bin" "$cfg" 2>&1 | sed_prefix mediamtx &
+  PIDS+=("$!")
 }
 
 controller_start_backend() {
@@ -229,7 +269,10 @@ run_controller() {
     controller_setup_frontend
     log "Controller install done."
   fi
-  [[ "$FRONTEND_ONLY" -eq 0 ]] && controller_start_backend
+  if [[ "$FRONTEND_ONLY" -eq 0 ]]; then
+    controller_start_mediamtx
+    controller_start_backend
+  fi
   [[ "$BACKEND_ONLY" -eq 0 ]] && controller_start_frontend
   log "Controller running. Ctrl+C to stop."
   if [[ "$FRONTEND_ONLY" -eq 0 && -x "$BACKEND_ROOT/scripts/check_hailo.sh" ]]; then

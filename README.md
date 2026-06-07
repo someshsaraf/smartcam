@@ -32,7 +32,7 @@ export PYTHONPATH="$(pwd)/../shared"
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Set **`CONTROLLER_MQTT_*`** if you use Mosquitto (see [`controller/README.md`](controller/README.md)). The API starts **MediaMTX** for WebRTC tiles when the `mediamtx` binary is on `PATH` (or **`CONTROLLER_MEDIAMTX_BIN`**).
+Set **`CONTROLLER_MQTT_*`** if you use Mosquitto (see [`controller/README.md`](controller/README.md)). For live tiles, prefer **`./start.sh controller`** from the repo root: it writes `controller/backend/data/mediamtx.generated.yml` from the camera store and starts **MediaMTX** (HLS **8888**, WebRTC **8889**) before uvicorn when `mediamtx` is on `PATH` or **`CONTROLLER_MEDIAMTX_BIN`** is set and at least one camera has an **`rtsp://`** URL. The manual uvicorn-only commands below do **not** start MediaMTX.
 
 **2. Frontend** — in another terminal:
 
