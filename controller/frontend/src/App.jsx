@@ -185,6 +185,18 @@ function manualRecordingProxiesToEdge(cam) {
   }
 }
 
+/** True if RTSP URL has no userinfo (common cause of MediaMTX 401 on VIGI). */
+function rtspUrlMissingCredentials(url) {
+  const u = String(url || "").trim();
+  if (!/^rtsps?:\/\//i.test(u)) return false;
+  try {
+    const parsed = new URL(u);
+    return !parsed.username;
+  } catch {
+    return false;
+  }
+}
+
 function streamPathForCamera(cam) {
   if (cam.mediamtx_path && String(cam.mediamtx_path).trim()) {
     return String(cam.mediamtx_path).trim().replace(/^\//, "");
@@ -3475,6 +3487,14 @@ export default function App() {
                 <p className="text-[10px] text-gray-500 mt-1">
                   Pi 4 edge with Pi camera: rtsp://&lt;edge-ip&gt;:8554/&lt;camera_id&gt;
                 </p>
+                {rtspUrlMissingCredentials(connectionForm.url) ? (
+                  <p className="text-xs text-amber-400/95 mt-2 leading-snug">
+                    No username in this RTSP URL — VIGI and many IP cameras return{" "}
+                    <span className="font-mono text-amber-200/90">401</span> to MediaMTX until you use{" "}
+                    <span className="font-mono text-gray-200 break-all">rtsp://USER:PASS@host:554/stream1</span>.
+                    Percent-encode special characters in the password.
+                  </p>
+                ) : null}
               </div>
 
               <div>

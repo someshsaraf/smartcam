@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 
 def rtsp_url(cam: Dict[str, Any]) -> str:
@@ -15,6 +16,20 @@ def rtsp_url(cam: Dict[str, Any]) -> str:
         or str(cam.get("main_stream") or "").strip()
         or str(cam.get("mainStream") or "").strip()
     )
+
+
+def rtsp_url_has_userinfo(url: str) -> bool:
+    """
+    True if the RTSP URL includes a username (VIGI and most IP cameras return 401
+    to anonymous RTSP; MediaMTX passes the URL through unchanged).
+    """
+    u = (url or "").strip()
+    if not u.startswith(("rtsp://", "rtsps://")):
+        return False
+    try:
+        return bool(urlparse(u).username)
+    except Exception:
+        return False
 
 
 def _sanitize_path_segment(s: str) -> str:

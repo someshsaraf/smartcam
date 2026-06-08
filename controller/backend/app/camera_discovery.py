@@ -239,15 +239,54 @@ def _friendly_onvif_error(message: str) -> str:
     return message.strip()
 
 
+def _parse_onvif_service_url(xaddr: str) -> Optional[Tuple[str, int, bool]]:
+    """Return (host, port, use_tls) for an ONVIF device or media service URL."""
+    t = (xaddr or "").strip()
+    if not t.startswith(("http://", "https://")):
+        return None
+    try:
+        p = urlparse(t)
+        host = (p.hostname or "").strip()
+        if not host:
+            return None
+        scheme = (p.scheme or "http").lower()
+        use_tls = scheme == "https"
+        default = 443 if use_tls else 80
+        port = int(p.port or default)
+        return host, port, use_tls
+    except Exception:
+        return None
+
+
+def _collect_onvif_endpoints(xaddrs: List[str]) -> List[Tuple[str, int, bool]]:
+    """Deduplicated (host, port, use_tls) from all XAddrs (order preserved)."""
+    out: List[Tuple[str, int, bool]] = []
+    seen: set[Tuple[str, int, bool]] = set()
+    for xa in xaddrs or []:
+        pr = _parse_onvif_service_url(str(xa).strip())
+        if not pr:
+            continue
+        h, po, tls = pr
+        key = (h.lower(), po, tls)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(pr)
+    return out
+
+
 def _onvif_main_rtsp_uri(
     host: str,
     port: int,
     username: str,
     password: str,
+    *,
+    encrypt: bool = False,
 ) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
     """
     Returns (rtsp_uri_with_credentials_or_none, error_message, meta).
     meta keys: manufacturer, model, firmware (best-effort).
+    ``encrypt`` must be True when using HTTPS ONVIF (often port 443).
     """
     meta: Dict[str, str] = {}
     try:
@@ -270,7 +309,7 @@ def _onvif_main_rtsp_uri(
             port,
             user,
             pwd,
-            encrypt=False,
+            encrypt=bool(encrypt),
             no_cache=True,
             adjust_time=True,
         )
@@ -303,8 +342,36 @@ def _onvif_main_rtsp_uri(
             raw_uri = _inject_rtsp_credentials(raw_uri, user, pwd)
         return raw_uri, None, meta
     except Exception as e:
-        logger.info("[discover] ONVIF probe failed for %s:%s: %s", host, port, e)
+        logger.info(
+            "[discover] ONVIF probe failed for %s:%s tls=%s: %s",
+            host,
+            port,
+            encrypt,
+            e,
+        )
         return None, _friendly_onvif_error(str(e))[:800], meta
+
+
+def _onvif_main_rtsp_from_xaddrs(
+    xaddrs: List[str],
+    username: str,
+    password: str,
+) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
+    """Try each ONVIF HTTP(S) endpoint until one yields a stream URI."""
+    endpoints = _collect_onvif_endpoints(xaddrs)
+    if not endpoints:
+        return None, "no valid ONVIF HTTP(S) URLs in XAddrs", {}
+    last_err = "no ONVIF endpoint responded"
+    merged_meta: Dict[str, str] = {}
+    for host, port, use_tls in endpoints:
+        uri, err, meta = _onvif_main_rtsp_uri(
+            host, port, username, password, encrypt=use_tls
+        )
+        merged_meta.update(meta)
+        if uri:
+            return uri, None, meta
+        last_err = err or last_err
+    return None, last_err, merged_meta
 
 
 def discover_onvif_cameras(
@@ -332,7 +399,7 @@ def discover_onvif_cameras(
         parsed = _parse_xaddr_http_base(primary)
         if not parsed:
             continue
-        host, onvif_port = parsed
+        host, _ = parsed
         name_hint = str(dev.get("name_hint") or host)
 
         row: Dict[str, Any] = {
@@ -355,8 +422,10 @@ def discover_onvif_cameras(
 
         def _job() -> None:
             try:
-                uri, err, meta = _onvif_main_rtsp_uri(
-                    host, onvif_port, username, password
+                uri, err, meta = _onvif_main_rtsp_from_xaddrs(
+                    xaddrs,
+                    username,
+                    password,
                 )
                 result_holder["uri"] = uri
                 result_holder["err"] = err

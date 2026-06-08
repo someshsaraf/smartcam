@@ -36,7 +36,7 @@ from .manual_recording import (
     start_manual_local,
     stop_manual_local,
 )
-from .mediamtx_paths import mediamtx_path_key, rtsp_url
+from .mediamtx_paths import mediamtx_path_key, rtsp_url, rtsp_url_has_userinfo
 from .opencv_person_detector import person_detector_diagnostics
 from .person_rtsp_supervisor import (
     get_supervisor_thread,
@@ -565,6 +565,16 @@ def delete_all_recordings(camera_id: int) -> Dict[str, Any]:
 def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
+    row = dict(camera_store.get_camera(camera_id) or {})
+    ru = rtsp_url(row)
+    path_key = mediamtx_path_key(row)
+    warnings: List[str] = []
+    if ru.startswith(("rtsp://", "rtsps://")) and not rtsp_url_has_userinfo(ru):
+        warnings.append(
+            "RTSP URL has no username. TP-Link VIGI and most IP cameras return 401 to MediaMTX "
+            "until the URL includes credentials, e.g. rtsp://admin:password@192.168.x.x:554/stream1 "
+            "(special characters in the password must be percent-encoded in the URL)."
+        )
     diag = person_detector_diagnostics()
     ssd = bool(diag.get("model_load_ok"))
     lines = [
@@ -581,7 +591,13 @@ def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
             "Person detection enabled but SSD weights missing — run "
             "controller/backend/scripts/fetch_ssd_models.sh"
         )
-    return {"ok": None, "summary": lines}
+    return {
+        "ok": None,
+        "summary": lines,
+        "mediamtx_path": path_key,
+        "rtsp_has_userinfo": rtsp_url_has_userinfo(ru),
+        "warnings": warnings,
+    }
 
 
 @app.get("/detector/person/status")

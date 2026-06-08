@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 
 def _backend_root() -> str:
@@ -22,7 +23,7 @@ def main() -> int:
         sys.path.insert(0, backend)
 
     from app import camera_store
-    from app.mediamtx_paths import mediamtx_path_key, rtsp_url
+    from app.mediamtx_paths import mediamtx_path_key, rtsp_url, rtsp_url_has_userinfo
 
     cams = camera_store.list_cameras()
     usable: list[dict] = []
@@ -90,6 +91,16 @@ def main() -> int:
     for cam in usable:
         pk = mediamtx_path_key(cam)
         src = rtsp_url(cam)
+        if src.startswith(("rtsp://", "rtsps://")) and not rtsp_url_has_userinfo(src):
+            try:
+                hint_host = urlparse(src).hostname or "camera-ip"
+            except Exception:
+                hint_host = "camera-ip"
+            print(
+                f"[mediamtx-yaml] WARN path {pk}: RTSP URL has no username — "
+                f"VIGI/IP cameras often return 401; use rtsp://USER:PASS@{hint_host}:554/…",
+                flush=True,
+            )
         lines.append(f"  {pk}:")
         lines.append(f"    source: {json.dumps(src)}")
         lines.append("")
