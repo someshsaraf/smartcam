@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 
 def rtsp_url(cam: Dict[str, Any]) -> str:
@@ -16,6 +16,32 @@ def rtsp_url(cam: Dict[str, Any]) -> str:
         or str(cam.get("main_stream") or "").strip()
         or str(cam.get("mainStream") or "").strip()
     )
+
+
+def redact_rtsp_url_for_debug(url: str) -> str:
+    """
+    Same RTSP URL with password replaced by *** for logs/UI.
+    Usernames are kept so you can confirm which account MediaMTX uses.
+    """
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if not u.startswith(("rtsp://", "rtsps://")):
+        return u
+    try:
+        p = urlparse(u)
+        if p.password is None and p.username is None:
+            return u
+        host = p.hostname or ""
+        port = f":{p.port}" if p.port else ""
+        auth = p.username or ""
+        if p.password is not None:
+            netloc = f"{auth}:***@{host}{port}" if auth else f"***@{host}{port}"
+        else:
+            netloc = f"{auth}@{host}{port}" if auth else f"{host}{port}"
+        return urlunparse((p.scheme, netloc, p.path or "", p.params, p.query, p.fragment))
+    except Exception:
+        return "<unparseable rtsp url>"
 
 
 def rtsp_url_has_userinfo(url: str) -> bool:

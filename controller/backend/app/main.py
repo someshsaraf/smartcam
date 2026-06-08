@@ -36,7 +36,12 @@ from .manual_recording import (
     start_manual_local,
     stop_manual_local,
 )
-from .mediamtx_paths import mediamtx_path_key, rtsp_url, rtsp_url_has_userinfo
+from .mediamtx_paths import (
+    mediamtx_path_key,
+    redact_rtsp_url_for_debug,
+    rtsp_url,
+    rtsp_url_has_userinfo,
+)
 from .opencv_person_detector import person_detector_diagnostics
 from .person_rtsp_supervisor import (
     get_supervisor_thread,
@@ -562,12 +567,16 @@ def delete_all_recordings(camera_id: int) -> Dict[str, Any]:
 
 
 @app.get("/cameras/{camera_id}/stream_health")
-def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
+def stream_health(camera_id: int, request: Request, probe_rtsp: bool = True) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     row = dict(camera_store.get_camera(camera_id) or {})
     ru = rtsp_url(row)
     path_key = mediamtx_path_key(row)
+    hls_base = _hls_public_base(request)
+    api_base = str(request.base_url).rstrip("/")
+    hls_api_playlist = f"{api_base}/cameras/{int(camera_id)}/hls/index.m3u8"
+    hls_mediamtx_manifest = f"{hls_base}/{path_key}/index.m3u8"
     warnings: List[str] = []
     if ru.startswith(("rtsp://", "rtsps://")) and not rtsp_url_has_userinfo(ru):
         warnings.append(
@@ -591,13 +600,20 @@ def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
             "Person detection enabled but SSD weights missing — run "
             "controller/backend/scripts/fetch_ssd_models.sh"
         )
-    return {
+    out: Dict[str, Any] = {
         "ok": None,
         "summary": lines,
         "mediamtx_path": path_key,
         "rtsp_has_userinfo": rtsp_url_has_userinfo(ru),
+        "rtsp_url_redacted": redact_rtsp_url_for_debug(ru),
+        "hls_api_playlist_url": hls_api_playlist,
+        "hls_mediamtx_manifest_url": hls_mediamtx_manifest,
         "warnings": warnings,
     }
+    if os.environ.get("SMARTCAM_DEBUG_FULL_RTSP", "").strip().lower() in ("1", "true", "yes"):
+        out["rtsp_url"] = ru
+        out["_debug_note"] = "SMARTCAM_DEBUG_FULL_RTSP is set — rtsp_url includes credentials; unset in production."
+    return out
 
 
 @app.get("/detector/person/status")

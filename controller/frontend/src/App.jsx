@@ -8,6 +8,7 @@ import {
   MEDIAMTX_BASE,
   preferNativeHlsPlayback,
   preferWebRtcLive,
+  showStreamDebugUrls,
   WS_DETECTIONS,
   WS_RECORDING,
 } from "./envConfig";
@@ -1703,6 +1704,46 @@ function countPersonDetections(detections) {
   return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
+/** URLs from GET /cameras/{id}/stream_health (RTSP password redacted server-side). */
+function LiveTileStreamDebug({ streamDebug }) {
+  if (!streamDebug || typeof streamDebug !== "object") {
+    return (
+      <p className="text-[9px] text-gray-500 px-2 text-center">Loading stream debug…</p>
+    );
+  }
+  if (streamDebug._error) {
+    return (
+      <p className="text-[10px] text-rose-300/90 font-mono break-all px-2 text-left leading-snug">
+        {streamDebug._error}
+      </p>
+    );
+  }
+  const rows = [
+    ["mediamtx_path", streamDebug.mediamtx_path],
+    ["rtsp (redacted)", streamDebug.rtsp_url_redacted],
+    ["HLS via API (307 entry)", streamDebug.hls_api_playlist_url],
+    ["HLS manifest (MediaMTX)", streamDebug.hls_mediamtx_manifest_url],
+  ];
+  if (streamDebug.rtsp_url) {
+    rows.push(["rtsp (full — SMARTCAM_DEBUG_FULL_RTSP on server)", streamDebug.rtsp_url]);
+  }
+  return (
+    <dl className="text-[9px] text-gray-300 space-y-1.5 px-2 max-w-full text-left">
+      {rows.map(([k, v]) =>
+        v ? (
+          <div key={k}>
+            <dt className="text-gray-500">{k}</dt>
+            <dd className="font-mono text-gray-200 break-all leading-snug">{String(v)}</dd>
+          </div>
+        ) : null
+      )}
+      {streamDebug._debug_note ? (
+        <p className="text-amber-300/90 text-[9px] leading-snug">{streamDebug._debug_note}</p>
+      ) : null}
+    </dl>
+  );
+}
+
 function LiveTile({
   cam,
   recording,
@@ -1750,6 +1791,8 @@ function LiveTile({
   const [scale, setScale] = useState(1);
   const [streamError, setStreamError] = useState("");
   const [edgeHint, setEdgeHint] = useState("");
+  /** From GET /cameras/{id}/stream_health — RTSP redacted + HLS URLs for debugging. */
+  const [streamDebug, setStreamDebug] = useState(null);
   const rtspSource = cameraRtspUrl(cam);
   const streamUrl = streamUrlForCamera(cam);
   const hlsProxyUrl = hlsPlaylistUrlForCamera(cam, true);
@@ -1777,9 +1820,35 @@ function LiveTile({
     setUseWebRtc(preferWebRtcLive());
     setStreamError("");
     setEdgeHint("");
+    setStreamDebug(null);
     setHlsUrl(hlsProxyUrl);
     setScale(1);
   }, [cam.id, rtspSource, hlsProxyUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/cameras/${cam.id}/stream_health?probe_rtsp=false`);
+        const body = r.ok ? await r.json() : null;
+        if (cancelled) return;
+        if (!r.ok) {
+          setStreamDebug({
+            _error: r.status === 404 ? "camera not in API registry (stream_health 404)" : `stream_health HTTP ${r.status}`,
+          });
+          return;
+        }
+        setStreamDebug(body && typeof body === "object" ? body : null);
+      } catch (e) {
+        if (!cancelled) {
+          setStreamDebug({ _error: e instanceof Error ? e.message : "stream_health fetch failed" });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cam.id]);
 
   /** Wheel over <iframe> does not bubble; capture on the tile so zoom never hits the reader page. */
   useEffect(() => {
@@ -2150,7 +2219,7 @@ function LiveTile({
                 aria-hidden="true"
               />
               {streamError ? (
-                <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/85">
+                <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/85 overflow-y-auto">
                   <p className="text-[12px] text-amber-200 font-medium px-2">{streamError}</p>
                   <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-relaxed px-2">
                     HLS: open{" "}
@@ -2159,6 +2228,12 @@ function LiveTile({
                     with MediaMTX. Otherwise check path <span className="font-mono">cam{cam.id}</span> vs{" "}
                     <span className="font-mono">mediamtx.generated.yml</span>.
                   </p>
+                  <LiveTileStreamDebug streamDebug={streamDebug} />
+                </div>
+              ) : showStreamDebugUrls() && !useWebRtc ? (
+                <div className="pointer-events-none absolute bottom-10 left-1 right-1 z-[11] max-h-[28%] overflow-y-auto rounded bg-black/70 border border-white/10 p-1.5 text-left">
+                  <p className="text-[9px] text-gray-500 uppercase tracking-wide mb-0.5">Stream debug</p>
+                  <LiveTileStreamDebug streamDebug={streamDebug} />
                 </div>
               ) : null}
             </div>

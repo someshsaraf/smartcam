@@ -36,6 +36,11 @@ function baseFromApi(port) {
 
 export const API = resolveApiUrl();
 
+/** When true, live tiles show RTSP/HLS debug URLs from `GET /cameras/{id}/stream_health` under the video. */
+export function showStreamDebugUrls() {
+  return String(import.meta.env.VITE_SHOW_STREAM_DEBUG || "").trim() === "1";
+}
+
 export const MEDIAMTX_BASE = trimUrl(
   import.meta.env.VITE_MEDIAMTX_BASE || baseFromApi(8889)
 );
