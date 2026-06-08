@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
@@ -567,7 +567,15 @@ def delete_all_recordings(camera_id: int) -> Dict[str, Any]:
 
 
 @app.get("/cameras/{camera_id}/stream_health")
-def stream_health(camera_id: int, request: Request, probe_rtsp: bool = True) -> Dict[str, Any]:
+def stream_health(
+    camera_id: int,
+    request: Request,
+    probe_rtsp: bool = True,
+    include_secrets: bool = Query(
+        False,
+        description="If true, include rtsp_url with credentials. For debug UIs on a trusted LAN only.",
+    ),
+) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     row = dict(camera_store.get_camera(camera_id) or {})
@@ -610,8 +618,24 @@ def stream_health(camera_id: int, request: Request, probe_rtsp: bool = True) -> 
         "hls_mediamtx_manifest_url": hls_mediamtx_manifest,
         "warnings": warnings,
     }
-    if os.environ.get("SMARTCAM_DEBUG_FULL_RTSP", "").strip().lower() in ("1", "true", "yes"):
+    secrets_denied = os.environ.get("SMARTCAM_DENY_STREAM_HEALTH_SECRETS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if include_secrets and secrets_denied:
+        warnings.append(
+            "include_secrets=1 was ignored because SMARTCAM_DENY_STREAM_HEALTH_SECRETS is set on the server."
+        )
+    if include_secrets and not secrets_denied and ru.strip():
         out["rtsp_url"] = ru
+        out["_secrets_note"] = (
+            "include_secrets=1: rtsp_url contains credentials — trusted LAN only; "
+            "do not expose this API to the internet."
+        )
+    if os.environ.get("SMARTCAM_DEBUG_FULL_RTSP", "").strip().lower() in ("1", "true", "yes"):
+        if ru.strip():
+            out["rtsp_url"] = ru
         out["_debug_note"] = "SMARTCAM_DEBUG_FULL_RTSP is set — rtsp_url includes credentials; unset in production."
     if os.environ.get("SMARTCAM_LOG_STREAM_HEALTH", "").strip().lower() in ("1", "true", "yes"):
         logger.info(

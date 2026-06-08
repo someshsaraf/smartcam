@@ -59,7 +59,9 @@ export function SmartcamDebugPanel({
       const id = Number(c.id);
       if (!Number.isFinite(id)) continue;
       try {
-        const r = await fetch(`${API}/cameras/${id}/stream_health?probe_rtsp=false`);
+        const r = await fetch(
+          `${API}/cameras/${id}/stream_health?probe_rtsp=false&include_secrets=true`,
+        );
         next[id] = r.ok ? await r.json() : { _error: `HTTP ${r.status}` };
       } catch (e) {
         next[id] = { _error: e instanceof Error ? e.message : String(e) };
@@ -173,6 +175,12 @@ export function SmartcamDebugPanel({
           </Section>
 
           <Section title="Per-camera stream_health">
+            <p className="text-[10px] text-amber-200/95 leading-snug rounded border border-amber-500/35 bg-amber-950/25 px-2 py-1.5">
+              This panel requests <span className="font-mono">include_secrets=true</span> so each
+              camera&apos;s full <strong className="text-amber-100">RTSP URL including the password</strong> is
+              shown when stored on the controller. Use only on a trusted LAN; do not expose port 8000 to the
+              internet.
+            </p>
             {healthUpdatedAt ? (
               <p className="text-[10px] text-gray-500 mb-1">Updated {healthUpdatedAt}</p>
             ) : null}
@@ -195,43 +203,77 @@ export function SmartcamDebugPanel({
                       ) : h._error ? (
                         <span className="text-rose-300 text-[10px] break-all">{h._error}</span>
                       ) : (
-                        <dl className="space-y-0.5 text-[10px] text-gray-300">
-                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
-                            <dt className="text-gray-500">mediamtx_path</dt>
-                            <dd className="break-all">{h.mediamtx_path ?? "—"}</dd>
-                          </div>
-                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
-                            <dt className="text-gray-500">rtsp_has_userinfo</dt>
-                            <dd>{h.rtsp_has_userinfo ? "true" : "false"}</dd>
-                          </div>
-                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
-                            <dt className="text-gray-500">rtsp (redacted)</dt>
-                            <dd className="break-all text-gray-200">{h.rtsp_url_redacted || "—"}</dd>
-                          </div>
-                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
-                            <dt className="text-gray-500">HLS via API</dt>
-                            <dd className="break-all text-cyan-200/90">{h.hls_api_playlist_url || "—"}</dd>
-                          </div>
-                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
-                            <dt className="text-gray-500">HLS MediaMTX</dt>
-                            <dd className="break-all text-cyan-200/90">{h.hls_mediamtx_manifest_url || "—"}</dd>
-                          </div>
-                          {Array.isArray(h.warnings) && h.warnings.length > 0 ? (
-                            <div className="mt-1 pt-1 border-t border-amber-500/20">
-                              <p className="text-amber-300/95 text-[10px] font-medium">Warnings</p>
-                              {h.warnings.map((w, i) => (
-                                <p key={i} className="text-amber-200/80 text-[10px] mt-0.5 break-words">
-                                  {w}
-                                </p>
-                              ))}
-                            </div>
-                          ) : null}
-                          {h.rtsp_url ? (
-                            <p className="text-rose-300/90 text-[10px] mt-1 break-all">
-                              Full rtsp (server SMARTCAM_DEBUG_FULL_RTSP): {h.rtsp_url}
+                        <div className="space-y-2">
+                          {h._secrets_note || h._debug_note ? (
+                            <p className="text-[9px] text-gray-400 leading-snug">
+                              {h._secrets_note ? `${h._secrets_note} ` : ""}
+                              {h._debug_note || ""}
                             </p>
                           ) : null}
-                        </dl>
+                          <div className="rounded border border-amber-500/40 bg-amber-950/30 p-2">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-200">
+                                RTSP (full URL, password visible)
+                              </span>
+                              {h.rtsp_url ? (
+                                <button
+                                  type="button"
+                                  className="shrink-0 text-[10px] px-2 py-0.5 rounded bg-amber-600/80 text-white hover:bg-amber-500"
+                                  onClick={() => {
+                                    if (h.rtsp_url && navigator.clipboard?.writeText) {
+                                      navigator.clipboard.writeText(h.rtsp_url).catch(() => {});
+                                    }
+                                  }}
+                                >
+                                  Copy
+                                </button>
+                              ) : null}
+                            </div>
+                            {h.rtsp_url ? (
+                              <pre className="text-[11px] leading-relaxed text-amber-50 whitespace-pre-wrap break-all font-mono">
+                                {h.rtsp_url}
+                              </pre>
+                            ) : (
+                              <p className="text-[10px] text-gray-500">
+                                No RTSP URL in the controller registry for this camera (add{" "}
+                                <span className="font-mono">url</span> / <span className="font-mono">main_stream</span>
+                                ).
+                              </p>
+                            )}
+                          </div>
+                          <dl className="space-y-0.5 text-[10px] text-gray-300">
+                            <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                              <dt className="text-gray-500">mediamtx_path</dt>
+                              <dd className="break-all">{h.mediamtx_path ?? "—"}</dd>
+                            </div>
+                            <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                              <dt className="text-gray-500">rtsp_has_userinfo</dt>
+                              <dd>{h.rtsp_has_userinfo ? "true" : "false"}</dd>
+                            </div>
+                            <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                              <dt className="text-gray-500">rtsp (redacted)</dt>
+                              <dd className="break-all text-gray-400">{h.rtsp_url_redacted || "—"}</dd>
+                            </div>
+                            <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                              <dt className="text-gray-500">HLS via API</dt>
+                              <dd className="break-all text-cyan-200/90">{h.hls_api_playlist_url || "—"}</dd>
+                            </div>
+                            <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                              <dt className="text-gray-500">HLS MediaMTX</dt>
+                              <dd className="break-all text-cyan-200/90">{h.hls_mediamtx_manifest_url || "—"}</dd>
+                            </div>
+                            {Array.isArray(h.warnings) && h.warnings.length > 0 ? (
+                              <div className="mt-1 pt-1 border-t border-amber-500/20">
+                                <p className="text-amber-300/95 text-[10px] font-medium">Warnings</p>
+                                {h.warnings.map((w, i) => (
+                                  <p key={i} className="text-amber-200/80 text-[10px] mt-0.5 break-words">
+                                    {w}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
+                          </dl>
+                        </div>
                       )}
                     </li>
                   );
