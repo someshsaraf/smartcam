@@ -2920,6 +2920,13 @@ export default function App() {
       }
       const devices = Array.isArray(j.devices) ? j.devices : [];
       setDiscoveredEdges(devices);
+      // Discovered rows (with per-device "Add") only render on the Devices tab — Find from Live
+      // would otherwise feel like a no-op after the credential prompts.
+      if (devices.length > 0) {
+        setDeviceDetailId(null);
+        setDevicesView("grid");
+        setMainTab("devices");
+      }
       await applyDiscoverPasswordToMatchingCameras(devices, pass, cams);
       if (Array.isArray(j.errors) && j.errors.length) {
         console.warn("[discover]", j.errors);
@@ -3403,7 +3410,11 @@ export default function App() {
                   ) : (
                     <>
                       <p className="text-gray-300 font-medium mb-1">No cameras yet</p>
-                      <p className="text-gray-500 text-sm">Add cameras from the Devices page.</p>
+                      <p className="text-gray-500 text-sm">
+                        Use <span className="text-gray-400">Find new cameras</span> above — after you enter ONVIF credentials,
+                        the app switches to <strong className="text-gray-400">Devices</strong> where each found camera has
+                        an <strong className="text-gray-400">Add</strong> button (discovery does not add them automatically).
+                      </p>
                     </>
                   )}
                 </div>
