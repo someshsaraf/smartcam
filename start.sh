@@ -173,6 +173,11 @@ controller_setup() {
       bash "$BACKEND_ROOT/scripts/install_mediamtx.sh"
     fi
   fi
+  if [[ -f "$BACKEND_ROOT/scripts/fetch_ssd_models.sh" ]] && [[ ! -f "$BACKEND_ROOT/models/mobilenet_iter_73000.caffemodel" ]]; then
+    log "Downloading MobileNet-SSD models for person detection…"
+    need_cmd curl
+    bash "$BACKEND_ROOT/scripts/fetch_ssd_models.sh" || log "WARN: SSD model download failed — run controller/backend/scripts/fetch_ssd_models.sh manually."
+  fi
 }
 
 controller_setup_frontend() {

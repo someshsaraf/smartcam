@@ -6,7 +6,7 @@ Expected layout:
 |------|---------|
 | `backend/` | FastAPI app (`uvicorn app.main:app`), `requirements.txt`, `.env` |
 
-**Backend entry:** `app/main.py` in this repo is a **minimal** API: it wires `GET /cameras` to `camera_store`, stubs recordings/events/WebSockets, and **does not** run MediaMTX/Hailo inside the API process. Repo-root **`./start.sh controller`** starts **MediaMTX** (generated config) before uvicorn when the `mediamtx` binary is available. Use the minimal `main.py` when your Pi checkout had no `main.py` and the UI always showed “No cameras yet”. If you already run a **full** controller build on the Pi, keep that `main.py` and only ensure it returns `camera_store` cameras (or merge routes).
+**Backend entry:** `app/main.py` wires `GET /cameras` to `camera_store`, stubs most recording/event routes, starts **per-camera RTSP readers** that run **OpenCV MobileNet-SSD person detection** and broadcast **`/ws/detections`** (same message shape the React live tile expects). **Hailo** is optional later (see [`../docs/HAILO_YOLOV8N_SMARTCAM.md`](../docs/HAILO_YOLOV8N_SMARTCAM.md)); this tree uses CPU SSD by default. Repo-root **`./start.sh controller`** starts **MediaMTX** before uvicorn when `mediamtx` is available. If you merge a **full** controller `main.py` from another image, keep its inference routes or merge with this file.
 
 | `frontend/` | React + Vite dashboard (`package.json`, `npm run dev`) |
 | `shared/` | Optional Python package path added to `PYTHONPATH` when present |
@@ -16,7 +16,14 @@ Some clones or minimal checkouts only contain **`backend/`**. In that case the d
 1. **Full repository** — `git pull` / re-clone so `controller/frontend/` exists, then `./start.sh controller --install` again, or  
 2. **API only** — `./start.sh controller --install` (with the updated `start.sh`) skips npm when `frontend/` is missing; use **`http://<pi5>:8000/docs`** for OpenAPI.
 
-From repo root, `./start.sh controller` does the same: **MediaMTX** (if installed and cameras have RTSP URLs), then backend, then Vite if `controller/frontend/package.json` exists.
+From repo root, `./start.sh controller` does the same: **MediaMTX** (if installed and cameras have RTSP URLs), then backend, then Vite if `controller/frontend/package.json` exists. **`./start.sh controller --install`** also downloads **MobileNet-SSD** weights into `backend/models/` when missing (for person overlays).
+
+### Person detection (live tile boxes)
+
+1. Run **`controller/backend/scripts/fetch_ssd_models.sh`** once (or rely on **`./start.sh controller --install`** to fetch them). Prototxt + Caffe weights land in **`backend/models/`**.
+2. **`GET /detector/person/status`** — model paths, `model_load_ok`, and WebSocket client count.
+3. Env: **`SMARTCAM_PERSON_DETECT_ENABLED`** (default `1`), **`SMARTCAM_PERSON_DETECT_INTERVAL_MS`** (default `200`), **`SMARTCAM_PERSON_CONFIDENCE`**, **`SMARTCAM_MODEL_DIR`** / **`SMARTCAM_SSD_PROTO`** / **`SMARTCAM_SSD_WEIGHTS`** to override paths.
+4. Each camera with an **`rtsp://`** or **`rtsps://`** URL in `camera_store` gets a background reader; detections are pushed on **`/ws/detections`**. Add or remove cameras and the supervisor picks up changes within a few seconds (no API restart required). Restart the API after installing model files for the first time.
 
 See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and Hailo.
 

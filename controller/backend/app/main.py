@@ -1,7 +1,6 @@
 """
-Minimal SmartCam controller API so the Vigilance UI can list cameras from
-`camera_store` (JSON file, env, or bootstrap). Extend with MediaMTX, recordings,
-and detection routes on the full Pi image.
+SmartCam controller API: cameras from `camera_store`, MediaMTX HLS redirect,
+OpenCV MobileNet-SSD person detection → `/ws/detections`, and stubbed recordings/events.
 
 Run from `controller/backend` with:
   export PYTHONPATH="$(pwd)/../shared:$(pwd)"   # or ../shared only if present
@@ -10,7 +9,10 @@ Run from `controller/backend` with:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -18,7 +20,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from . import camera_store
+from .detections_hub import get_detections_hub
 from .mediamtx_paths import mediamtx_path_key
+from .opencv_person_detector import person_detector_diagnostics
+from .person_rtsp_supervisor import (
+    get_supervisor_thread,
+    person_detection_enabled,
+    start_person_detection_background,
+)
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "recording_mode": "motion",
@@ -47,7 +56,20 @@ def _next_camera_id() -> int:
     return max(int(c["id"]) for c in rows) + 1
 
 
-app = FastAPI(title="SmartCam controller", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    hub = get_detections_hub()
+    hub.attach_loop(asyncio.get_running_loop())
+    stop_ev = threading.Event()
+    start_person_detection_background(hub, stop_ev)
+    yield
+    stop_ev.set()
+    sup = get_supervisor_thread()
+    if sup is not None and sup.is_alive():
+        sup.join(timeout=15.0)
+
+
+app = FastAPI(title="SmartCam controller", version="0.1.0", lifespan=lifespan)
 
 _cors = os.environ.get("SMARTCAM_CORS_ORIGINS", "*").strip()
 if _cors == "*":
@@ -201,12 +223,34 @@ def manual_record(camera_id: int, path: str) -> Dict[str, Any]:
 def stream_health(camera_id: int, probe_rtsp: bool = True) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
+    diag = person_detector_diagnostics()
+    ssd = bool(diag.get("model_load_ok"))
+    lines = [
+        "HLS: GET /cameras/{id}/hls/index.m3u8 → 307 to MediaMTX (:8888). "
+        "Set SMARTCAM_HLS_ORIGIN if the HLS host differs from the API host.",
+    ]
+    if person_detection_enabled() and ssd:
+        lines.append(
+            "Person overlays: OpenCV MobileNet-SSD workers read each camera RTSP and "
+            "broadcast on /ws/detections."
+        )
+    elif person_detection_enabled() and not ssd:
+        lines.append(
+            "Person detection enabled but SSD weights missing — run "
+            "controller/backend/scripts/fetch_ssd_models.sh"
+        )
+    return {"ok": None, "summary": lines}
+
+
+@app.get("/detector/person/status")
+def person_detector_status() -> Dict[str, Any]:
+    """SSD model paths, load status, and WebSocket client count."""
+    hub = get_detections_hub()
+    diag = person_detector_diagnostics()
     return {
-        "ok": None,
-        "summary": [
-            "Minimal build: no RTSP probe. HLS uses GET /cameras/{id}/hls/index.m3u8 → "
-            "307 redirect to MediaMTX (:8888). Set SMARTCAM_HLS_ORIGIN if HLS is not on the API host."
-        ],
+        "person_detection_enabled": person_detection_enabled(),
+        "websocket_clients": hub.client_count(),
+        **diag,
     }
 
 
@@ -253,21 +297,30 @@ async def ws_recording(ws: WebSocket) -> None:
 
 @app.websocket("/ws/detections")
 async def ws_detections(ws: WebSocket) -> None:
+    hub = get_detections_hub()
+    diag = person_detector_diagnostics()
+    ssd_ready = bool(diag.get("model_load_ok"))
     await ws.accept()
-    await ws.send_json(
-        {
-            "type": "hello",
-            "recording_sample_ms": 500,
-            "person_trigger_min_frames": 3,
-            "face_count": 0,
-            "backend": "minimal",
-            "inference_delay_ms": 0,
-            "hailo_ready": False,
-            "hailo_error": None,
-        }
-    )
+    await hub.add(ws)
     try:
+        await ws.send_json(
+            {
+                "type": "hello",
+                "recording_sample_ms": 500,
+                "person_trigger_min_frames": 3,
+                "face_count": 0,
+                "backend": "opencv_ssd" if ssd_ready else "minimal",
+                "inference_delay_ms": 0,
+                "hailo_ready": False,
+                "hailo_error": None,
+                "opencv_ssd_ready": ssd_ready,
+                "person_detect_enabled": person_detection_enabled(),
+                "person_pipeline": diag.get("pipeline"),
+            }
+        )
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
-        return
+        pass
+    finally:
+        await hub.remove(ws)
