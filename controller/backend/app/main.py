@@ -309,8 +309,14 @@ def patch_settings(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str
 
 @app.get("/cameras/{camera_id}/events")
 def list_events(camera_id: int) -> Dict[str, Any]:
+    """
+    Person / timeline events (stub: always empty).
+
+    Returns 200 with an empty list even when ``camera_id`` is unknown so UIs do not
+    spam 404s during reload races; persist only valid ids in ``cameras.json``.
+    """
     if camera_store.get_camera(camera_id) is None:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        return {"events": [], "unknown_camera": True}
     return {"events": []}
 
 

@@ -2253,6 +2253,17 @@ export default function App() {
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   /** Which camera drives the bottom clips timeline (click a live tile or sidebar entry). */
   const [activeCameraId, setActiveCameraId] = useState(null);
+  /** Camera id that exists in ``cams`` — avoids polling /events for a deleted id (e.g. 0). */
+  const effectiveActiveCameraId = useMemo(() => {
+    if (!Array.isArray(cams) || cams.length === 0) return null;
+    if (
+      isSetCameraId(activeCameraId) &&
+      cams.some((c) => cameraIdsMatch(c.id, activeCameraId))
+    ) {
+      return activeCameraId;
+    }
+    return cams[0]?.id ?? null;
+  }, [cams, activeCameraId]);
   /** Manual recording on edge cameras with recording_mode === "off" (cam id → active). */
   const [manualRecordingById, setManualRecordingById] = useState({});
   const [edgeRtspOverrides, setEdgeRtspOverrides] = useState({});
@@ -2430,16 +2441,12 @@ export default function App() {
   }, [manualRecordingById]);
 
   useEffect(() => {
-    const camId = isSetCameraId(activeCameraId)
-      ? activeCameraId
-      : cams.length > 0
-        ? cams[0].id
-        : null;
-    if (!isSetCameraId(camId)) {
+    if (!isSetCameraId(effectiveActiveCameraId)) {
       setInsightsPeopleToday(0);
       setTodayEvents([]);
       return undefined;
     }
+    const camId = effectiveActiveCameraId;
     let cancelled = false;
     const load = async () => {
       try {
@@ -2468,11 +2475,11 @@ export default function App() {
       cancelled = true;
       window.clearInterval(iv);
     };
-  }, [activeCameraId, cams]);
+  }, [effectiveActiveCameraId]);
 
   useEffect(() => {
     setLiveSessionStarted(new Date().toISOString());
-  }, [activeCameraId]);
+  }, [effectiveActiveCameraId]);
 
   useEffect(() => {
     let ws;
@@ -2921,8 +2928,6 @@ export default function App() {
   }, [cams, deviceDetailId]);
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
-  const effectiveActiveCameraId =
-    isSetCameraId(activeCameraId) ? activeCameraId : cams.length > 0 ? cams[0].id : null;
   const activeCamera =
     cams.find((c) => cameraIdsMatch(c.id, effectiveActiveCameraId)) ?? null;
   const recordingsForActiveCamera = isSetCameraId(effectiveActiveCameraId)
@@ -3212,7 +3217,7 @@ export default function App() {
         {showEventsPanel ? (
           <EventsPanel
             variant="page"
-            cameraId={activeCameraId}
+            cameraId={effectiveActiveCameraId}
             cameraName={activeCamera?.name ?? ""}
             recordings={recordingsForActiveCamera}
             cameras={cams}

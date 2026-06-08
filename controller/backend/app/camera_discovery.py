@@ -218,6 +218,27 @@ def _inject_rtsp_credentials(uri: str, username: str, password: str) -> str:
         return u
 
 
+def _friendly_onvif_error(message: str) -> str:
+    m = (message or "").lower()
+    if any(
+        x in m
+        for x in (
+            "authority",
+            "not authorized",
+            "unauthorized",
+            "sender not authorized",
+            "failedauthentication",
+        )
+    ):
+        return (
+            f"{message.strip()} — ONVIF rejected credentials or access. "
+            "Confirm the camera’s ONVIF username/password (TP-Link VIGI: use the camera account "
+            "from the VIGI app / label, not only the cloud password), that ONVIF is enabled, "
+            "and the account is not locked."
+        )
+    return message.strip()
+
+
 def _onvif_main_rtsp_uri(
     host: str,
     port: int,
@@ -251,6 +272,7 @@ def _onvif_main_rtsp_uri(
             pwd,
             encrypt=False,
             no_cache=True,
+            adjust_time=True,
         )
         dev = cam.create_devicemgmt_service()
         try:
@@ -282,7 +304,7 @@ def _onvif_main_rtsp_uri(
         return raw_uri, None, meta
     except Exception as e:
         logger.info("[discover] ONVIF probe failed for %s:%s: %s", host, port, e)
-        return None, str(e)[:500], meta
+        return None, _friendly_onvif_error(str(e))[:800], meta
 
 
 def discover_onvif_cameras(
