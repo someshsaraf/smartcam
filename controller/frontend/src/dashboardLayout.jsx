@@ -1008,7 +1008,7 @@ export function DevicesDashboardPage({
   );
 }
 
-export function DeviceCard({ name, isPrimary, online, resolution, fps, ip, preview, onClick, onMenu }) {
+export function DeviceCard({ name, isPrimary, online, resolution, fps, ip, preview, onClick, onMenu, onRemove }) {
   return (
     <button type="button" onClick={onClick} className="dashboard-device-card group w-full text-left">
       <div className="relative aspect-[16/10] bg-black overflow-hidden">
@@ -1018,18 +1018,36 @@ export function DeviceCard({ name, isPrimary, online, resolution, fps, ip, previ
             Live
           </span>
         ) : null}
-        {onMenu ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMenu();
-            }}
-            className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-black/50 text-gray-300 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-            aria-label="More actions"
-          >
-            ⋯
-          </button>
+        {onMenu || onRemove ? (
+          <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onRemove ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove();
+                }}
+                className="p-1.5 rounded-lg bg-black/50 text-rose-300 hover:text-rose-200 hover:bg-rose-950/40"
+                aria-label="Remove camera"
+                title="Remove camera"
+              >
+                ✕
+              </button>
+            ) : null}
+            {onMenu ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMenu();
+                }}
+                className="p-1.5 rounded-lg bg-black/50 text-gray-300 hover:text-white"
+                aria-label="More actions"
+              >
+                ⋯
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div className="p-3.5 space-y-1.5">

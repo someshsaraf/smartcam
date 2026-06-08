@@ -2742,14 +2742,24 @@ export default function App() {
   };
 
   const deleteCamera = async (cam) => {
-    if (!window.confirm(`Remove “${cam.name}” from the controller?`)) return;
-    const res = await fetch(`${API}/cameras/${cam.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      alert("Remove failed");
+    if (
+      !window.confirm(
+        `Remove “${cam.name}” from the controller?\n\nClips already stored under data/recordings/${cam.id}/ are not deleted by this action.`,
+      )
+    ) {
       return;
     }
-    if (settingsCam && settingsCam.id === cam.id) {
+    const res = await fetch(`${API}/cameras/${cam.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      alert(await readApiError(res));
+      return;
+    }
+    if (settingsCam && cameraIdsMatch(settingsCam.id, cam.id)) {
       closeSettings();
+    }
+    if (deviceDetailId != null && cameraIdsMatch(deviceDetailId, cam.id)) {
+      setDeviceDetailId(null);
+      setDevicesView("grid");
     }
     await load();
   };
@@ -2901,6 +2911,14 @@ export default function App() {
       return false;
     }
   };
+
+  useEffect(() => {
+    if (deviceDetailId == null) return;
+    if (!cams.some((c) => cameraIdsMatch(c.id, deviceDetailId))) {
+      setDeviceDetailId(null);
+      setDevicesView("grid");
+    }
+  }, [cams, deviceDetailId]);
 
   const liveCams = cams.slice(0, MAX_LIVE_TILES);
   const effectiveActiveCameraId =
@@ -3248,6 +3266,7 @@ export default function App() {
                           setDeviceDetailTab("general");
                         }}
                         onMenu={() => openSettings(c)}
+                        onRemove={() => deleteCamera(c)}
                       />
                     );
                   })}
@@ -3287,6 +3306,14 @@ export default function App() {
                           <td className="p-3 text-right space-x-1">
                             <button type="button" className="dashboard-btn-icon !h-8 !w-8" onClick={() => { setActiveCameraId(c.id); setMainTab("live"); }} title="Live">▶</button>
                             <button type="button" className="dashboard-btn-icon !h-8 !w-8" onClick={() => openSettings(c)} title="Settings">⚙</button>
+                            <button
+                              type="button"
+                              className="dashboard-btn-icon !h-8 !w-8 text-rose-400/90 hover:text-rose-300"
+                              title="Remove camera from controller"
+                              onClick={() => deleteCamera(c)}
+                            >
+                              ✕
+                            </button>
                           </td>
                         </tr>
                       );
@@ -3339,6 +3366,13 @@ export default function App() {
                             <div className="flex flex-wrap gap-2">
                               <button type="button" className="dashboard-btn-secondary text-xs" onClick={() => { setActiveCameraId(deviceDetailCam.id); setMainTab("live"); }}>Open live view</button>
                               <button type="button" className="dashboard-btn-primary text-xs" onClick={() => openSettings(deviceDetailCam)}>Edit settings</button>
+                              <button
+                                type="button"
+                                className="text-xs px-3 py-2 rounded-xl border border-rose-500/40 text-rose-200 hover:bg-rose-950/40 transition-colors"
+                                onClick={() => deleteCamera(deviceDetailCam)}
+                              >
+                                Remove camera…
+                              </button>
                             </div>
                           </div>
                           <p className="text-[11px] text-indigo-300/80 bg-indigo-950/30 border border-indigo-500/20 rounded-lg px-3 py-2">
@@ -3542,6 +3576,21 @@ export default function App() {
               >
                 {saving ? "Saving…" : "Save settings"}
               </button>
+
+              <div className="border-t border-white/10 pt-4 space-y-2">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Danger zone</p>
+                <button
+                  type="button"
+                  onClick={() => deleteCamera(settingsCam)}
+                  className="w-full lg:w-auto px-4 py-2.5 rounded-xl text-sm font-medium border border-rose-500/40 text-rose-200 hover:bg-rose-950/40 transition-colors"
+                >
+                  Remove camera from controller…
+                </button>
+                <p className="text-[10px] text-gray-500">
+                  Removes this camera from the dashboard and <span className="font-mono text-gray-400">cameras.json</span>.
+                  Existing recording files on disk are not deleted.
+                </p>
+              </div>
 
               <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-3">
                 Clips from all cameras appear in the <span className="text-gray-400">Recent clips</span> timeline at the bottom of the dashboard.
