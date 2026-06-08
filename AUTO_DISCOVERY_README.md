@@ -30,6 +30,8 @@ Response:
 - `errors`: non-fatal strings if a subsystem threw.
 - If `SMARTCAM_DISCOVERY` is `0` / `false` / `no`: `disabled: true` and empty lists.
 
+**Dashboard “Find”:** After a successful discover, the UI compares each **registered** camera’s RTSP hostname to each ONVIF row’s `host`. When they match, it **PATCH**es the camera’s stored `url`: it uses the resolved `main_stream` from discovery when ONVIF succeeded, or otherwise injects the **same password** you typed in the discover dialog into the existing RTSP URL (typical when ONVIF still fails but RTSP uses the same account).
+
 **Dependency:** `onvif-zeep` (see `controller/backend/requirements.txt`). Without it, ONVIF steps return `detail` mentioning install.
 
 ### `GET /detect/edges`

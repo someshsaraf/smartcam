@@ -7,7 +7,7 @@ Initialization order (first match wins):
 1. JSON file from SMARTCAM_CAMERAS_JSON, or data/cameras.json next to cwd, if it
    contains at least one camera object.
 2. One camera from env: SMARTCAM_VIGI_IP + SMARTCAM_VIGI_USER + SMARTCAM_VIGI_PASS
-3. Hardcoded bootstrap_default_cameras() (replace CHANGE_ME or use env above).
+3. Hardcoded bootstrap_default_cameras() (replace CHANGE_ME in the RTSP URL from **Manage → settings**, use the **Camera RTSP password** field, or use env SMARTCAM_VIGI_* / JSON as above).
 
 VLC can play an RTSP URL directly; the dashboard only shows streams for cameras
 that exist in this store. If your API returns an empty list, add cameras on the

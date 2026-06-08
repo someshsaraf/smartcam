@@ -187,6 +187,28 @@ function manualRecordingProxiesToEdge(cam) {
   }
 }
 
+/** Default bootstrap sample camera uses this literal until you save a real password. */
+function rtspUrlHasChangeMePlaceholder(url) {
+  return String(url || "").includes("CHANGE_ME");
+}
+
+/**
+ * Set RTSP/rtsps URL password (URL-encodes per WHATWG URL).
+ * @returns {string|null} new URL or null if invalid
+ */
+function applyRtspPasswordToUrl(rtspUrl, newPassword) {
+  const u = String(rtspUrl || "").trim();
+  if (!newPassword) return u || null;
+  if (!/^rtsps?:\/\//i.test(u)) return null;
+  try {
+    const parsed = new URL(u);
+    parsed.password = newPassword;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** True if RTSP URL has no userinfo (common cause of MediaMTX 401 on VIGI). */
 function rtspUrlMissingCredentials(url) {
   const u = String(url || "").trim();
@@ -2379,6 +2401,7 @@ export default function App() {
     name: "",
     url: "",
     edge_base_url: "",
+    rtsp_password: "",
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -2775,6 +2798,80 @@ export default function App() {
     };
   }, []);
 
+  /**
+   * After ONVIF discovery: for each registered camera whose RTSP host matches a discovered ONVIF host,
+   * PATCH stored `url` — use resolved stream from discovery when present, otherwise inject the password
+   * from the discover prompt (typical VIGI: same account for ONVIF and RTSP).
+   */
+  const applyDiscoverPasswordToMatchingCameras = async (devices, pass, camsSnapshot) => {
+    const devicesArr = Array.isArray(devices) ? devices : [];
+    const onvifRows = devicesArr.filter((d) => d && d.kind === "onvif" && String(d.host || "").trim());
+    if (onvifRows.length === 0) return;
+
+    const passTrim = String(pass || "").trim();
+    const list = Array.isArray(camsSnapshot) ? camsSnapshot : [];
+    const updates = [];
+
+    for (const cam of list) {
+      if (!cam || cam.id == null) continue;
+      const cur = cameraRtspUrl(cam);
+      if (!cur) continue;
+      let hostname = "";
+      try {
+        hostname = new URL(cur).hostname;
+      } catch {
+        hostname = String(cam.ip || "").trim();
+      }
+      if (!hostname) continue;
+
+      for (const d of onvifRows) {
+        const dh = String(d.host || "").trim();
+        if (dh !== hostname) continue;
+
+        let newUrl = null;
+        const resolved = cameraRtspUrl(d);
+        if (!d.incomplete && resolved) {
+          newUrl = resolved;
+        } else if (passTrim) {
+          newUrl = applyRtspPasswordToUrl(cur, passTrim);
+        }
+        if (newUrl && newUrl !== cur) {
+          updates.push({ id: Number(cam.id), url: newUrl });
+        }
+        break;
+      }
+    }
+
+    const seen = new Set();
+    const uniq = updates.filter((u) => {
+      if (!Number.isFinite(u.id) || seen.has(u.id)) return false;
+      seen.add(u.id);
+      return true;
+    });
+
+    for (const u of uniq) {
+      try {
+        const r = await fetch(`${API}/cameras/${u.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: u.url }),
+        });
+        if (!r.ok) {
+          console.warn("[discover] PATCH camera failed", u.id, r.status);
+        }
+      } catch (e) {
+        console.warn("[discover] PATCH camera error", u.id, e);
+      }
+    }
+    if (uniq.length > 0) {
+      await load();
+      window.alert(
+        `Updated the saved RTSP URL for ${uniq.length} camera(s): used the stream ONVIF returned when available, ` +
+          `otherwise applied the password from the discover dialog for matching camera hosts.`,
+      );
+    }
+  };
+
   const detectCameras = async () => {
     setDetecting(true);
     setDiscoveredEdges([]);
@@ -2814,7 +2911,9 @@ export default function App() {
         window.alert(j.message);
         return;
       }
-      setDiscoveredEdges(Array.isArray(j.devices) ? j.devices : []);
+      const devices = Array.isArray(j.devices) ? j.devices : [];
+      setDiscoveredEdges(devices);
+      await applyDiscoverPasswordToMatchingCameras(devices, pass, cams);
       if (Array.isArray(j.errors) && j.errors.length) {
         console.warn("[discover]", j.errors);
       }
@@ -2862,6 +2961,7 @@ export default function App() {
       name: cam.name || "",
       url: cameraRtspUrl(cam) || "",
       edge_base_url: cam.edge_base_url || "",
+      rtsp_password: "",
     });
     const res = await fetch(`${API}/cameras/${cam.id}/settings`);
     if (res.ok) {
@@ -2909,11 +3009,25 @@ export default function App() {
     try {
       const connBody = {};
       const nameTrim = String(connectionForm.name || "").trim();
-      const urlTrim = String(connectionForm.url || "").trim();
       const edgeTrim = String(connectionForm.edge_base_url || "").trim();
       if (!nameTrim) {
         alert("Camera name cannot be empty.");
         return;
+      }
+      const passwordOverride = String(connectionForm.rtsp_password || "").trim();
+      let urlTrim = String(connectionForm.url || "").trim();
+      const baseRtsp = urlTrim || cameraRtspUrl(settingsCam) || "";
+      if (passwordOverride) {
+        const merged = applyRtspPasswordToUrl(baseRtsp, passwordOverride);
+        if (!merged) {
+          alert(
+            "Could not apply the RTSP password — use a full rtsp:// or rtsps:// URL (with username), " +
+              "or paste the complete URL including user:pass@.",
+          );
+          setSaving(false);
+          return;
+        }
+        urlTrim = merged;
       }
       if (nameTrim !== (settingsCam.name || "").trim()) {
         connBody.name = nameTrim;
@@ -2936,6 +3050,7 @@ export default function App() {
           alert(err.detail || "Failed to update camera");
           return;
         }
+        setConnectionForm((f) => ({ ...f, rtsp_password: "" }));
       }
 
       const res = await fetch(`${API}/cameras/${settingsCam.id}/settings`, {
@@ -3644,6 +3759,36 @@ export default function App() {
                     Percent-encode special characters in the password.
                   </p>
                 ) : null}
+                {rtspUrlHasChangeMePlaceholder(connectionForm.url) ? (
+                  <p className="text-xs text-amber-300 mt-2 leading-snug rounded-md border border-amber-500/40 bg-amber-950/35 px-2 py-2">
+                    This camera still uses the sample placeholder{" "}
+                    <span className="font-mono text-amber-100">CHANGE_ME</span> in the URL (from the default
+                    bootstrap). Run <strong className="text-amber-100">Find</strong> with your ONVIF password — if the
+                    camera host matches discovery, the URL updates automatically — or edit the URL / use
+                    &quot;Camera RTSP password&quot; below and Save.
+                  </p>
+                ) : null}
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Camera RTSP password (optional — updates URL on Save)
+                </label>
+                <input
+                  type="password"
+                  className="mobile-input font-mono"
+                  autoComplete="new-password"
+                  value={connectionForm.rtsp_password}
+                  onChange={(e) =>
+                    setConnectionForm((f) => ({ ...f, rtsp_password: e.target.value }))
+                  }
+                  placeholder="Enter password to inject into the RTSP URL above"
+                />
+                <p className="text-[10px] text-gray-500 mt-1 leading-snug">
+                  Replaces the password segment of your <span className="font-mono">rtsp://user:…@host</span> URL
+                  (encodes special characters). Leave empty to keep the URL field as-is. Cleared after a successful
+                  save.
+                </p>
               </div>
 
               <div>

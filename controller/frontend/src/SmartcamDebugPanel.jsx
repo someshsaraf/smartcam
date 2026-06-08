@@ -240,6 +240,14 @@ export function SmartcamDebugPanel({
                                 ).
                               </p>
                             )}
+                            {h.rtsp_url && String(h.rtsp_url).includes("CHANGE_ME") ? (
+                              <p className="text-[10px] text-amber-300 mt-2 leading-snug border-t border-amber-500/30 pt-2">
+                                <strong>Placeholder:</strong> URL still contains sample{" "}
+                                <span className="font-mono">CHANGE_ME</span>. Open{" "}
+                                <strong>Manage → camera settings</strong>, set &quot;Camera RTSP password&quot; or
+                                edit the URL, then Save.
+                              </p>
+                            ) : null}
                           </div>
                           <dl className="space-y-0.5 text-[10px] text-gray-300">
                             <div className="grid grid-cols-[6.5rem_1fr] gap-1">
