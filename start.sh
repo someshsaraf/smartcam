@@ -46,6 +46,7 @@ Environment:
   SMARTCAM_UI_PORT      Controller UI  (default 5173)
   SMARTCAM_EDGE_PORT    Edge agent HTTP (default 8080)
   CONTROLLER_MEDIAMTX_BIN  Optional path to mediamtx binary (else PATH or backend/bin/mediamtx)
+  SMARTCAM_MEDIAMTX_RTSP_TRANSPORT  RTSP pull transport for generated paths: tcp (default), automatic, udp, multicast
 
 Examples:
   ./start.sh controller --install

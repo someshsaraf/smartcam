@@ -371,6 +371,8 @@ def _onvif_main_rtsp_from_xaddrs(
         if uri:
             return uri, None, meta
         last_err = err or last_err
+    tried = ", ".join(f"{h}:{p}(tls={t})" for h, p, t in endpoints)
+    logger.info("[discover] ONVIF failed after trying [%s]: %s", tried, last_err)
     return None, last_err, merged_meta
 
 
