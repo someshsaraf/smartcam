@@ -10,6 +10,7 @@ numpy>=1.26
 opencv-python-headless>=4.8
 
 httpx>=0.27
+onvif-zeep>=0.2.12
 paho-mqtt>=2.0
 PyYAML>=6.0
 zeroconf>=0.130

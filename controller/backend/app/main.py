@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 import httpx
 
 from . import camera_store
+from .camera_discovery import discover_vigilance_edges, run_camera_discovery
 from .detections_hub import get_detections_hub
 from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
 from .manual_recording import (
@@ -326,7 +327,25 @@ def recordings_sync() -> Dict[str, str]:
 
 @app.get("/detect/edges")
 def detect_edges() -> List[Any]:
-    return []
+    """mDNS browse for Pi edge agents (same entries as ``devices`` where ``kind`` == ``edge``)."""
+    try:
+        return discover_vigilance_edges(browse_sec=4.0)
+    except Exception as e:
+        logger.warning("[detect/edges] %s", e)
+        return []
+
+
+@app.post("/cameras/discover")
+def discover_cameras(body: Optional[Dict[str, Any]] = Body(None)) -> Dict[str, Any]:
+    """
+    ONVIF WS-Discovery + stream URI (VIGI / ONVIF cameras), plus mDNS for Vigilance edge agents.
+
+    Optional JSON body: ``username``, ``password``, ``timeout_seconds``, ``scan_onvif``, ``scan_edges``.
+    Password is required on most cameras to resolve RTSP URLs; omit or empty to list devices only.
+    """
+    if body is not None and not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected JSON object")
+    return run_camera_discovery(body if isinstance(body, dict) else {})
 
 
 @app.get("/cameras/{camera_id}/recordings/manual/status")

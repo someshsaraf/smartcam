@@ -2640,12 +2640,47 @@ export default function App() {
     setDetecting(true);
     setDiscoveredEdges([]);
     try {
-      const edgesRes = await fetch(`${API}/detect/edges`);
-      if (edgesRes.ok) {
-        setDiscoveredEdges(await edgesRes.json());
-      } else {
-        setDiscoveredEdges([]);
+      const user = window.prompt("ONVIF username (Cancel aborts discovery)", "admin");
+      if (user === null) {
+        return;
       }
+      let pass = window.prompt(
+        "ONVIF password — leave empty to list cameras without resolving RTSP. Cancel uses empty password.",
+        "",
+      );
+      if (pass === null) {
+        pass = "";
+      }
+      const res = await fetch(`${API}/cameras/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: String(user).trim() || "admin",
+          password: pass,
+          timeout_seconds: 12,
+          scan_onvif: true,
+          scan_edges: true,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const d = err.detail;
+        const msg =
+          typeof d === "string" ? d : d != null ? JSON.stringify(d) : `Discovery failed (${res.status})`;
+        window.alert(msg);
+        return;
+      }
+      const j = await res.json();
+      if (j.disabled && j.message) {
+        window.alert(j.message);
+        return;
+      }
+      setDiscoveredEdges(Array.isArray(j.devices) ? j.devices : []);
+      if (Array.isArray(j.errors) && j.errors.length) {
+        console.warn("[discover]", j.errors);
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
     } finally {
       setDetecting(false);
     }
@@ -3182,9 +3217,13 @@ export default function App() {
                 {discoveredEdges.length > 0 ? (
                   <div className="mb-4 grid gap-2 sm:grid-cols-2">
                     {discoveredEdges.map((e, i) => (
-                      <div key={`${e.edge_base_url}-${i}`} className="dashboard-card p-3 text-xs flex justify-between gap-2">
-                        <span className="truncate font-medium">{e.name}</span>
-                        <button type="button" onClick={() => addDiscovered(e)} className="dashboard-btn-primary text-[11px] !py-1">Add</button>
+                      <div key={`${e.kind || "dev"}-${e.edge_base_url || ""}-${e.host || ""}-${i}`} className="dashboard-card p-3 text-xs flex justify-between gap-2 items-center">
+                        <span className="truncate min-w-0">
+                          <span className="text-[9px] uppercase text-gray-500 mr-1">{e.kind === "edge" ? "Edge" : "ONVIF"}</span>
+                          <span className="font-medium">{e.name}</span>
+                          {e.incomplete ? <span className="text-amber-400/90 ml-1">(incomplete)</span> : null}
+                        </span>
+                        <button type="button" onClick={() => addDiscovered(e)} className="dashboard-btn-primary text-[11px] !py-1 shrink-0">Add</button>
                       </div>
                     ))}
                   </div>

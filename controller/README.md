@@ -6,7 +6,7 @@ Expected layout:
 |------|---------|
 | `backend/` | FastAPI app (`uvicorn app.main:app`), `requirements.txt`, `.env` |
 
-**Backend entry:** `app/main.py` wires `GET /cameras` to `camera_store`, **manual recording** (local `ffmpeg` or **proxy** to Pi edge), **aggregated `GET /recordings`**, clip file/thumbnail routes, stubs **`/cameras/{id}/events`**, runs **OpenCV MobileNet-SSD** person detection and **`/ws/detections`**. **Hailo** is optional later (see [`../docs/HAILO_YOLOV8N_SMARTCAM.md`](../docs/HAILO_YOLOV8N_SMARTCAM.md)). Repo-root **`./start.sh controller`** starts **MediaMTX** before uvicorn when `mediamtx` is available.
+**Backend entry:** `app/main.py` wires `GET /cameras` to `camera_store`, **manual recording** (local `ffmpeg` or **proxy** to Pi edge), **aggregated `GET /recordings`**, clip file/thumbnail routes, stubs **`/cameras/{id}/events`**, runs **OpenCV MobileNet-SSD** person detection and **`/ws/detections`**. **`POST /cameras/discover`** runs **ONVIF WS-Discovery** + **GetStreamUri** (VIGI / ONVIF LAN cameras) and **mDNS** for Pi edge agents (`app/camera_discovery.py`). **Hailo** is optional later (see [`../docs/HAILO_YOLOV8N_SMARTCAM.md`](../docs/HAILO_YOLOV8N_SMARTCAM.md)). Repo-root **`./start.sh controller`** starts **MediaMTX** before uvicorn when `mediamtx` is available.
 
 | `frontend/` | React + Vite dashboard (`package.json`, `npm run dev`) |
 | `shared/` | Optional Python package path added to `PYTHONPATH` when present |
