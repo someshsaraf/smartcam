@@ -1959,7 +1959,14 @@ function LiveTile({
       if (!preferWebRtcLive()) {
         const extra =
           detail && String(detail).trim() ? ` — ${String(detail).trim().slice(0, 220)}` : "";
-        setStreamError(`HLS playback failed${extra}`);
+        let hint = "";
+        if (/manifestLoadError|404|not found/i.test(String(detail))) {
+          hint =
+            " If the manifest returns 404, the controller now regenerates MediaMTX YAML when you save the camera; " +
+            "restart ./start.sh controller (or the mediamtx process) once if the file watcher did not pick it up. " +
+            "Confirm MediaMTX logs show a successful RTSP pull (not 401).";
+        }
+        setStreamError(`HLS playback failed${extra}${hint}`);
         console.warn("[SmartCam HLS]", cam.id, detail || "(no detail)");
         return;
       }

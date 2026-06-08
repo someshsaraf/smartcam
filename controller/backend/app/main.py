@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 import httpx
 
-from . import camera_store
+from . import camera_store, mediamtx_yaml_sync
 from .camera_discovery import discover_vigilance_edges, run_camera_discovery
 from .detections_hub import get_detections_hub
 from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
@@ -258,7 +258,9 @@ def create_camera(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             row[k] = body[k]
     camera_store.add_camera(row)
     camera_store.persist_cameras_to_json()
-    return _serialize_camera(camera_store.get_camera(cid) or row)
+    cam_row = dict(camera_store.get_camera(cid) or row)
+    mediamtx_yaml_sync.sync_after_camera_mutation(cam_row)
+    return _serialize_camera(cam_row)
 
 
 @app.delete("/cameras/{camera_id}")
@@ -267,6 +269,7 @@ def delete_camera(camera_id: int) -> Dict[str, str]:
         raise HTTPException(status_code=404, detail="Camera not found")
     camera_store.remove_camera(camera_id)
     camera_store.persist_cameras_to_json()
+    mediamtx_yaml_sync.sync_after_camera_mutation(None)
     return {"status": "deleted"}
 
 
@@ -282,8 +285,10 @@ def patch_camera(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, 
     if updates:
         camera_store.update_camera(camera_id, updates)
         camera_store.persist_cameras_to_json()
-    cam = camera_store.get_camera(camera_id)
-    return _serialize_camera(dict(cam or {}))
+    cam = dict(camera_store.get_camera(camera_id) or {})
+    if updates:
+        mediamtx_yaml_sync.sync_after_camera_mutation(cam)
+    return _serialize_camera(cam)
 
 
 @app.get("/cameras/{camera_id}/settings")
@@ -597,6 +602,8 @@ def stream_health(
     lines = [
         "HLS: GET /cameras/{id}/hls/index.m3u8 → 307 to MediaMTX (:8888). "
         "Set SMARTCAM_HLS_ORIGIN if the HLS host differs from the API host.",
+        "Saving a camera (name/URL/mediamtx_path) regenerates data/mediamtx.generated.yml and tries to push the path to MediaMTX (:9997); "
+        "HLS manifest 404 usually means MediaMTX has no path yet or RTSP pull failed — check mediamtx logs.",
     ]
     if person_detection_enabled() and ssd:
         lines.append(
