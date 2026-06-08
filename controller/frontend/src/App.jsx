@@ -1806,6 +1806,10 @@ function LiveTile({
   const isHeroShell = layout === "heroShell";
   const isThumb = layout === "thumb";
   const heroLayout = (isHero || isHeroShell) && !isThumb;
+  const showCenterStreamDebug =
+    streamDebug &&
+    (!isThumb || streamError || Boolean(edgeHint)) &&
+    (streamError || showStreamDebugUrls());
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -1833,15 +1837,30 @@ function LiveTile({
         const body = r.ok ? await r.json() : null;
         if (cancelled) return;
         if (!r.ok) {
-          setStreamDebug({
+          const err = {
             _error: r.status === 404 ? "camera not in API registry (stream_health 404)" : `stream_health HTTP ${r.status}`,
-          });
+          };
+          setStreamDebug(err);
+          console.warn("[SmartCam stream_health]", cam.id, err._error);
           return;
         }
-        setStreamDebug(body && typeof body === "object" ? body : null);
+        const dbg = body && typeof body === "object" ? body : null;
+        setStreamDebug(dbg);
+        if (dbg) {
+          console.warn("[SmartCam stream_health]", cam.id, {
+            mediamtx_path: dbg.mediamtx_path,
+            rtsp_url_redacted: dbg.rtsp_url_redacted,
+            hls_api_playlist_url: dbg.hls_api_playlist_url,
+            hls_mediamtx_manifest_url: dbg.hls_mediamtx_manifest_url,
+            rtsp_has_userinfo: dbg.rtsp_has_userinfo,
+            warnings: dbg.warnings,
+          });
+        }
       } catch (e) {
         if (!cancelled) {
-          setStreamDebug({ _error: e instanceof Error ? e.message : "stream_health fetch failed" });
+          const err = { _error: e instanceof Error ? e.message : "stream_health fetch failed" };
+          setStreamDebug(err);
+          console.warn("[SmartCam stream_health]", cam.id, err._error);
         }
       }
     })();
@@ -1912,10 +1931,13 @@ function LiveTile({
     let cancelled = false;
     let triedDirectHls = false;
 
-    const failToWebRtc = () => {
+    const failToWebRtc = (detail) => {
       if (cancelled) return;
       if (!preferWebRtcLive()) {
-        setStreamError("HLS playback failed.");
+        const extra =
+          detail && String(detail).trim() ? ` — ${String(detail).trim().slice(0, 220)}` : "";
+        setStreamError(`HLS playback failed${extra}`);
+        console.warn("[SmartCam HLS]", cam.id, detail || "(no detail)");
         return;
       }
       setStreamError("");
@@ -1938,7 +1960,15 @@ function LiveTile({
         setHlsUrl(hlsDirectUrl);
         return;
       }
-      failToWebRtc();
+      const ve = video.error;
+      let msg = "video element error";
+      if (ve) {
+        const parts = [];
+        if (ve.message) parts.push(ve.message);
+        if (typeof ve.code === "number") parts.push(`code=${ve.code}`);
+        if (parts.length) msg = parts.join(" ");
+      }
+      failToWebRtc(msg);
     };
 
     const onPlaying = () => {
@@ -1992,7 +2022,10 @@ function LiveTile({
           return;
         }
         hls?.destroy();
-        failToWebRtc();
+        const detail = [data.type, data.details, data.error?.message]
+          .filter(Boolean)
+          .join(" — ");
+        failToWebRtc(detail || "fatal HLS error");
       });
     } else if (canPlayNativeHls(video)) {
       hlsRef.current = null;
@@ -2201,6 +2234,14 @@ function LiveTile({
                   </p>
                 </div>
               ) : null}
+              {showCenterStreamDebug && useWebRtc ? (
+                <div className="pointer-events-none absolute left-1 right-1 top-[12%] z-[35] max-h-[48%] overflow-y-auto rounded-md bg-black/88 border border-cyan-500/35 p-2 text-left shadow-xl backdrop-blur-sm">
+                  <p className="text-[9px] text-cyan-300/95 uppercase tracking-wide mb-1 font-semibold">
+                    Stream debug (WebRTC — see Console)
+                  </p>
+                  <LiveTileStreamDebug streamDebug={streamDebug} />
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="relative w-full h-full min-h-[140px] bg-black">
@@ -2219,20 +2260,23 @@ function LiveTile({
                 aria-hidden="true"
               />
               {streamError ? (
-                <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/85 overflow-y-auto">
-                  <p className="text-[12px] text-amber-200 font-medium px-2">{streamError}</p>
-                  <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-relaxed px-2">
+                <div className="pointer-events-none absolute inset-0 z-[25] flex flex-col items-center justify-start gap-2 overflow-y-auto bg-black/90 pt-16 pb-28 px-3 text-center">
+                  <p className="text-[12px] text-amber-200 font-medium px-2 shrink-0">{streamError}</p>
+                  <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-relaxed px-2 shrink-0">
                     HLS: open{" "}
                     <span className="font-mono text-gray-300 break-all text-[9px]">{hlsUrl}</span> in a
                     browser tab. If you see HTTP 503, this build has no ingest — use the full controller
                     with MediaMTX. Otherwise check path <span className="font-mono">cam{cam.id}</span> vs{" "}
-                    <span className="font-mono">mediamtx.generated.yml</span>.
+                    <span className="font-mono">mediamtx.generated.yml</span>. Open DevTools → Console for{" "}
+                    <span className="font-mono text-gray-300">[SmartCam stream_health]</span> lines.
                   </p>
                   <LiveTileStreamDebug streamDebug={streamDebug} />
                 </div>
-              ) : showStreamDebugUrls() && !useWebRtc ? (
-                <div className="pointer-events-none absolute bottom-10 left-1 right-1 z-[11] max-h-[28%] overflow-y-auto rounded bg-black/70 border border-white/10 p-1.5 text-left">
-                  <p className="text-[9px] text-gray-500 uppercase tracking-wide mb-0.5">Stream debug</p>
+              ) : showCenterStreamDebug && !useWebRtc ? (
+                <div className="pointer-events-none absolute left-1 right-1 top-[12%] z-[25] max-h-[50%] overflow-y-auto rounded-md bg-black/85 border border-amber-500/40 p-2 text-left shadow-xl backdrop-blur-sm">
+                  <p className="text-[9px] text-amber-400/95 uppercase tracking-wide mb-1 font-semibold">
+                    Stream debug (check Console too)
+                  </p>
                   <LiveTileStreamDebug streamDebug={streamDebug} />
                 </div>
               ) : null}

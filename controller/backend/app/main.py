@@ -613,6 +613,16 @@ def stream_health(camera_id: int, request: Request, probe_rtsp: bool = True) -> 
     if os.environ.get("SMARTCAM_DEBUG_FULL_RTSP", "").strip().lower() in ("1", "true", "yes"):
         out["rtsp_url"] = ru
         out["_debug_note"] = "SMARTCAM_DEBUG_FULL_RTSP is set — rtsp_url includes credentials; unset in production."
+    if os.environ.get("SMARTCAM_LOG_STREAM_HEALTH", "").strip().lower() in ("1", "true", "yes"):
+        logger.info(
+            "stream_health camera_id=%s mediamtx_path=%s rtsp_redacted=%s hls_api=%s hls_mtx=%s warnings=%s",
+            camera_id,
+            path_key,
+            out.get("rtsp_url_redacted"),
+            hls_api_playlist,
+            hls_mediamtx_manifest,
+            warnings,
+        )
     return out
 
 

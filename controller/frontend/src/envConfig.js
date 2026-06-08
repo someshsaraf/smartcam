@@ -36,9 +36,20 @@ function baseFromApi(port) {
 
 export const API = resolveApiUrl();
 
-/** When true, live tiles show RTSP/HLS debug URLs from `GET /cameras/{id}/stream_health` under the video. */
+/**
+ * When true, live tiles show RTSP/HLS debug from `GET /cameras/{id}/stream_health` (top/center of tile).
+ * Default on; set `VITE_HIDE_STREAM_DEBUG=1` to hide when playback is healthy (errors still show debug).
+ */
 export function showStreamDebugUrls() {
-  return String(import.meta.env.VITE_SHOW_STREAM_DEBUG || "").trim() === "1";
+  const hide = String(import.meta.env.VITE_HIDE_STREAM_DEBUG || "")
+    .trim()
+    .toLowerCase();
+  if (hide === "1" || hide === "true" || hide === "yes" || hide === "on") {
+    return false;
+  }
+  const legacy = String(import.meta.env.VITE_SHOW_STREAM_DEBUG || "").trim();
+  if (legacy === "0") return false;
+  return true;
 }
 
 export const MEDIAMTX_BASE = trimUrl(
