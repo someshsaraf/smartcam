@@ -635,7 +635,15 @@ def hls_playlist_redirect(camera_id: int, request: Request) -> RedirectResponse:
     """Redirect to MediaMTX so hls.js can use same-origin API URL first, then follow to :8888."""
     row = camera_store.get_camera(camera_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Camera id {camera_id} is not in this controller's registry "
+                "(in-memory unless SMARTCAM_CAMERAS_JSON is set). "
+                "Re-add the camera on Devices or reload cameras.json; "
+                "a stale UI tab can still request an old id after restart."
+            ),
+        )
     cam = dict(row)
     path = mediamtx_path_key(cam)
     target = f"{_hls_public_base(request)}/{path}/index.m3u8"
