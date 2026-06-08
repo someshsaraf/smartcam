@@ -1,7 +1,7 @@
 """
 SmartCam controller API: cameras from `camera_store`, MediaMTX HLS redirect,
-OpenCV person detection → `/ws/detections`, manual RTSP recording (ffmpeg) or
-proxy to Pi edge, and aggregated recordings listing + file download.
+OpenCV person detection → `/ws/detections`, manual RTSP recording (ffmpeg on-controller
+or proxy to Pi edge when the stream host matches the edge), and aggregated recordings listing + file download.
 
 Run from `controller/backend` with:
   export PYTHONPATH="$(pwd)/../shared:$(pwd)"   # or ../shared only if present
@@ -11,10 +11,13 @@ Run from `controller/backend` with:
 from __future__ import annotations
 
 import asyncio
+import errno
+import logging
 import os
 import threading
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,7 +35,7 @@ from .manual_recording import (
     start_manual_local,
     stop_manual_local,
 )
-from .mediamtx_paths import mediamtx_path_key
+from .mediamtx_paths import mediamtx_path_key, rtsp_url
 from .opencv_person_detector import person_detector_diagnostics
 from .person_rtsp_supervisor import (
     get_supervisor_thread,
@@ -85,6 +88,70 @@ def _camera_and_edge(camera_id: int) -> tuple[Dict[str, Any], str | None]:
     if u.startswith(("http://", "https://")):
         return d, u
     return d, None
+
+
+logger = logging.getLogger(__name__)
+
+
+def _edge_connect_failed(exc: BaseException) -> bool:
+    """True when the edge URL could not be reached (e.g. ECONNREFUSED), not HTTP errors."""
+    if isinstance(exc, httpx.ConnectError):
+        return True
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, OSError) and getattr(cur, "errno", None) == errno.ECONNREFUSED:
+            return True
+        cur = cur.__cause__ if cur.__cause__ is not None else cur.__context__
+    return False
+
+
+def _edge_unreachable_detail(edge: str, exc: Exception) -> str:
+    return (
+        f"Cannot reach edge at {edge}: {exc!s}. "
+        "Start the edge agent, fix edge_base_url or the network, or clear edge_base_url "
+        "to record on the controller only (requires ffmpeg and a camera RTSP URL)."
+    )
+
+
+def _has_rtsp_for_local(cam: Dict[str, Any]) -> bool:
+    u = rtsp_url(cam).strip()
+    return u.startswith(("rtsp://", "rtsps://"))
+
+
+def _url_hostname(u: str) -> str | None:
+    t = (u or "").strip()
+    if not t:
+        return None
+    try:
+        h = urlparse(t).hostname
+        return str(h).strip().lower() if h else None
+    except Exception:
+        return None
+
+
+def _manual_proxy_to_edge(cam: Dict[str, Any], edge: str) -> bool:
+    """
+    When edge_base_url is set, normally manual start/stop is proxied to the edge agent.
+
+    If the camera row's RTSP URL points at a *different* host than the edge (typical LAN
+    commercial camera such as VIGI while edge_base_url is metadata for another Pi), run
+    manual capture on the controller with ffmpeg instead of calling the edge.
+
+    If there is no RTSP URL on the row, keep proxying so the edge uses its own stream.
+    Loopback RTSP hosts always proxy to edge when an edge URL exists (edge-local streams).
+    """
+    rtsp = rtsp_url(cam).strip()
+    if not rtsp.startswith(("rtsp://", "rtsps://")):
+        return True
+    rtsp_h = _url_hostname(rtsp)
+    edge_h = _url_hostname(edge)
+    if not rtsp_h or not edge_h:
+        return True
+    if rtsp_h in ("127.0.0.1", "localhost", "::1"):
+        return True
+    return rtsp_h == edge_h
 
 
 def _httpx_error_detail(r: httpx.Response) -> str:
@@ -264,14 +331,20 @@ def detect_edges() -> List[Any]:
 
 @app.get("/cameras/{camera_id}/recordings/manual/status")
 def manual_status(camera_id: int) -> Dict[str, Any]:
-    if camera_store.get_camera(camera_id) is None:
+    row = camera_store.get_camera(camera_id)
+    if row is None:
         raise HTTPException(status_code=404, detail="Camera not found")
+    cam = dict(row)
     _, edge = _camera_and_edge(camera_id)
-    if edge:
+    if edge and _manual_proxy_to_edge(cam, edge):
         try:
             r = httpx.get(f"{edge}/recordings/manual/status", timeout=10.0)
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
+            if _edge_connect_failed(e):
+                return manual_status_local(int(camera_id))
+            raise HTTPException(
+                status_code=502, detail=_edge_unreachable_detail(edge, e)
+            ) from e
         if r.status_code != 200:
             raise HTTPException(status_code=r.status_code, detail=_httpx_error_detail(r))
         try:
@@ -291,32 +364,46 @@ def manual_record(camera_id: int, path: str) -> Dict[str, Any]:
     cam = dict(row)
     settings = _effective_settings(int(camera_id))
     _, edge = _camera_and_edge(camera_id)
-    if edge:
+    proxy_edge = bool(edge) and _manual_proxy_to_edge(cam, edge)
+    use_local = not proxy_edge
+    if proxy_edge:
         url = f"{edge}/recordings/manual/{path}"
         try:
             r = httpx.post(url, timeout=120.0)
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
-        if r.status_code >= 400:
-            raise HTTPException(
-                status_code=r.status_code,
-                detail=_httpx_error_detail(r),
-            )
+            if _has_rtsp_for_local(cam) and _edge_connect_failed(e):
+                logger.warning(
+                    "edge %s unreachable for manual %s; using controller-local ffmpeg",
+                    edge,
+                    path,
+                )
+                use_local = True
+            else:
+                raise HTTPException(
+                    status_code=502, detail=_edge_unreachable_detail(edge, e)
+                ) from e
+        else:
+            if r.status_code >= 400:
+                raise HTTPException(
+                    status_code=r.status_code,
+                    detail=_httpx_error_detail(r),
+                )
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": True, "active": path == "start"}
+    if use_local:
         try:
-            return r.json()
-        except Exception:
-            return {"ok": True, "active": path == "start"}
-    try:
-        if path == "start":
-            return start_manual_local(
-                int(camera_id),
-                cam,
-                recording_mode=str(settings.get("recording_mode", "motion")),
-                flip_180=bool(settings.get("flip_180")),
-            )
-        return stop_manual_local(int(camera_id))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+            if path == "start":
+                return start_manual_local(
+                    int(camera_id),
+                    cam,
+                    recording_mode=str(settings.get("recording_mode", "motion")),
+                    flip_180=bool(settings.get("flip_180")),
+                )
+            return stop_manual_local(int(camera_id))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/recordings/{camera_id}/files/{filename}")

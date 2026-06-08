@@ -165,6 +165,26 @@ function cameraRtspUrl(cam) {
   );
 }
 
+/**
+ * Matches controller `main._manual_proxy_to_edge`: manual start/stop goes to the edge
+ * only when the stream URL host matches the edge URL host (or RTSP is missing / loopback).
+ */
+function manualRecordingProxiesToEdge(cam) {
+  const edge = cam && String(cam.edge_base_url || "").trim();
+  if (!edge) return false;
+  const rtsp = cameraRtspUrl(cam);
+  if (!rtsp || !/^rtsps?:\/\//i.test(rtsp)) return true;
+  try {
+    const rh = new URL(rtsp).hostname.toLowerCase();
+    const eh = new URL(edge).hostname.toLowerCase();
+    if (!rh || !eh) return true;
+    if (rh === "127.0.0.1" || rh === "localhost" || rh === "::1") return true;
+    return rh === eh;
+  } catch {
+    return true;
+  }
+}
+
 function streamPathForCamera(cam) {
   if (cam.mediamtx_path && String(cam.mediamtx_path).trim()) {
     return String(cam.mediamtx_path).trim().replace(/^\//, "");
@@ -3053,7 +3073,11 @@ export default function App() {
             activeCameraId={effectiveActiveCameraId}
             onSelectCamera={setActiveCameraId}
             onRecord={mobileLiveCam ? handleLiveRecord : undefined}
-            recordDisabled={!mobileLiveCam?.edge_base_url}
+            recordDisabled={
+              !mobileLiveCam ||
+              (mobileLiveCam.settings?.recording_mode || "motion") !== "off" ||
+              (!cameraRtspUrl(mobileLiveCam) && !String(mobileLiveCam.edge_base_url || "").trim())
+            }
             activityItems={liveActivityItems}
             liveVideo={
               liveCams.length === 0 ? (
@@ -3323,10 +3347,14 @@ export default function App() {
                   <p className="text-[10px] text-amber-400/90 mt-1">
                     Edge {settingsCam.edge_base_url} · MQTT id{" "}
                     {settingsCam.mqtt_camera_id || String(settingsCam.id)}
+                    {manualRecordingProxiesToEdge(settingsCam)
+                      ? " · Manual Rec is sent to the edge."
+                      : " · Manual Rec stays on the controller (RTSP host ≠ edge host, e.g. VIGI)."}
                   </p>
                 ) : (
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Local recordings on controller (no edge_base_url).
+                    Manual Rec uses ffmpeg on this Pi (set edge_base_url to proxy to a Pi edge
+                    when the stream host matches that edge).
                   </p>
                 )}
               </div>

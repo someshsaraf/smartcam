@@ -1,8 +1,10 @@
 """
 Per-camera manual RTSP → MP4 recording on the controller (ffmpeg).
 
-When ``edge_base_url`` is set on a camera, ``main.py`` proxies manual start/stop to the
-edge agent instead — this module handles **controller-local** files only.
+When ``edge_base_url`` is set and the stream host matches the edge host, ``main.py``
+proxies manual start/stop to the edge agent. If the RTSP URL points at another host
+(e.g. a VIGI camera on the LAN while ``edge_base_url`` refers to a Pi), recording stays
+on the controller using this module.
 
 Concurrency: one active manual session per camera_id (global lock).
 """

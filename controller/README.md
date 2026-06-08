@@ -29,8 +29,8 @@ From repo root, `./start.sh controller` does the same: **MediaMTX** (if installe
 
 1. Set **recording mode to Off** in camera settings and **Save** — settings are written to **`cameras.json`** (see `SMARTCAM_CAMERAS_JSON` / `backend/data/cameras.json`) so **`recording_mode` survives API restarts**.
 2. **Pi edge:** the edge agent must **also** have recording mode **Off** for its own recorder, or manual start returns **400** (proxy surfaces that message in the browser).
-3. **VIGI / RTSP-only:** the controller runs **`ffmpeg`** and writes **`backend/data/recordings/{camera_id}/manual_*.mp4`**. Install **`ffmpeg`** on the Pi (`apt install ffmpeg`).
-4. **Pi edge attached:** set **`edge_base_url`** on the camera; manual start/stop is **proxied** to the edge agent’s **`/recordings/manual/*`** (files stay on the Pi 4).
+3. **VIGI / LAN RTSP camera:** the controller runs **`ffmpeg`** against the camera’s **RTSP URL** and writes **`backend/data/recordings/{camera_id}/manual_*.mp4`**. Install **`ffmpeg`** on the Pi (`apt install ffmpeg`). If **`edge_base_url`** is also set (e.g. for MQTT) but the RTSP host **differs** from the edge URL’s host, manual recording **stays on the controller** so a commercial camera is not blocked by an offline edge.
+4. **Pi edge as recorder:** set **`edge_base_url`** and use an RTSP URL whose **host matches** the edge’s host (or leave RTSP empty on the row so the edge uses its own stream). Manual start/stop is **proxied** to **`/recordings/manual/*`** on the edge (clips on the Pi 4). If the edge is unreachable, the API may fall back to controller-local **ffmpeg** when the row has an **`rtsp://`** URL.
 5. **`GET /recordings`** merges controller-local files and each edge’s catalog. Playback uses **`GET /recordings/{id}/files/{name}`** (local `FileResponse`, or **307** to the edge when the clip lives on the edge).
 
 See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and Hailo.
