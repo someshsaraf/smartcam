@@ -275,6 +275,35 @@ def _collect_onvif_endpoints(xaddrs: List[str]) -> List[Tuple[str, int, bool]]:
     return out
 
 
+def _lan_onvif_fallback_endpoints(
+    device_host: str,
+    existing: List[Tuple[str, int, bool]],
+) -> List[Tuple[str, int, bool]]:
+    """
+    TP-Link / VIGI often advertise ONVIF only on :2020 in WS-Discovery, but the same
+    device also answers on :80 or :443. Try those if not already in ``existing``.
+    """
+    host = (device_host or "").strip()
+    if not host:
+        return []
+    if not _is_private_or_loopback_host(host.split("%")[0]):
+        return []
+    seen = {(h.lower(), p, t) for h, p, t in existing}
+    extras: List[Tuple[str, int, bool]] = []
+    for port, use_tls in (
+        (80, False),
+        (8080, False),
+        (8888, False),
+        (443, True),
+    ):
+        key = (host.lower(), port, use_tls)
+        if key in seen:
+            continue
+        seen.add(key)
+        extras.append((host, port, use_tls))
+    return extras
+
+
 def _onvif_main_rtsp_uri(
     host: str,
     port: int,
@@ -356,9 +385,21 @@ def _onvif_main_rtsp_from_xaddrs(
     xaddrs: List[str],
     username: str,
     password: str,
+    *,
+    device_host: str = "",
 ) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
-    """Try each ONVIF HTTP(S) endpoint until one yields a stream URI."""
+    """
+    Try each ONVIF HTTP(S) endpoint until one yields a stream URI.
+
+    ``device_host`` is the camera LAN hostname/IP (from discovery); used to add
+    common TP-Link/VIGI ONVIF ports not always listed in XAddrs.
+    """
     endpoints = _collect_onvif_endpoints(xaddrs)
+    dh = (device_host or "").strip()
+    if not dh and endpoints:
+        dh = endpoints[0][0]
+    if dh:
+        endpoints = endpoints + _lan_onvif_fallback_endpoints(dh, endpoints)
     if not endpoints:
         return None, "no valid ONVIF HTTP(S) URLs in XAddrs", {}
     last_err = "no ONVIF endpoint responded"
@@ -381,14 +422,14 @@ def discover_onvif_cameras(
     username: str,
     password: str,
     ws_timeout_sec: float = 3.0,
-    per_device_timeout_sec: float = 4.0,
+    per_device_timeout_sec: float = 14.0,
     max_devices: int = 24,
 ) -> List[Dict[str, Any]]:
     """
     WS-Discovery then optional ONVIF GetStreamUri per device (needs password for most VIGI).
     """
     ws_timeout_sec = _clamp_timeout(ws_timeout_sec, 3.0, 0.5, 15.0)
-    per_device_timeout_sec = _clamp_timeout(per_device_timeout_sec, 4.0, 1.0, 20.0)
+    per_device_timeout_sec = _clamp_timeout(per_device_timeout_sec, 14.0, 6.0, 55.0)
     max_devices = max(1, min(64, int(max_devices)))
 
     raw = ws_discovery_probe(timeout_sec=ws_timeout_sec)[:max_devices]
@@ -428,6 +469,7 @@ def discover_onvif_cameras(
                     xaddrs,
                     username,
                     password,
+                    device_host=host,
                 )
                 result_holder["uri"] = uri
                 result_holder["err"] = err
@@ -584,7 +626,7 @@ def run_camera_discovery(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         }
 
     ws_t = min(8.0, max(1.5, total_timeout * 0.45))
-    per_dev = min(12.0, max(2.0, total_timeout * 0.35))
+    per_dev = min(45.0, max(12.0, total_timeout * 0.55))
     browse = min(12.0, max(2.0, total_timeout * 0.55))
 
     onvif_list: List[Dict[str, Any]] = []

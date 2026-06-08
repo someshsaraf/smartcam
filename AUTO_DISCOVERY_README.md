@@ -5,7 +5,7 @@ Implemented on the **controller** (Pi 5):
 | Mechanism | What it finds |
 |-----------|----------------|
 | **ONVIF WS-Discovery** (UDP multicast) | ONVIF cameras on the LAN (including TP-Link **VIGI** when ONVIF is enabled on the camera). |
-| **ONVIF GetStreamUri** | Main profile RTSP URL (requires correct **username/password** in the request body for most devices). |
+| **ONVIF GetStreamUri** | Main profile RTSP URL (requires correct **username/password** in the request body for most devices). If discovery only advertises **port 2020**, the controller also tries common TP-Link/VIGI ONVIF ports **80, 8080, 8888, and 443 (TLS)** on the same host. |
 | **mDNS** (`_vigilance-edge._tcp.local.`) | SmartCam **Pi edge** agents advertising HTTP API + optional RTSP in TXT. |
 
 ## API
