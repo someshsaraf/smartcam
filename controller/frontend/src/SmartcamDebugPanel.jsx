@@ -1,0 +1,246 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  API,
+  HLS_BASE,
+  MEDIAMTX_BASE,
+  WS_DETECTIONS,
+  WS_RECORDING,
+  preferNativeHlsPlayback,
+  preferWebRtcLive,
+  showStreamDebugUrls,
+} from "./envConfig";
+
+function envLine(label, value) {
+  return (
+    <div className="grid grid-cols-[7.5rem_1fr] gap-x-2 gap-y-0.5 text-[11px] leading-snug">
+      <span className="text-gray-500 shrink-0">{label}</span>
+      <span className="text-gray-200 break-all">{value === undefined || value === "" ? "—" : String(value)}</span>
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <section className="rounded-lg border border-white/[0.08] bg-black/30 p-2.5 space-y-1.5">
+      <h3 className="text-[10px] font-bold uppercase tracking-wider text-indigo-300/90">{title}</h3>
+      <div className="space-y-1">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * Full-screen overlay debug drawer: client URLs, session, WS, per-camera stream_health.
+ */
+export function SmartcamDebugPanel({
+  open,
+  onClose,
+  cameras = [],
+  camerasLoadError = "",
+  mainTab = "",
+  activeCameraId = null,
+  detectionWsOpen = false,
+  detectionSystem = null,
+}) {
+  const [healthById, setHealthById] = useState({});
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthUpdatedAt, setHealthUpdatedAt] = useState(null);
+
+  const refreshHealth = useCallback(async () => {
+    const list = Array.isArray(cameras) ? cameras : [];
+    if (list.length === 0) {
+      setHealthById({});
+      setHealthUpdatedAt(new Date().toISOString());
+      return;
+    }
+    setHealthLoading(true);
+    const next = {};
+    for (const c of list) {
+      if (!c || c.id === undefined || c.id === null) continue;
+      const id = Number(c.id);
+      if (!Number.isFinite(id)) continue;
+      try {
+        const r = await fetch(`${API}/cameras/${id}/stream_health?probe_rtsp=false`);
+        next[id] = r.ok ? await r.json() : { _error: `HTTP ${r.status}` };
+      } catch (e) {
+        next[id] = { _error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    setHealthById(next);
+    setHealthUpdatedAt(new Date().toISOString());
+    setHealthLoading(false);
+  }, [cameras]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    refreshHealth();
+    const t = setInterval(refreshHealth, 8000);
+    return () => clearInterval(t);
+  }, [open, refreshHealth]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const vite = import.meta.env;
+  const ds = detectionSystem && typeof detectionSystem === "object" ? detectionSystem : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-end sm:items-stretch sm:justify-end pointer-events-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="smartcam-debug-title"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        aria-label="Close debug panel"
+        onClick={onClose}
+      />
+      <div
+        className="relative z-[101] flex flex-col w-full sm:max-w-md sm:h-full max-h-[88dvh] sm:max-h-none rounded-t-2xl sm:rounded-none border border-white/10 bg-[#0c1018] shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 border-b border-white/10 bg-[#0a0e14]">
+          <h2 id="smartcam-debug-title" className="text-sm font-semibold text-white tracking-tight">
+            SmartCam debug
+          </h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => refreshHealth()}
+              disabled={healthLoading}
+              className="text-[11px] px-2 py-1 rounded-md border border-white/15 text-gray-200 hover:bg-white/10 disabled:opacity-40"
+            >
+              {healthLoading ? "…" : "Refresh health"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-[11px] px-2 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-500"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-3 text-left">
+          <Section title="Build & client">
+            {envLine("MODE", vite?.MODE)}
+            {envLine("VITE_API_URL (raw)", vite?.VITE_API_URL)}
+            {envLine("resolved API", API)}
+            {envLine("HLS_BASE", HLS_BASE)}
+            {envLine("MEDIAMTX_BASE", MEDIAMTX_BASE)}
+            {envLine("WS_RECORDING", WS_RECORDING)}
+            {envLine("WS_DETECTIONS", WS_DETECTIONS)}
+            {envLine("VITE_LIVE_WEBRTC", vite?.VITE_LIVE_WEBRTC)}
+            {envLine("preferWebRtcLive()", preferWebRtcLive() ? "true" : "false")}
+            {envLine("preferNativeHls()", preferNativeHlsPlayback() ? "true" : "false")}
+            {envLine("showStreamDebugUrls()", showStreamDebugUrls() ? "true" : "false")}
+          </Section>
+
+          <Section title="Session">
+            {envLine("mainTab", mainTab)}
+            {envLine("activeCameraId", activeCameraId ?? "—")}
+            {envLine("cameras count", cameras?.length ?? 0)}
+            {camerasLoadError ? (
+              <p className="text-[11px] text-amber-300 break-all whitespace-pre-wrap">{camerasLoadError}</p>
+            ) : null}
+          </Section>
+
+          <Section title="Detections WebSocket">
+            {envLine("connected", detectionWsOpen ? "yes" : "no")}
+            {ds ? (
+              <>
+                {envLine("backend", ds.backend)}
+                {envLine("person_pipeline", ds.person_pipeline)}
+                {envLine("inference_delay_ms", ds.inference_delay_ms)}
+                {envLine("person_detect_enabled", ds.person_detect_enabled)}
+                {envLine("opencv_ssd_ready", ds.opencv_ssd_ready)}
+                {envLine("hailo_ready", ds.hailo_ready)}
+                {envLine("hailo_error", ds.hailo_error)}
+              </>
+            ) : (
+              envLine("hello payload", "not received yet")
+            )}
+          </Section>
+
+          <Section title="Per-camera stream_health">
+            {healthUpdatedAt ? (
+              <p className="text-[10px] text-gray-500 mb-1">Updated {healthUpdatedAt}</p>
+            ) : null}
+            {(Array.isArray(cameras) ? cameras : []).length === 0 ? (
+              <p className="text-gray-500 text-[11px]">No cameras — add one on Devices.</p>
+            ) : (
+              <ul className="space-y-2">
+                {(Array.isArray(cameras) ? cameras : []).map((c) => {
+                  const id = Number(c?.id);
+                  if (!Number.isFinite(id)) return null;
+                  const h = healthById[id];
+                  return (
+                    <li key={id} className="rounded border border-white/[0.07] bg-black/25 p-2">
+                      <p className="text-[11px] font-semibold text-gray-100 mb-1">
+                        {c?.name || `Camera ${id}`}{" "}
+                        <span className="text-gray-500 font-normal">id={id}</span>
+                      </p>
+                      {!h ? (
+                        <span className="text-gray-500 text-[10px]">Loading…</span>
+                      ) : h._error ? (
+                        <span className="text-rose-300 text-[10px] break-all">{h._error}</span>
+                      ) : (
+                        <dl className="space-y-0.5 text-[10px] text-gray-300">
+                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                            <dt className="text-gray-500">mediamtx_path</dt>
+                            <dd className="break-all">{h.mediamtx_path ?? "—"}</dd>
+                          </div>
+                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                            <dt className="text-gray-500">rtsp_has_userinfo</dt>
+                            <dd>{h.rtsp_has_userinfo ? "true" : "false"}</dd>
+                          </div>
+                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                            <dt className="text-gray-500">rtsp (redacted)</dt>
+                            <dd className="break-all text-gray-200">{h.rtsp_url_redacted || "—"}</dd>
+                          </div>
+                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                            <dt className="text-gray-500">HLS via API</dt>
+                            <dd className="break-all text-cyan-200/90">{h.hls_api_playlist_url || "—"}</dd>
+                          </div>
+                          <div className="grid grid-cols-[6.5rem_1fr] gap-1">
+                            <dt className="text-gray-500">HLS MediaMTX</dt>
+                            <dd className="break-all text-cyan-200/90">{h.hls_mediamtx_manifest_url || "—"}</dd>
+                          </div>
+                          {Array.isArray(h.warnings) && h.warnings.length > 0 ? (
+                            <div className="mt-1 pt-1 border-t border-amber-500/20">
+                              <p className="text-amber-300/95 text-[10px] font-medium">Warnings</p>
+                              {h.warnings.map((w, i) => (
+                                <p key={i} className="text-amber-200/80 text-[10px] mt-0.5 break-words">
+                                  {w}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+                          {h.rtsp_url ? (
+                            <p className="text-rose-300/90 text-[10px] mt-1 break-all">
+                              Full rtsp (server SMARTCAM_DEBUG_FULL_RTSP): {h.rtsp_url}
+                            </p>
+                          ) : null}
+                        </dl>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Section>
+        </div>
+      </div>
+    </div>
+  );
+}

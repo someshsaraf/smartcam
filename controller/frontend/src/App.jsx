@@ -13,6 +13,7 @@ import {
   WS_RECORDING,
 } from "./envConfig";
 import { useOverlaySyncedDetections } from "./useOverlaySyncedDetections";
+import { SmartcamDebugPanel } from "./SmartcamDebugPanel";
 import { IconClose, MobilePageHeader } from "./mobileScreens";
 import {
   CameraInfoTable,
@@ -3526,6 +3527,35 @@ export default function App() {
           />
         ) : null}
       </VigilanceShell>
+
+      <button
+        type="button"
+        onClick={() => setShowDebugPanel((v) => !v)}
+        className={`fixed z-[95] bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-lg transition-colors ${
+          showDebugPanel
+            ? "border-indigo-400 bg-indigo-600 text-white"
+            : "border-white/20 bg-[#141a24]/95 text-gray-200 hover:bg-[#1a2230] backdrop-blur-sm"
+        }`}
+        aria-expanded={showDebugPanel}
+        aria-controls="smartcam-debug-panel"
+        title="Open SmartCam debug panel"
+      >
+        <span className="font-mono text-[10px] opacity-80">DBG</span>
+        Debug
+      </button>
+
+      <div id="smartcam-debug-panel">
+        <SmartcamDebugPanel
+          open={showDebugPanel}
+          onClose={() => setShowDebugPanel(false)}
+          cameras={cams}
+          camerasLoadError={camerasLoadError}
+          mainTab={mainTab}
+          activeCameraId={effectiveActiveCameraId}
+          detectionWsOpen={detectionWsOpen}
+          detectionSystem={detectionSystem}
+        />
+      </div>
 
       <RecordingPlayModal
         playing={playingClip}
