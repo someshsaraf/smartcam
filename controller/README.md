@@ -6,7 +6,7 @@ Expected layout:
 |------|---------|
 | `backend/` | FastAPI app (`uvicorn app.main:app`), `requirements.txt`, `.env` |
 
-**Backend entry:** `app/main.py` wires `GET /cameras` to `camera_store`, stubs most recording/event routes, starts **per-camera RTSP readers** that run **OpenCV MobileNet-SSD person detection** and broadcast **`/ws/detections`** (same message shape the React live tile expects). **Hailo** is optional later (see [`../docs/HAILO_YOLOV8N_SMARTCAM.md`](../docs/HAILO_YOLOV8N_SMARTCAM.md)); this tree uses CPU SSD by default. Repo-root **`./start.sh controller`** starts **MediaMTX** before uvicorn when `mediamtx` is available. If you merge a **full** controller `main.py` from another image, keep its inference routes or merge with this file.
+**Backend entry:** `app/main.py` wires `GET /cameras` to `camera_store`, **manual recording** (local `ffmpeg` or **proxy** to Pi edge), **aggregated `GET /recordings`**, clip file/thumbnail routes, stubs **`/cameras/{id}/events`**, runs **OpenCV MobileNet-SSD** person detection and **`/ws/detections`**. **Hailo** is optional later (see [`../docs/HAILO_YOLOV8N_SMARTCAM.md`](../docs/HAILO_YOLOV8N_SMARTCAM.md)). Repo-root **`./start.sh controller`** starts **MediaMTX** before uvicorn when `mediamtx` is available.
 
 | `frontend/` | React + Vite dashboard (`package.json`, `npm run dev`) |
 | `shared/` | Optional Python package path added to `PYTHONPATH` when present |
@@ -24,6 +24,14 @@ From repo root, `./start.sh controller` does the same: **MediaMTX** (if installe
 2. **`GET /detector/person/status`** — model paths, `model_load_ok`, and WebSocket client count.
 3. Env: **`SMARTCAM_PERSON_DETECT_ENABLED`** (default `1`), **`SMARTCAM_PERSON_DETECT_INTERVAL_MS`** (default `200`), **`SMARTCAM_PERSON_CONFIDENCE`**, **`SMARTCAM_MODEL_DIR`** / **`SMARTCAM_SSD_PROTO`** / **`SMARTCAM_SSD_WEIGHTS`** to override paths.
 4. Each camera with an **`rtsp://`** or **`rtsps://`** URL in `camera_store` gets a background reader; detections are pushed on **`/ws/detections`**. Add or remove cameras and the supervisor picks up changes within a few seconds (no API restart required). Restart the API after installing model files for the first time.
+
+### Manual recording (live tile **Rec**)
+
+1. Set **recording mode to Off** in camera settings and **Save** — settings are written to **`cameras.json`** (see `SMARTCAM_CAMERAS_JSON` / `backend/data/cameras.json`) so **`recording_mode` survives API restarts**.
+2. **Pi edge:** the edge agent must **also** have recording mode **Off** for its own recorder, or manual start returns **400** (proxy surfaces that message in the browser).
+3. **VIGI / RTSP-only:** the controller runs **`ffmpeg`** and writes **`backend/data/recordings/{camera_id}/manual_*.mp4`**. Install **`ffmpeg`** on the Pi (`apt install ffmpeg`).
+4. **Pi edge attached:** set **`edge_base_url`** on the camera; manual start/stop is **proxied** to the edge agent’s **`/recordings/manual/*`** (files stay on the Pi 4).
+5. **`GET /recordings`** merges controller-local files and each edge’s catalog. Playback uses **`GET /recordings/{id}/files/{name}`** (local `FileResponse`, or **307** to the edge when the clip lives on the edge).
 
 See [`../docs/SETUP_PI5.md`](../docs/SETUP_PI5.md) for Mosquitto, MediaMTX, and Hailo.
 

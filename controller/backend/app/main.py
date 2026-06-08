@@ -1,6 +1,7 @@
 """
 SmartCam controller API: cameras from `camera_store`, MediaMTX HLS redirect,
-OpenCV MobileNet-SSD person detection → `/ws/detections`, and stubbed recordings/events.
+OpenCV person detection → `/ws/detections`, manual RTSP recording (ffmpeg) or
+proxy to Pi edge, and aggregated recordings listing + file download.
 
 Run from `controller/backend` with:
   export PYTHONPATH="$(pwd)/../shared:$(pwd)"   # or ../shared only if present
@@ -17,10 +18,20 @@ from typing import Any, Dict, List
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
+
+import httpx
 
 from . import camera_store
 from .detections_hub import get_detections_hub
+from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
+from .manual_recording import (
+    manual_status_local,
+    recordings_dir_for,
+    resolve_recording_file,
+    start_manual_local,
+    stop_manual_local,
+)
 from .mediamtx_paths import mediamtx_path_key
 from .opencv_person_detector import person_detector_diagnostics
 from .person_rtsp_supervisor import (
@@ -28,6 +39,12 @@ from .person_rtsp_supervisor import (
     person_detection_enabled,
     start_person_detection_background,
 )
+from .recording_thumbnails import (
+    ensure_recording_thumbnail,
+    recording_thumbnail_path,
+    remove_recording_thumbnail,
+)
+from .recordings_catalog import list_merged_recordings
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "recording_mode": "motion",
@@ -37,14 +54,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "flip_180": False,
 }
 
-# Per-camera overrides (not persisted to disk in this minimal app).
-_settings_overrides: Dict[int, Dict[str, Any]] = {}
-
 
 def _serialize_camera(row: Dict[str, Any]) -> Dict[str, Any]:
-    cid = int(row["id"])
     out = dict(row)
-    merged = {**DEFAULT_SETTINGS, **(row.get("settings") or {}), **(_settings_overrides.get(cid, {}))}
+    merged = {**DEFAULT_SETTINGS, **(row.get("settings") or {})}
     out["settings"] = merged
     return out
 
@@ -54,6 +67,41 @@ def _next_camera_id() -> int:
     if not rows:
         return 0
     return max(int(c["id"]) for c in rows) + 1
+
+
+def _effective_settings(camera_id: int) -> Dict[str, Any]:
+    row = camera_store.get_camera(camera_id)
+    if row is None:
+        return dict(DEFAULT_SETTINGS)
+    return {**DEFAULT_SETTINGS, **(dict(row).get("settings") or {})}
+
+
+def _camera_and_edge(camera_id: int) -> tuple[Dict[str, Any], str | None]:
+    row = camera_store.get_camera(camera_id)
+    if row is None:
+        return {}, None
+    d = dict(row)
+    u = str(d.get("edge_base_url") or "").strip().rstrip("/")
+    if u.startswith(("http://", "https://")):
+        return d, u
+    return d, None
+
+
+def _httpx_error_detail(r: httpx.Response) -> str:
+    try:
+        data = r.json()
+    except Exception:
+        return ((r.text or "").strip() or f"HTTP {r.status_code}")[:4000]
+    if isinstance(data, dict):
+        d = data.get("detail")
+        if isinstance(d, str):
+            return d
+        if isinstance(d, list):
+            return str(d)
+        if d is not None:
+            return str(d)
+        return str(data)[:4000]
+    return str(data)[:4000]
 
 
 @asynccontextmanager
@@ -136,6 +184,7 @@ def create_camera(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         if k in body and body[k] is not None:
             row[k] = body[k]
     camera_store.add_camera(row)
+    camera_store.persist_cameras_to_json()
     return _serialize_camera(camera_store.get_camera(cid) or row)
 
 
@@ -144,7 +193,7 @@ def delete_camera(camera_id: int) -> Dict[str, str]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     camera_store.remove_camera(camera_id)
-    _settings_overrides.pop(int(camera_id), None)
+    camera_store.persist_cameras_to_json()
     return {"status": "deleted"}
 
 
@@ -159,6 +208,7 @@ def patch_camera(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, 
         updates["url"] = str(updates.pop("main_stream")).strip()
     if updates:
         camera_store.update_camera(camera_id, updates)
+        camera_store.persist_cameras_to_json()
     cam = camera_store.get_camera(camera_id)
     return _serialize_camera(dict(cam or {}))
 
@@ -167,18 +217,26 @@ def patch_camera(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, 
 def get_settings(camera_id: int) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return {**DEFAULT_SETTINGS, **(_settings_overrides.get(int(camera_id), {}))}
+    return _effective_settings(int(camera_id))
 
 
 @app.patch("/cameras/{camera_id}/settings")
 def patch_settings(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    prev = _settings_overrides.setdefault(int(camera_id), {})
+    row = dict(camera_store.get_camera(camera_id) or {})
+    cur = dict(row.get("settings") or {})
     for k in DEFAULT_SETTINGS:
         if k in body:
-            prev[k] = body[k]
-    return {**DEFAULT_SETTINGS, **prev}
+            cur[k] = body[k]
+    camera_store.update_camera(camera_id, {"settings": cur})
+    if not camera_store.persist_cameras_to_json():
+        raise HTTPException(
+            status_code=500,
+            detail="Settings updated in memory but could not write cameras.json "
+            "(check SMARTCAM_CAMERAS_JSON path and permissions).",
+        )
+    return _effective_settings(int(camera_id))
 
 
 @app.get("/cameras/{camera_id}/events")
@@ -190,11 +248,12 @@ def list_events(camera_id: int) -> Dict[str, Any]:
 
 @app.get("/recordings")
 def list_recordings(limit: int = 1000) -> Dict[str, Any]:
-    return {"recordings": []}
+    return {"recordings": list_merged_recordings(limit)}
 
 
 @app.post("/recordings/sync")
 def recordings_sync() -> Dict[str, str]:
+    """Catalog is built on demand; sync is a no-op for compatibility with the UI."""
     return {"status": "ok"}
 
 
@@ -204,19 +263,190 @@ def detect_edges() -> List[Any]:
 
 
 @app.get("/cameras/{camera_id}/recordings/manual/status")
-def manual_status(camera_id: int) -> Dict[str, bool]:
+def manual_status(camera_id: int) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return {"active": False}
+    _, edge = _camera_and_edge(camera_id)
+    if edge:
+        try:
+            r = httpx.get(f"{edge}/recordings/manual/status", timeout=10.0)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        if r.status_code != 200:
+            raise HTTPException(status_code=r.status_code, detail=_httpx_error_detail(r))
+        try:
+            return r.json()
+        except Exception:
+            return {"active": False, "filename": None}
+    return manual_status_local(int(camera_id))
 
 
 @app.post("/cameras/{camera_id}/recordings/manual/{path}")
 def manual_record(camera_id: int, path: str) -> Dict[str, Any]:
     if path not in ("start", "stop"):
         raise HTTPException(status_code=400, detail="path must be start or stop")
+    row = camera_store.get_camera(camera_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    cam = dict(row)
+    settings = _effective_settings(int(camera_id))
+    _, edge = _camera_and_edge(camera_id)
+    if edge:
+        url = f"{edge}/recordings/manual/{path}"
+        try:
+            r = httpx.post(url, timeout=120.0)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=r.status_code,
+                detail=_httpx_error_detail(r),
+            )
+        try:
+            return r.json()
+        except Exception:
+            return {"ok": True, "active": path == "start"}
+    try:
+        if path == "start":
+            return start_manual_local(
+                int(camera_id),
+                cam,
+                recording_mode=str(settings.get("recording_mode", "motion")),
+                flip_180=bool(settings.get("flip_180")),
+            )
+        return stop_manual_local(int(camera_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/recordings/{camera_id}/files/{filename}")
+def get_recording_file(camera_id: int, filename: str, playback: bool = False):
+    path = resolve_recording_file(int(camera_id), filename)
+    if path is not None:
+        if not mp4_listable_fast(path):
+            raise HTTPException(
+                status_code=422, detail="recording incomplete or corrupt"
+            )
+        if playback and not mp4_ios_playable(path):
+            if not finalize_mp4_for_mobile(path):
+                raise HTTPException(
+                    status_code=422,
+                    detail="could not repair clip for mobile playback",
+                )
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+    _, edge = _camera_and_edge(camera_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="not found")
+    q = "?playback=1" if playback else ""
+    return RedirectResponse(
+        url=f"{edge}/recordings/files/{filename}{q}",
+        status_code=307,
+    )
+
+
+@app.get("/recordings/{camera_id}/files/{filename}/thumbnail")
+def get_recording_thumbnail(camera_id: int, filename: str):
+    path = resolve_recording_file(int(camera_id), filename)
+    if path is not None:
+        thumb = recording_thumbnail_path(path)
+        if thumb.is_file():
+            return FileResponse(thumb, media_type="image/jpeg")
+        if ensure_recording_thumbnail(path, seek_seconds=1.0) and thumb.is_file():
+            return FileResponse(thumb, media_type="image/jpeg")
+        raise HTTPException(status_code=404, detail="thumbnail unavailable")
+    _, edge = _camera_and_edge(camera_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="not found")
+    return RedirectResponse(
+        url=f"{edge}/recordings/files/{filename}/thumbnail",
+        status_code=307,
+    )
+
+
+@app.post("/recordings/{camera_id}/files/{filename}/finalize-mobile")
+def finalize_recording_mobile(camera_id: int, filename: str) -> Dict[str, Any]:
+    path = resolve_recording_file(int(camera_id), filename)
+    if path is not None:
+        if finalize_mp4_for_mobile(path):
+            return {"ok": True}
+        raise HTTPException(
+            status_code=422,
+            detail="could not repair clip for mobile playback",
+        )
+    _, edge = _camera_and_edge(camera_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        r = httpx.post(
+            f"{edge}/recordings/files/{filename}/finalize-mobile",
+            timeout=300.0,
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=_httpx_error_detail(r))
+    try:
+        return r.json()
+    except Exception:
+        return {"ok": True}
+
+
+@app.delete("/recordings/{camera_id}/files/{filename}")
+def delete_recording_file(camera_id: int, filename: str) -> Dict[str, str]:
+    path = resolve_recording_file(int(camera_id), filename)
+    if path is not None:
+        remove_recording_thumbnail(path)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        return {"status": "deleted"}
+    _, edge = _camera_and_edge(camera_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        r = httpx.delete(f"{edge}/recordings/files/{filename}", timeout=30.0)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=_httpx_error_detail(r))
+    return {"status": "deleted"}
+
+
+@app.delete("/recordings/{camera_id}/all")
+def delete_all_recordings(camera_id: int) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return {"ok": True, "active": path == "start"}
+    deleted = 0
+    root = recordings_dir_for(int(camera_id))
+    if root.is_dir():
+        for p in root.glob("*.mp4"):
+            if p.name.startswith("_") or p.name.startswith("."):
+                continue
+            try:
+                remove_recording_thumbnail(p)
+                p.unlink(missing_ok=True)
+                deleted += 1
+            except OSError:
+                pass
+    _, edge = _camera_and_edge(camera_id)
+    if edge:
+        try:
+            r = httpx.delete(f"{edge}/recordings/all", timeout=60.0)
+            if r.status_code == 200:
+                try:
+                    body = r.json()
+                    if isinstance(body, dict) and isinstance(body.get("deleted"), int):
+                        deleted += int(body["deleted"])
+                except Exception:
+                    pass
+        except httpx.RequestError:
+            pass
+    return {"ok": True, "deleted": deleted}
 
 
 @app.get("/cameras/{camera_id}/stream_health")

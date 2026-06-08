@@ -44,6 +44,8 @@ _cameras: Dict[int, dict] = {}
 _change_listeners: List[Callable] = []
 _selected_camera_id: Optional[int] = None
 _lock = Lock()
+# Set when cameras are loaded from a JSON file (used as default save target).
+_persist_source_path: Optional[str] = None
 
 
 def _rtsp_userinfo(username: str, password: str) -> str:
@@ -266,6 +268,7 @@ def load_cameras_from_json_file(path: str) -> int:
         return 0
 
     count = 0
+    global _persist_source_path
     for item in raw:
         if not isinstance(item, dict):
             print(f"[camera_store] skip non-object in {path}: {item!r}")
@@ -284,6 +287,8 @@ def load_cameras_from_json_file(path: str) -> int:
                 row["url"] = str(ms).strip()
         add_camera(row)
         count += 1
+    if count > 0:
+        _persist_source_path = os.path.normpath(os.path.abspath(path))
     return count
 
 
@@ -339,10 +344,63 @@ def _log_registry_startup(reason: str = "startup") -> None:
 
 def reload_cameras_from_json() -> int:
     """Clear registry and re-run init (JSON → env VIGI → bootstrap). For REPL or an admin HTTP route."""
+    global _persist_source_path
+    _persist_source_path = None
     clear_cameras()
     _init_store()
     _log_registry_startup("reload")
     return len(list_cameras())
+
+
+def _resolve_persist_json_path() -> str:
+    """Where to write the registry (same file as SMARTCAM_CAMERAS_JSON when set)."""
+    env = os.environ.get("SMARTCAM_CAMERAS_JSON", "").strip()
+    if env:
+        return os.path.normpath(os.path.expanduser(env))
+    if _persist_source_path:
+        return _persist_source_path
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(here, "..", "data", "cameras.json"))
+
+
+def persist_cameras_to_json() -> bool:
+    """
+    Write all in-memory cameras to JSON (atomic replace).
+
+    Uses SMARTCAM_CAMERAS_JSON when set, else the file we loaded from, else
+    backend/data/cameras.json. Creates parent directories as needed.
+    """
+    path = _resolve_persist_json_path()
+    parent = os.path.dirname(path)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            print(f"[camera_store] cannot create directory {parent!r}: {e}", flush=True)
+            return False
+    with _lock:
+        items: List[dict] = []
+        for row in _cameras.values():
+            d = dict(row)
+            d.pop("_change_token", None)
+            items.append(d)
+    payload: Dict[str, Any] = {"cameras": items}
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+            f.write("\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"[camera_store] persist failed {path!r}: {e}", flush=True)
+        try:
+            if os.path.isfile(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    print(f"[camera_store] persisted {len(items)} camera(s) -> {path}", flush=True)
+    return True
 
 
 _init_store()

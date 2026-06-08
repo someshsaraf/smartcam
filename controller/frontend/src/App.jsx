@@ -1724,7 +1724,9 @@ function LiveTile({
   const hlsDirectUrl = hlsPlaylistUrlForCamera(cam, false);
   const [hlsUrl, setHlsUrl] = useState(hlsProxyUrl);
   const showManual =
-    recordingMode === "off" && cam.edge_base_url && typeof onManualToggle === "function";
+    recordingMode === "off" &&
+    (Boolean(cam.edge_base_url) || Boolean(cameraRtspUrl(cam))) &&
+    typeof onManualToggle === "function";
   const isHero = layout === "hero";
   const isHeroShell = layout === "heroShell";
   const isThumb = layout === "thumb";
@@ -2358,7 +2360,9 @@ export default function App() {
       const polled = {};
       for (const c of cams) {
         const mode = c.settings?.recording_mode || "motion";
-        if (mode !== "off" || !c.edge_base_url) continue;
+        const canManual =
+          mode === "off" && (Boolean(c.edge_base_url) || Boolean(cameraRtspUrl(c)));
+        if (!canManual) continue;
         try {
           const res = await fetch(`${API}/cameras/${c.id}/recordings/manual/status`);
           if (res.ok) {
@@ -2374,7 +2378,9 @@ export default function App() {
         const next = { ...prev };
         for (const c of cams) {
           const mode = c.settings?.recording_mode || "motion";
-          if (mode !== "off" || !c.edge_base_url) delete next[c.id];
+          const canManual =
+            mode === "off" && (Boolean(c.edge_base_url) || Boolean(cameraRtspUrl(c)));
+          if (!canManual) delete next[c.id];
         }
         Object.assign(next, polled);
         return next;
@@ -2762,8 +2768,8 @@ export default function App() {
   const toggleManualRecording = async (cam) => {
     const mode = cam.settings?.recording_mode || "motion";
     if (mode !== "off") return;
-    if (!cam.edge_base_url) {
-      alert("Manual recording requires a Pi edge camera.");
+    if (!cam.edge_base_url && !cameraRtspUrl(cam)) {
+      alert("Manual recording needs an RTSP URL on the camera, or a Pi edge with edge_base_url.");
       return;
     }
     const currentlyOn = manualRecordingById[cam.id] === true;
