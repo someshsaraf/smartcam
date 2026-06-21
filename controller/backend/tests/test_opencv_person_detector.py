@@ -65,3 +65,19 @@ def test_confident_standing_person_kept():
     out = _refine_person_and_animal_boxes([human], [], [])
     assert len(out) == 1
     assert out[0]["category"] == "person"
+
+
+def test_human_profile_mislabeled_as_dog_reclassifies_to_person():
+    profile = {
+        "category": "animal",
+        "label": "dog",
+        "score": 0.973,
+        "x": 0.02,
+        "y": 0.08,
+        "w": 0.42,
+        "h": 0.55,
+    }
+    out = _refine_person_and_animal_boxes([], [profile], [])
+    assert len(out) == 1
+    assert out[0]["category"] == "person"
+    assert out[0]["label"] == "person"

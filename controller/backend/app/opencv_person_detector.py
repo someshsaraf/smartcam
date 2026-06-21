@@ -138,12 +138,57 @@ def _box_compactness(bw: float, bh: float) -> float:
     return min(bw, bh) / max(bw, bh)
 
 
+def _box_center_y(box: Dict[str, Any]) -> float:
+    return float(box.get("y") or 0.0) + float(box.get("h") or 0.0) * 0.5
+
+
+def _is_ground_level_pet_shape(box: Dict[str, Any]) -> bool:
+    """Overhead camera: lying pet on floor — compact blob in lower/mid frame."""
+    bw = float(box.get("w") or 0.0)
+    bh = float(box.get("h") or 0.0)
+    if bw <= 0.0 or bh <= 0.0:
+        return False
+    compact = _box_compactness(bw, bh)
+    cy = _box_center_y(box)
+    area = bw * bh
+    if compact >= 0.38 and cy >= 0.38 and area >= 0.006:
+        return True
+    if bw / bh >= 0.85 and area >= 0.006:
+        return True
+    return False
+
+
+def _is_likely_person_not_dog(box: Dict[str, Any]) -> bool:
+    """SSD labels human profiles as dog — restore person for upright/upper-frame shapes."""
+    cat = str(box.get("category") or "")
+    label = str(box.get("label") or "").lower()
+    if cat != "animal" and label not in ("dog", "cat", "animal"):
+        return False
+    if label in ("bird", "cow", "horse", "sheep"):
+        return False
+    bw = float(box.get("w") or 0.0)
+    bh = float(box.get("h") or 0.0)
+    if bw <= 0.0 or bh <= 0.0:
+        return False
+    if _is_ground_level_pet_shape(box):
+        return False
+    tall_aspect = bh / bw
+    cy = _box_center_y(box)
+    if tall_aspect >= 1.05 and bw >= 0.06:
+        return True
+    if cy <= 0.58 and tall_aspect >= 0.9 and bh >= 0.12:
+        return True
+    return False
+
+
 def _is_likely_pet_person_mislabel(box: Dict[str, Any]) -> bool:
     """
     Overhead cameras: lying dogs/cats often score as VOC person with moderate confidence.
     Reclassify compact ground-level blobs; skip tall skinny shapes (handled separately).
     """
     if str(box.get("category") or "") != "person":
+        return False
+    if not _is_ground_level_pet_shape(box):
         return False
     score = float(box.get("score") or 0.0)
     if score >= 0.68:
@@ -203,6 +248,25 @@ def _reclassify_as_dog(box: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
     return out
 
 
+def _reclassify_as_person(box: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+    out = dict(box)
+    out["category"] = "person"
+    out["label"] = "person"
+    out["reclassified"] = reason
+    return out
+
+
+def _should_fuse_person_with_weak_animal(
+    person: Dict[str, Any], weak: Dict[str, Any]
+) -> bool:
+    """Only fuse uncertain person boxes that look like floor-level pets."""
+    if float(person.get("score") or 0.0) >= 0.60:
+        return False
+    if not _is_ground_level_pet_shape(person):
+        return False
+    return _box_iou(person, weak) >= _OVERLAP_IOU_FUSION
+
+
 def _best_weak_animal_match(
     person: Dict[str, Any], weak_animals: List[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
@@ -231,6 +295,8 @@ def _fuse_person_with_animal(
 
 def _reclassify_horizontal_person(box: Dict[str, Any]) -> Dict[str, Any]:
     if str(box.get("category") or "") != "person":
+        return box
+    if not _is_ground_level_pet_shape(box):
         return box
     bw = float(box.get("w") or 0.0)
     bh = float(box.get("h") or 0.0)
@@ -297,13 +363,18 @@ def _refine_person_and_animal_boxes(
     animals: List[Dict[str, Any]],
     weak_animals: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = list(animals)
+    out: List[Dict[str, Any]] = []
+    for box in animals:
+        if _is_likely_person_not_dog(box):
+            out.append(_reclassify_as_person(box, reason="human_not_dog"))
+        else:
+            out.append(box)
 
     for person in persons:
         if _is_likely_person_false_positive(person):
             continue
         weak = _best_weak_animal_match(person, weak_animals)
-        if weak is not None:
+        if weak is not None and _should_fuse_person_with_weak_animal(person, weak):
             out.append(_fuse_person_with_animal(person, weak))
             continue
         refined = _reclassify_horizontal_person(person)
