@@ -26,24 +26,47 @@ function countPeople(faces, personCount) {
   return faces.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
 }
 
+function snapshot(faces, personCount) {
+  return {
+    faces: Array.isArray(faces) ? faces : [],
+    personCount: typeof personCount === "number" ? personCount : countPeople(faces, personCount),
+  };
+}
+
 /**
  * Optional extra UI delay on top of backend inference delay.
  * Uses a release queue so rapid WebSocket updates never reset a multi-second timer.
+ * Pass ``cameraId`` so switching live feeds clears stale boxes from the previous camera.
  */
 export function useOverlaySyncedDetections(faces, personCount, opts) {
-  const { videoRef, hlsRef, baseDelayMs, enabled } = opts;
-  const [displayed, setDisplayed] = useState({ faces: [], personCount: 0 });
-  const latestRef = useRef({ faces: [], personCount: 0 });
+  const { videoRef, hlsRef, baseDelayMs, enabled, cameraId } = opts;
+  const [displayed, setDisplayed] = useState(() => snapshot(faces, personCount));
+  const latestRef = useRef(snapshot(faces, personCount));
   const queueRef = useRef([]);
+  const cameraIdRef = useRef(cameraId);
 
-  latestRef.current = {
-    faces: Array.isArray(faces) ? faces : [],
-    personCount: typeof personCount === "number" ? personCount : 0,
-  };
+  latestRef.current = snapshot(faces, personCount);
 
   useEffect(() => {
     const latest = latestRef.current;
     if (!enabled) {
+      queueRef.current = [];
+      setDisplayed(latest);
+      return undefined;
+    }
+
+    const cameraChanged =
+      cameraId !== undefined &&
+      cameraId !== null &&
+      String(cameraIdRef.current) !== String(cameraId);
+    if (cameraChanged) {
+      cameraIdRef.current = cameraId;
+      queueRef.current = [];
+      setDisplayed(latest);
+      return undefined;
+    }
+
+    if (latest.faces.length === 0 && latest.personCount === 0) {
       queueRef.current = [];
       setDisplayed(latest);
       return undefined;
@@ -62,7 +85,7 @@ export function useOverlaySyncedDetections(faces, personCount, opts) {
     }
 
     return undefined;
-  }, [faces, personCount, baseDelayMs, enabled, videoRef, hlsRef]);
+  }, [faces, personCount, baseDelayMs, enabled, videoRef, hlsRef, cameraId]);
 
   useEffect(() => {
     if (!enabled) return undefined;

@@ -1086,6 +1086,16 @@ function motionClipActiveForCam(motionClipById, camId) {
   return Boolean(st && (st.active || st.capture_active));
 }
 
+function detectionsForCam(detectionsById, camId) {
+  if (!detectionsById || camId == null) return null;
+  return (
+    detectionsById[camId] ??
+    detectionsById[Number(camId)] ??
+    detectionsById[String(camId)] ??
+    null
+  );
+}
+
 function formatMotionCountdown(seconds) {
   const s = Math.max(0, Number(seconds) || 0);
   const m = Math.floor(s / 60);
@@ -1816,6 +1826,7 @@ function LiveTile({
     hlsRef,
     baseDelayMs: baseOverlayDelay,
     enabled: overlaySync && !useWebRtc,
+    cameraId: cam?.id,
   });
   const rawFaces = Array.isArray(faces) ? faces : [];
   const drawFaces = overlaySync && !useWebRtc ? synced.faces : rawFaces;
@@ -3226,9 +3237,9 @@ export default function App() {
     }
   };
   const mobileLiveCam = activeCamera ?? liveCams[0] ?? null;
+  const mobileDetections = detectionsForCam(detectionsById, mobileLiveCam?.id);
   const mobilePersonCount = mobileLiveCam
-    ? (detectionsById[mobileLiveCam.id]?.personCount ??
-        countPersonDetections(detectionsById[mobileLiveCam.id]?.faces))
+    ? (mobileDetections?.personCount ?? countPersonDetections(mobileDetections?.faces))
     : 0;
   const mobileRecording =
     mobileLiveCam &&
@@ -3252,6 +3263,7 @@ export default function App() {
   };
 
   const renderLiveTile = (c, layout) => {
+    const det = detectionsForCam(detectionsById, c.id);
     const motionSt = motionClipById[c.id];
     const motionClipCountdown =
       motionSt && (motionSt.active || motionSt.capture_active) && motionSt.remaining_seconds > 0
@@ -3259,6 +3271,7 @@ export default function App() {
         : null;
     return (
     <LiveTile
+      key={`live-tile-${c.id}-${layout}`}
       cam={c}
       layout={layout}
       recording={
@@ -3270,8 +3283,8 @@ export default function App() {
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}
       onManualToggle={() => toggleManualRecording(c)}
-      faces={detectionsById[c.id]?.faces}
-      personCount={detectionsById[c.id]?.personCount ?? 0}
+      faces={det?.faces}
+      personCount={det?.personCount ?? 0}
       detectionSystem={detectionSystem}
       overlayDelayMs={
         typeof detectionSystem?.overlay_delay_ms === "number"
