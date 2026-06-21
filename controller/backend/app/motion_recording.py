@@ -59,11 +59,11 @@ _post_roll: Dict[int, Dict[str, Any]] = {}
 
 
 def _min_trigger_frames() -> int:
-    raw = os.environ.get("SMARTCAM_PERSON_TRIGGER_MIN_FRAMES", "3").strip()
+    raw = os.environ.get("SMARTCAM_PERSON_TRIGGER_MIN_FRAMES", "1").strip()
     try:
         n = int(raw)
     except ValueError:
-        n = 3
+        n = 1
     return max(1, min(n, 30))
 
 
@@ -233,8 +233,8 @@ def on_person_detected(
     detected_at: Optional[float] = None,
 ) -> None:
     """
-    After ``SMARTCAM_PERSON_TRIGGER_MIN_FRAMES`` consecutive person frames (default 3),
-    start a motion clip. Re-arms when the person is absent for ``SMARTCAM_MOTION_PERSON_GAP_SECONDS``
+    Start a motion clip when the pipeline reports confirmed detections.
+    Re-arms when detections stop for ``SMARTCAM_MOTION_PERSON_GAP_SECONDS``
     or after a clip finishes (while someone is still in view, respects cooldown).
     """
     cid = int(camera_id)

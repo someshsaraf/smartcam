@@ -1,11 +1,13 @@
 """
-Background RTSP readers + OpenCV person detection, broadcasting to ``DetectionsHub``.
+Background RTSP readers + SmartCam detection pipeline, broadcasting to ``DetectionsHub``.
+
+Pipeline: MOG2 → Hailo YOLOv8n (OpenCV SSD fallback) → ByteTrack → frame confirmation → event.
 
 Supervisor thread polls ``camera_store`` every few seconds, starts/stops per-camera worker
-threads. Workers throttle inference with ``SMARTCAM_PERSON_DETECT_INTERVAL_MS``.
+threads. Workers throttle inference with ``SMARTCAM_DETECTION_FPS`` (default 5 Hz).
 
-Concurrency: one worker thread per camera; each owns a ``VideoCapture`` and detector instance.
-Process-wide RTSP env is applied before OpenCV loads (via ``opencv_person_detector`` import).
+Concurrency: one worker thread per camera; each owns a ``VideoCapture`` and pipeline instance.
+Process-wide RTSP env is applied before OpenCV loads.
 
 Security: only ``rtsp://`` / ``rtsps://`` URLs from ``camera_store`` are opened.
 """
@@ -20,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from . import camera_store
+from .detection_pipeline import CameraDetectionPipeline, pipeline_diagnostics
 from .detections_hub import DetectionsHub
 from .mediamtx_paths import rtsp_url
 from .motion_recording import (
@@ -31,7 +34,6 @@ from .motion_recording import (
     push_motion_buffer_frame,
     reset_person_trigger_state,
 )
-from .opencv_person_detector import OpenCVPersonDetector, ssd_model_files_present
 from .rtsp_capture import apply_rtsp_env
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,14 @@ def person_detection_enabled() -> bool:
 
 
 def _interval_seconds() -> float:
+    fps_raw = os.environ.get("SMARTCAM_DETECTION_FPS", "").strip()
+    if fps_raw:
+        try:
+            fps = float(fps_raw)
+        except ValueError:
+            fps = 5.0
+        fps = max(0.2, min(fps, 30.0))
+        return 1.0 / fps
     try:
         ms = int(os.environ.get("SMARTCAM_PERSON_DETECT_INTERVAL_MS", "200").strip())
     except ValueError:
@@ -72,6 +82,13 @@ def _wanted_cameras() -> Dict[int, str]:
     return out
 
 
+def _detector_ready() -> bool:
+    diag = pipeline_diagnostics()
+    if diag.get("hailo_ready"):
+        return True
+    return bool(diag.get("opencv_ssd_ready"))
+
+
 def _camera_worker(
     camera_id: int,
     rtsp_url_value: str,
@@ -80,12 +97,11 @@ def _camera_worker(
     global_stop: threading.Event,
 ) -> None:
     apply_rtsp_env()
-    det = OpenCVPersonDetector()
-    if not det.available():
+    pipeline = CameraDetectionPipeline()
+    if not pipeline.detector_available:
         logger.warning(
-            "[person_rtsp] camera %s: SSD models missing under %s — run scripts/fetch_ssd_models.sh",
+            "[person_rtsp] camera %s: no detector backend (Hailo HEF or OpenCV SSD required)",
             camera_id,
-            os.environ.get("SMARTCAM_MODEL_DIR", "controller/backend/models"),
         )
         return
 
@@ -100,54 +116,65 @@ def _camera_worker(
 
     reset_person_trigger_state(camera_id)
     interval = _interval_seconds()
-    logger.info("[person_rtsp] camera %s: reader started", camera_id)
+    logger.info(
+        "[person_rtsp] camera %s: pipeline started (backend=%s, interval=%.2fs)",
+        camera_id,
+        pipeline.backend_name,
+        interval,
+    )
     while not local_stop.is_set() and not global_stop.is_set():
         ok, frame = cap.read()
         if not ok or frame is None:
             time.sleep(1.0)
             continue
         try:
-            faces = det.detect_normalized(frame)
+            result = pipeline.process_frame(frame)
         except Exception as e:
-            logger.exception("[person_rtsp] camera %s: detect error: %s", camera_id, e)
-            faces = []
+            logger.exception("[person_rtsp] camera %s: pipeline error: %s", camera_id, e)
+            result = {
+                "faces": [],
+                "person_count": 0,
+                "animal_count": 0,
+                "person_confirmed_count": 0,
+                "animal_confirmed_count": 0,
+                "event_count": 0,
+                "motion_detected": False,
+                "inferred": False,
+            }
 
-        person_count = sum(
-            1
-            for d in faces
-            if str(d.get("category") or d.get("label") or "").lower() == "person"
-        )
-        animal_count = sum(
-            1
-            for d in faces
-            if str(d.get("category") or "").lower() == "animal"
-            or str(d.get("label") or "").lower()
-            in ("bird", "cat", "cow", "dog", "horse", "sheep")
-        )
-        motion_count = person_count + animal_count
+        person_count = int(result.get("person_count") or 0)
+        animal_count = int(result.get("animal_count") or 0)
+        event_count = int(result.get("event_count") or 0)
 
         now_ts = time.time()
-        # Trigger/arm clip before buffering so the same frame can enter post-roll.
-        on_person_detected(camera_id, motion_count, detected_at=now_ts)
-        push_motion_buffer_frame(camera_id, frame, now_ts)
+        # Pipeline already applies ByteTrack + SMARTCAM_EVENT_CONFIRM_FRAMES.
+        on_person_detected(camera_id, 1 if event_count > 0 else 0, detected_at=now_ts)
+        if result.get("motion_detected"):
+            push_motion_buffer_frame(camera_id, frame, now_ts)
 
         ts = datetime.now(timezone.utc).isoformat()
         payload: Dict[str, Any] = {
             "type": "detections",
             "camera_id": camera_id,
             "ts": ts,
-            "faces": faces,
+            "faces": result.get("faces") or [],
             "person_count": person_count,
             "person_detected": person_count > 0,
             "animal_count": animal_count,
             "animal_detected": animal_count > 0,
+            "person_confirmed_count": int(result.get("person_confirmed_count") or 0),
+            "animal_confirmed_count": int(result.get("animal_confirmed_count") or 0),
+            "event_count": event_count,
+            "motion_detected": bool(result.get("motion_detected")),
+            "inferred": bool(result.get("inferred")),
             "person_capture_busy": motion_capture_busy(camera_id),
             "person_record_eligible": person_record_eligible(camera_id),
             "person_trigger_streak": person_trigger_streak(camera_id),
             "person_trigger_min_frames": person_trigger_min_frames(),
-            "hailo_ready": False,
-            "backend": "opencv_ssd",
-            "person_detection_source": "opencv_ssd",
+            "hailo_ready": pipeline.hailo_ready,
+            "hailo_error": pipeline.hailo_error,
+            "backend": pipeline.backend_name,
+            "person_detection_source": pipeline.backend_name,
         }
         hub.schedule_broadcast(payload)
 
@@ -160,7 +187,7 @@ def _camera_worker(
 
 def _supervisor_loop(hub: DetectionsHub, stop: threading.Event) -> None:
     workers: Dict[int, Tuple[threading.Thread, threading.Event]] = {}
-    warned_models = False
+    warned_backend = False
     try:
         while not stop.wait(2.0):
             if not person_detection_enabled():
@@ -170,19 +197,22 @@ def _supervisor_loop(hub: DetectionsHub, stop: threading.Event) -> None:
                     del workers[cid]
                 continue
 
-            if not ssd_model_files_present():
-                if not warned_models:
+            if not _detector_ready():
+                if not warned_backend:
+                    diag = pipeline_diagnostics()
                     logger.warning(
-                        "[person_rtsp] MobileNet-SSD weights not found — "
-                        "install models (see controller/backend/scripts/fetch_ssd_models.sh)"
+                        "[person_rtsp] no detector backend ready (hailo=%s, ssd=%s) — "
+                        "install yolov8n.hef + hailo_platform or OpenCV SSD weights",
+                        diag.get("hailo_ready"),
+                        diag.get("opencv_ssd_ready"),
                     )
-                    warned_models = True
+                    warned_backend = True
                 for cid, (th, ev) in list(workers.items()):
                     ev.set()
                     th.join(timeout=8.0)
                     del workers[cid]
                 continue
-            warned_models = False
+            warned_backend = False
 
             want = _wanted_cameras()
             for cid, (th, ev) in list(workers.items()):

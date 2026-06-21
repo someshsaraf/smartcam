@@ -54,6 +54,8 @@ from .mediamtx_paths import (
     rtsp_url,
     rtsp_url_has_userinfo,
 )
+from .detection_pipeline import pipeline_diagnostics
+from .motion_recording import person_trigger_min_frames
 from .opencv_person_detector import person_detector_diagnostics
 from .person_rtsp_supervisor import (
     get_supervisor_thread,
@@ -826,9 +828,9 @@ def stream_health(
 
 @app.get("/detector/person/status")
 def person_detector_status() -> Dict[str, Any]:
-    """SSD model paths, load status, and WebSocket client count."""
+    """Detection pipeline status (MOG2 → Hailo/OpenCV → ByteTrack) and WebSocket client count."""
     hub = get_detections_hub()
-    diag = person_detector_diagnostics()
+    diag = pipeline_diagnostics()
     return {
         "person_detection_enabled": person_detection_enabled(),
         "websocket_clients": hub.client_count(),
@@ -892,8 +894,10 @@ async def ws_recording(ws: WebSocket) -> None:
 @app.websocket("/ws/detections")
 async def ws_detections(ws: WebSocket) -> None:
     hub = get_detections_hub()
-    diag = person_detector_diagnostics()
-    ssd_ready = bool(diag.get("model_load_ok"))
+    diag = pipeline_diagnostics()
+    hailo_ready = bool(diag.get("hailo_ready"))
+    ssd_ready = bool(diag.get("opencv_ssd_ready"))
+    backend = str(diag.get("backend") or ("opencv_ssd" if ssd_ready else "minimal"))
     await ws.accept()
     await hub.add(ws)
     try:
@@ -901,12 +905,13 @@ async def ws_detections(ws: WebSocket) -> None:
             {
                 "type": "hello",
                 "recording_sample_ms": 500,
-                "person_trigger_min_frames": 3,
+                "person_trigger_min_frames": person_trigger_min_frames(),
+                "event_confirm_frames": diag.get("event_confirm_frames"),
                 "face_count": 0,
-                "backend": "opencv_ssd" if ssd_ready else "minimal",
+                "backend": backend,
                 "inference_delay_ms": 0,
-                "hailo_ready": False,
-                "hailo_error": None,
+                "hailo_ready": hailo_ready,
+                "hailo_error": diag.get("hailo_error"),
                 "opencv_ssd_ready": ssd_ready,
                 "person_detect_enabled": person_detection_enabled(),
                 "person_pipeline": diag.get("pipeline"),

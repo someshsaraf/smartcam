@@ -92,12 +92,12 @@ def person_detector_diagnostics() -> Dict[str, Any]:
         except Exception as e:
             err = str(e)
     try:
-        conf = _parse_float_env("SMARTCAM_PERSON_CONFIDENCE", 0.45, 0.0, 1.0)
-        animal_conf = _parse_float_env("SMARTCAM_ANIMAL_CONFIDENCE", 0.32, 0.0, 1.0)
+        conf = _parse_float_env("SMARTCAM_PERSON_CONFIDENCE", 0.25, 0.0, 1.0)
+        animal_conf = _parse_float_env("SMARTCAM_ANIMAL_CONFIDENCE", 0.20, 0.0, 1.0)
         min_frac = _parse_float_env("SMARTCAM_PERSON_MIN_BOX_FRACTION", 0.0005, 0.0, 1.0)
         env_err = None
     except ValueError as e:
-        conf, animal_conf, min_frac = 0.45, 0.32, 0.0005
+        conf, animal_conf, min_frac = 0.25, 0.20, 0.0005
         env_err = str(e)
     return {
         "pipeline": "opencv_mobilenet_ssd_person_animal",
@@ -424,10 +424,10 @@ class OpenCVPersonDetector:
         else:
             try:
                 self._confidence = _parse_float_env(
-                    "SMARTCAM_PERSON_CONFIDENCE", 0.45, 0.0, 1.0
+                    "SMARTCAM_PERSON_CONFIDENCE", 0.25, 0.0, 1.0
                 )
             except ValueError:
-                self._confidence = 0.45
+                self._confidence = 0.25
         if min_box_fraction is not None:
             self._min_box_fraction = min_box_fraction
         else:
@@ -439,10 +439,10 @@ class OpenCVPersonDetector:
                 self._min_box_fraction = 0.0005
         try:
             self._animal_confidence = _parse_float_env(
-                "SMARTCAM_ANIMAL_CONFIDENCE", 0.32, 0.0, 1.0
+                "SMARTCAM_ANIMAL_CONFIDENCE", 0.20, 0.0, 1.0
             )
         except ValueError:
-            self._animal_confidence = 0.32
+            self._animal_confidence = 0.20
         self._net: Optional[cv2.dnn.Net] = None
         self._load_failed = False
 
