@@ -144,6 +144,7 @@ class HailoYolov8Detector:
         self._input_params: Any = None
         self._output_params: Any = None
         self._infer_pipeline: Any = None
+        self._activate_ctx: Any = None
         self._init_runtime()
 
     @classmethod
@@ -198,17 +199,38 @@ class HailoYolov8Detector:
                 return
             self._input_name = infos_in[0].name
             self._output_name = infos_out[0].name
-            self._network_group.activate(self._network_group_params)
+            # HailoRT requires InferVStreams first, then activate() entered as a context.
             self._infer_pipeline = InferVStreams(
                 self._network_group,
                 self._input_params,
                 self._output_params,
             )
             self._infer_pipeline.__enter__()
+            self._activate_ctx = self._network_group.activate(self._network_group_params)
+            self._activate_ctx.__enter__()
+            # Probe once so /detector/person/status reflects a working graph.
+            probe = np.zeros((1, self._input_size, self._input_size, 3), dtype=np.float32)
+            with _INFER_LOCK:
+                self._infer_pipeline.infer({self._input_name: probe})
             self._ready = True
         except Exception as e:
             self._error = str(e)
             self._ready = False
+            self._cleanup_runtime()
+
+    def _cleanup_runtime(self) -> None:
+        if self._activate_ctx is not None:
+            try:
+                self._activate_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._activate_ctx = None
+        if self._infer_pipeline is not None:
+            try:
+                self._infer_pipeline.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._infer_pipeline = None
 
     def available(self) -> bool:
         return self._ready
@@ -235,10 +257,13 @@ class HailoYolov8Detector:
         input_data = np.expand_dims(rgb, axis=0)
         with _INFER_LOCK:
             try:
+                if not self._ready or self._infer_pipeline is None:
+                    return []
                 raw = self._infer_pipeline.infer({self._input_name: input_data})
             except Exception as e:
                 self._error = str(e)
                 self._ready = False
+                self._cleanup_runtime()
                 return []
         return self._parse_nms_output(raw, w, h, scale, pad_x, pad_y)
 
