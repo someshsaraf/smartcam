@@ -350,7 +350,7 @@ def _trigger_edge_clip(
         "pre_seconds": pre_s,
         "post_seconds": post_s,
         "duration_seconds": duration_s,
-        "objects_detected": ["person"],
+        "objects_detected": ["person", "animal"],
     }
     try:
         r = httpx.post(url, json=body, timeout=_MOTION_TRIGGER_TIMEOUT)

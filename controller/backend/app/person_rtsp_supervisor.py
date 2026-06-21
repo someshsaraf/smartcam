@@ -112,9 +112,17 @@ def _camera_worker(
             logger.exception("[person_rtsp] camera %s: detect error: %s", camera_id, e)
             faces = []
 
+        person_count = sum(
+            1 for d in faces if str(d.get("category") or d.get("label") or "").lower() == "person"
+        )
+        animal_count = sum(
+            1 for d in faces if str(d.get("category") or "").lower() == "animal"
+        )
+        motion_count = person_count + animal_count
+
         now_ts = time.time()
         # Trigger/arm clip before buffering so the same frame can enter post-roll.
-        on_person_detected(camera_id, len(faces), detected_at=now_ts)
+        on_person_detected(camera_id, motion_count, detected_at=now_ts)
         push_motion_buffer_frame(camera_id, frame, now_ts)
 
         ts = datetime.now(timezone.utc).isoformat()
@@ -123,8 +131,10 @@ def _camera_worker(
             "camera_id": camera_id,
             "ts": ts,
             "faces": faces,
-            "person_count": len(faces),
-            "person_detected": len(faces) > 0,
+            "person_count": person_count,
+            "person_detected": person_count > 0,
+            "animal_count": animal_count,
+            "animal_detected": animal_count > 0,
             "person_capture_busy": motion_capture_busy(camera_id),
             "person_record_eligible": person_record_eligible(camera_id),
             "person_trigger_streak": person_trigger_streak(camera_id),

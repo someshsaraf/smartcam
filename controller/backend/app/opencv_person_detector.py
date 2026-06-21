@@ -1,5 +1,5 @@
 """
-MobileNet-SSD (PASCAL VOC) person-only boxes for live overlays.
+MobileNet-SSD (PASCAL VOC) person and animal boxes for live overlays.
 
 Must run ``apply_rtsp_env()`` before ``import cv2`` in this process (see import order below).
 
@@ -22,7 +22,18 @@ apply_rtsp_env()
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-_PERSON = 15  # PASCAL VOC person class for MobileNet-SSD deploy
+# PASCAL VOC indices used by MobileNet-SSD deploy model (background + 20 classes)
+_PERSON = 15
+_ANIMAL = {3, 8, 10, 12, 13, 17}  # bird, cat, cow, dog, horse, sheep
+_VOC_CLASS_NAMES: Dict[int, str] = {
+    3: "bird",
+    8: "cat",
+    10: "cow",
+    12: "dog",
+    13: "horse",
+    17: "sheep",
+    15: "person",
+}
 
 
 def _backend_dir() -> Path:
@@ -85,7 +96,7 @@ def person_detector_diagnostics() -> Dict[str, Any]:
         conf, min_frac = 0.45, 0.0005
         env_err = str(e)
     return {
-        "pipeline": "opencv_mobilenet_ssd_person",
+        "pipeline": "opencv_mobilenet_ssd_person_animal",
         "model_proto": str(p_proto),
         "model_weights": str(p_weights),
         "model_files_present": present,
@@ -98,7 +109,7 @@ def person_detector_diagnostics() -> Dict[str, Any]:
 
 
 class OpenCVPersonDetector:
-    """Person class only; normalized boxes for ``App.jsx`` overlay."""
+    """Person and animal VOC classes; normalized boxes for ``App.jsx`` overlay."""
 
     def __init__(
         self,
@@ -168,7 +179,11 @@ class OpenCVPersonDetector:
             if conf < self._confidence:
                 continue
             cls_id = int(detections[0, 0, i, 1])
-            if cls_id != _PERSON:
+            if cls_id == _PERSON:
+                category = "person"
+            elif cls_id in _ANIMAL:
+                category = "animal"
+            else:
                 continue
             x1 = int(detections[0, 0, i, 3] * w)
             y1 = int(detections[0, 0, i, 4] * h)
@@ -178,6 +193,7 @@ class OpenCVPersonDetector:
             box_h = max(0, y2 - y1)
             if box_w * box_h < (w * h) * self._min_box_fraction:
                 continue
+            label = _VOC_CLASS_NAMES.get(cls_id, category)
             out.append(
                 {
                     "x": round(x1 / float(w), 6),
@@ -185,7 +201,8 @@ class OpenCVPersonDetector:
                     "w": round(box_w / float(w), 6),
                     "h": round(box_h / float(h), 6),
                     "score": round(conf, 4),
-                    "label": "person",
+                    "label": label,
+                    "category": category,
                     "source": "opencv_ssd",
                 }
             )

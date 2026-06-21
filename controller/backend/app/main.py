@@ -726,7 +726,7 @@ def stream_health(
         )
     if person_detection_enabled() and ssd:
         lines.append(
-            "Person overlays: OpenCV MobileNet-SSD workers read each camera RTSP and "
+            "Person/animal overlays: OpenCV MobileNet-SSD workers read each camera RTSP and "
             "broadcast on /ws/detections."
         )
     elif person_detection_enabled() and not ssd:

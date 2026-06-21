@@ -701,6 +701,7 @@ export function LiveDashboardPage({
   isPrimary,
   streamLabel,
   personCount,
+  animalCount = 0,
   recording,
   onFindCameras,
   detecting,
@@ -797,6 +798,11 @@ export function LiveDashboardPage({
             {personCount > 0 ? (
               <span className="text-[11px] text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10">
                 {personCount} person{personCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
+            {animalCount > 0 ? (
+              <span className="text-[11px] text-amber-200 px-2.5 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10">
+                {animalCount} animal{animalCount === 1 ? "" : "s"}
               </span>
             ) : null}
           </>

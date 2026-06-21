@@ -56,10 +56,44 @@ function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
   };
 }
 
+const ANIMAL_LABELS = new Set(["bird", "cat", "cow", "dog", "horse", "sheep", "animal"]);
+
+function isAnimalDetection(d) {
+  if (String(d?.category || "").toLowerCase() === "animal") return true;
+  return ANIMAL_LABELS.has(String(d?.label || "").toLowerCase());
+}
+
 function personDetections(faces) {
   return (Array.isArray(faces) ? faces : []).filter(
-    (d) => String(d?.label || "").toLowerCase() === "person",
+    (d) => String(d?.category || d?.label || "").toLowerCase() === "person",
   );
+}
+
+function animalDetections(faces) {
+  return (Array.isArray(faces) ? faces : []).filter(isAnimalDetection);
+}
+
+function overlayDetections(faces) {
+  return (Array.isArray(faces) ? faces : []).filter(
+    (d) =>
+      String(d?.category || d?.label || "").toLowerCase() === "person" ||
+      isAnimalDetection(d),
+  );
+}
+
+function detectionOverlayStyle(d) {
+  if (isAnimalDetection(d)) {
+    return {
+      border: "border-amber-400/95",
+      labelText: "text-amber-100",
+      labelBorder: "border-amber-500/40",
+    };
+  }
+  return {
+    border: "border-blue-400/95",
+    labelText: "text-blue-100",
+    labelBorder: "border-blue-500/40",
+  };
 }
 
 /** Format model score 0–1 as percentage string. */
@@ -78,7 +112,7 @@ function formatDetectionLabel(det) {
 
 function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
   const [layout, setLayout] = useState(null);
-  const people = personDetections(faces);
+  const boxes = overlayDetections(faces);
 
   useEffect(() => {
     const container = containerRef?.current;
@@ -119,11 +153,12 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
     };
   }, [faces, videoRef, containerRef, assumedAspect?.w, assumedAspect?.h]);
 
-  if (!layout || people.length === 0) return null;
+  if (!layout || boxes.length === 0) return null;
 
   return (
     <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden" aria-hidden>
-      {people.map((f, i) => {
+      {boxes.map((f, i) => {
+        const style = detectionOverlayStyle(f);
         const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
         const y = layout.offsetY + Number(f.y) * layout.videoH * layout.scale;
         const w = Math.max(2, Number(f.w) * layout.videoW * layout.scale);
@@ -136,7 +171,7 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
         return (
           <div
             key={`${i}-${leftPct}-${topPct}`}
-            className="absolute box-border border-2 border-blue-400/95 rounded-sm shadow-[0_0_0_1px_rgba(0,0,0,0.35)]"
+            className={`absolute box-border border-2 rounded-sm shadow-[0_0_0_1px_rgba(0,0,0,0.35)] ${style.border}`}
             style={{
               left: `${leftPct}%`,
               top: `${topPct}%`,
@@ -145,7 +180,9 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
             }}
           >
             {label ? (
-              <span className="absolute left-0 bottom-full mb-0.5 max-w-[8rem] truncate rounded px-1 py-px text-[10px] font-mono font-semibold leading-tight text-blue-100 bg-black/80 border border-blue-500/40">
+              <span
+                className={`absolute left-0 bottom-full mb-0.5 max-w-[8rem] truncate rounded px-1 py-px text-[10px] font-mono font-semibold leading-tight bg-black/80 border ${style.labelText} ${style.labelBorder}`}
+              >
                 {label}
               </span>
             ) : null}
@@ -454,6 +491,7 @@ function LiveCameraThumbStrip({ cameras, activeId, onSelect, renderThumb, mobile
 
 const EVENT_TYPE_LABELS = {
   person_detected: "Person detected",
+  animal_detected: "Animal detected",
 };
 
 function formatEventType(eventType) {
@@ -464,6 +502,7 @@ function formatEventType(eventType) {
 function timelineActivityKind(eventType) {
   const t = String(eventType || "").toLowerCase();
   if (t.includes("person")) return "person";
+  if (t.includes("animal")) return "motion";
   if (t.includes("vehicle")) return "vehicle";
   if (t.includes("motion")) return "motion";
   return undefined;
@@ -1744,10 +1783,17 @@ function edgeDiscoveryKey(e) {
   return `${e.edge_base_url || ""}|${e.mqtt_camera_id || ""}`;
 }
 
-/** YOLOv8n / Hailo person boxes use label "person". */
+/** YOLOv8n / Hailo / SSD person boxes use label or category "person". */
 function countPersonDetections(detections) {
   if (!Array.isArray(detections)) return 0;
-  return detections.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
+  return detections.filter(
+    (d) => String(d?.category || d?.label || "").toLowerCase() === "person",
+  ).length;
+}
+
+function countAnimalDetections(detections) {
+  if (!Array.isArray(detections)) return 0;
+  return detections.filter(isAnimalDetection).length;
 }
 
 /** URLs from GET /cameras/{id}/stream_health (RTSP password redacted server-side). */
@@ -2162,13 +2208,14 @@ function LiveTile({
       ctx.font = heroLayout
         ? "12px ui-monospace, system-ui, sans-serif"
         : "11px ui-monospace, system-ui, sans-serif";
-      const faceList = personDetections(drawFaces);
+      const faceList = overlayDetections(drawFaces);
       for (const f of faceList) {
         const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
         const y = layout.offsetY + Number(f.y) * layout.videoH * layout.scale;
         const w = Number(f.w) * layout.videoW * layout.scale;
         const h = Number(f.h) * layout.videoH * layout.scale;
-        ctx.strokeStyle = "rgba(59, 130, 246, 0.95)";
+        const animal = isAnimalDetection(f);
+        ctx.strokeStyle = animal ? "rgba(251, 191, 36, 0.95)" : "rgba(59, 130, 246, 0.95)";
         ctx.strokeRect(x, y, w, h);
         const label = formatDetectionLabel(f);
         if (!label) continue;
@@ -2182,7 +2229,7 @@ function LiveTile({
         const labelTop = Math.max(0, textY - boxH + 2);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
         ctx.fillRect(labelX, labelTop, boxW, boxH);
-        ctx.fillStyle = "rgba(96, 165, 250, 1)";
+        ctx.fillStyle = animal ? "rgba(251, 191, 36, 1)" : "rgba(96, 165, 250, 1)";
         ctx.fillText(label, labelX + padX, labelTop + boxH - padY - 2);
       }
     };
@@ -2314,7 +2361,7 @@ function LiveTile({
                 containerRef={wrapRef}
                 assumedAspect={{ w: 16, h: 9 }}
               />
-              {edgeHint && !personDetections(drawFaces).length ? (
+              {edgeHint && !overlayDetections(drawFaces).length ? (
                 <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 p-3 text-center bg-black/35">
                   <p className="text-[11px] text-amber-200 max-w-[min(100%,24rem)] leading-snug">{edgeHint}</p>
                   <p className="text-[10px] text-gray-400 max-w-[min(100%,22rem)] leading-snug">
@@ -2824,7 +2871,12 @@ export default function App() {
               typeof msg.person_count === "number"
                 ? msg.person_count
                 : countPersonDetections(faces);
+            const animalCount =
+              typeof msg.animal_count === "number"
+                ? msg.animal_count
+                : countAnimalDetections(faces);
             const personDetected = Boolean(msg.person_detected) || personCount > 0;
+            const animalDetected = Boolean(msg.animal_detected) || animalCount > 0;
             const captureBusy = Boolean(msg.person_capture_busy);
             const recordEligible = Boolean(msg.person_record_eligible);
             setDetectionsById((prev) => ({
@@ -2834,6 +2886,8 @@ export default function App() {
                 ts: msg.ts || "",
                 personCount,
                 personDetected,
+                animalCount,
+                animalDetected,
                 personMaxScore:
                   typeof msg.person_max_score === "number" ? msg.person_max_score : null,
                 personDisplayThreshold:
@@ -3241,6 +3295,9 @@ export default function App() {
   const mobilePersonCount = mobileLiveCam
     ? (mobileDetections?.personCount ?? countPersonDetections(mobileDetections?.faces))
     : 0;
+  const mobileAnimalCount = mobileLiveCam
+    ? (mobileDetections?.animalCount ?? countAnimalDetections(mobileDetections?.faces))
+    : 0;
   const mobileRecording =
     mobileLiveCam &&
     ((mobileLiveCam.settings?.recording_mode || "motion") === "off"
@@ -3343,6 +3400,16 @@ export default function App() {
       });
     }
 
+    if (mobileAnimalCount > 0) {
+      items.unshift({
+        label: "Animal detected",
+        time: formatTimelineClock(nowIso),
+        ts: nowIso,
+        detail: camLabel,
+        kind: "motion",
+      });
+    }
+
     if (mobileRecording) {
       items.unshift({
         label: "Recording clip",
@@ -3366,7 +3433,7 @@ export default function App() {
       const tb = new Date(b.ts || 0).getTime();
       return tb - ta;
     });
-  }, [todayEvents, mobilePersonCount, mobileRecording, liveSessionStarted, mobileLiveCam?.name, activeCamera?.name]);
+  }, [todayEvents, mobilePersonCount, mobileAnimalCount, mobileRecording, liveSessionStarted, mobileLiveCam?.name, activeCamera?.name]);
   const handleLiveFullscreen = () => {
     const el = document.querySelector(".dashboard-video-shell");
     if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
@@ -3399,6 +3466,7 @@ export default function App() {
             isPrimary={Boolean(isPrimaryCamera)}
             streamLabel={liveCams.length > 0 ? "LIVE" : "NO SIGNAL"}
             personCount={mobilePersonCount}
+            animalCount={mobileAnimalCount}
             recording={Boolean(mobileRecording)}
             onFindCameras={detectCameras}
             detecting={detecting}
@@ -3455,7 +3523,7 @@ export default function App() {
               <CameraInsights
                 peopleDetected={insightsPeopleToday}
                 vehiclesDetected={0}
-                animalsDetected={0}
+                animalsDetected={mobileAnimalCount}
                 recordingCount={recordingsForActiveCamera.length}
                 onViewAll={() => setMainTab("events")}
               />
