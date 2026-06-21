@@ -299,4 +299,56 @@ body {
   .dashboard-event-icon {
     @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-300 text-sm;
   }
+
+  /* Vigilance mock — live view 2-column layout */
+  .live-view-main-grid {
+    @apply flex flex-col gap-4;
+  }
+  @media (min-width: 1280px) {
+    .live-view-main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 1.25rem;
+      align-items: start;
+    }
+    .live-view-right-rail {
+      position: sticky;
+      top: 0;
+      max-height: calc(100dvh - 7rem);
+      overflow-y: auto;
+    }
+    .dashboard-video-shell-live {
+      max-height: min(56vh, 520px);
+    }
+  }
+  .live-page-header {
+    @apply shrink-0 border-b border-white/[0.06] bg-[#0a0f18]/95 backdrop-blur-sm px-4 lg:px-6 py-4;
+  }
+  .live-camera-tab {
+    @apply inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium border transition-colors whitespace-nowrap;
+  }
+  .live-camera-tab-active {
+    @apply bg-indigo-600/30 text-indigo-100 border-indigo-500/50 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.2)];
+  }
+  .live-camera-tab-idle {
+    @apply text-gray-400 border-white/[0.08] bg-white/[0.03] hover:text-gray-200 hover:bg-white/[0.06];
+  }
+  .insight-stat-card {
+    @apply rounded-xl border border-white/[0.08] bg-[#0f141f] p-4 flex flex-col gap-3 min-h-[7.5rem];
+  }
+  .quick-camera-card {
+    @apply rounded-xl border border-white/[0.08] bg-[#0f141f] overflow-hidden text-left transition-all hover:border-indigo-500/30;
+  }
+  .recent-event-card {
+    @apply shrink-0 w-[9.5rem] rounded-xl border border-white/[0.08] bg-[#0f141f] overflow-hidden;
+  }
+  .nav-item-active-bar {
+    box-shadow: inset 3px 0 0 0 rgb(99 102 241);
+  }
+  .ai-protection-card {
+    @apply rounded-xl border border-indigo-500/25 bg-gradient-to-br from-indigo-950/80 to-[#0f141f] p-4;
+  }
+  .system-status-camera-row {
+    @apply flex items-center justify-between gap-2 py-1.5 text-[12px];
+  }
 }

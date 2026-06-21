@@ -22,6 +22,7 @@ import {
   Refresh,
   SearchZoomIn,
   SearchZoomOut,
+  Setting2,
   ShieldTick,
   VideoPlay,
   VideoSquare,
@@ -34,7 +35,12 @@ const NAV_ITEMS = [
   { id: "clips", label: "Playback", icon: "playback" },
   { id: "events", label: "Events", icon: "events" },
   { id: "devices", label: "Devices", icon: "devices" },
+  { id: "people", label: "People", icon: "people" },
+  { id: "vehicles", label: "Vehicles", icon: "vehicles" },
+  { id: "settings", label: "Settings", icon: "settings" },
 ];
+
+const CAMERA_TAB_DOTS = ["bg-amber-400", "bg-indigo-400", "bg-emerald-400", "bg-rose-400", "bg-sky-400", "bg-violet-400"];
 
 function NavIcon({ name, className = "w-5 h-5" }) {
   const sizeMatch = /w-(\d+)/.exec(className);
@@ -49,6 +55,12 @@ function NavIcon({ name, className = "w-5 h-5" }) {
       return <Flash {...common} color="#a5b4fc" aria-hidden />;
     case "devices":
       return <Element4 {...common} color="#a5b4fc" aria-hidden />;
+    case "people":
+      return <People {...common} color="#a5b4fc" aria-hidden />;
+    case "vehicles":
+      return <Car {...common} color="#a5b4fc" aria-hidden />;
+    case "settings":
+      return <Setting2 {...common} color="#a5b4fc" aria-hidden />;
     default:
       return null;
   }
@@ -103,7 +115,7 @@ export function VigilanceShell({
         }}
         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
           active
-            ? "bg-indigo-600/25 text-indigo-100 border border-indigo-500/50 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.15)]"
+            ? "bg-indigo-600/20 text-indigo-100 border border-indigo-500/40 nav-item-active-bar"
             : "text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-transparent"
         }`}
       >
@@ -131,40 +143,38 @@ export function VigilanceShell({
         </div>
         <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto">{NAV_ITEMS.map((i) => navButton(i))}</nav>
         <div className="p-4 border-t border-white/[0.06] space-y-3">
-          {hasCameraSelector ? (
-            <label className="block space-y-1.5">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">Camera View</span>
-              <select
-                className="dashboard-select dashboard-select-sm w-full"
-                value={activeCameraId ?? ""}
-                onChange={(e) => {
-                  const selectedId = Number(e.target.value);
-                  if (Number.isFinite(selectedId)) onSelectCamera(selectedId);
-                }}
-              >
-                {cameras.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/30 p-3">
-            <div className="flex items-start gap-2">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
-                <ShieldLogo className="w-4 h-4" />
-              </span>
-              <div>
-                <p className="text-[11px] font-semibold text-gray-200">System Status</p>
-                <p className="text-[11px] text-emerald-400 mt-0.5">All systems operational</p>
-              </div>
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldTick size={16} variant="Bulk" color="#34d399" aria-hidden />
+              <p className="text-[12px] font-semibold text-gray-100">System Status</p>
             </div>
+            <p className="text-[11px] text-emerald-400 mb-2.5">All systems operational</p>
+            {hasCameraSelector ? (
+              <ul className="space-y-0.5 border-t border-white/[0.06] pt-2">
+                {cameras.map((c) => {
+                  const selected = String(c.id) === String(activeCameraId);
+                  return (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectCamera(c.id)}
+                        className={`system-status-camera-row w-full text-left rounded-lg px-2 -mx-2 transition-colors ${
+                          selected ? "bg-indigo-500/15 text-indigo-100" : "text-gray-400 hover:text-gray-200 hover:bg-white/5"
+                        }`}
+                      >
+                        <span className="truncate">{c.name}</span>
+                        <span className="shrink-0 text-[10px] font-semibold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+                          Live
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-[11px] text-gray-500">No cameras configured</p>
+            )}
           </div>
-          <button type="button" className="w-full flex items-center justify-between text-xs text-gray-400 hover:text-gray-200 px-1">
-            <span>{cameraCount} Camera{cameraCount === 1 ? "" : "s"} Online</span>
-            <span className="text-gray-600">›</span>
-          </button>
           <div className="flex items-center gap-2.5 pt-1 border-t border-white/[0.06]">
             <span className="h-9 w-9 rounded-full bg-indigo-600/40 flex items-center justify-center text-xs font-bold text-indigo-100">
               A
@@ -538,40 +548,209 @@ export function CameraInsights({
   recordingCount = 0,
   onViewAll,
 }) {
-  const rows = [
-    { key: "people", label: "People detected", value: peopleDetected, icon: "people" },
-    { key: "vehicles", label: "Vehicles detected", value: vehiclesDetected, icon: "vehicles" },
-    { key: "animals", label: "Animal detected", value: animalsDetected, icon: "animals" },
-    { key: "recordings", label: "Number of recordings", value: recordingCount, icon: "recordings" },
+  const cards = [
+    {
+      key: "people",
+      label: "People Detected",
+      value: peopleDetected,
+      trend: "+12%",
+      trendUp: true,
+      icon: "people",
+      iconBg: "bg-violet-500/15 border-violet-500/25",
+    },
+    {
+      key: "vehicles",
+      label: "Vehicles Detected",
+      value: vehiclesDetected,
+      trend: "-5%",
+      trendUp: false,
+      icon: "vehicles",
+      iconBg: "bg-sky-500/15 border-sky-500/25",
+    },
+    {
+      key: "animals",
+      label: "Animals Detected",
+      value: animalsDetected,
+      trend: "+8%",
+      trendUp: true,
+      icon: "animals",
+      iconBg: "bg-amber-500/15 border-amber-500/25",
+    },
+    {
+      key: "recordings",
+      label: "Total Recordings",
+      value: recordingCount,
+      trend: "+7%",
+      trendUp: true,
+      icon: "recordings",
+      iconBg: "bg-rose-500/15 border-rose-500/25",
+    },
   ];
 
   return (
-    <div className="flex flex-col">
-      <ul className="space-y-0.5">
-        {rows.map((row) => (
-          <li
-            key={row.key}
-            className="flex items-center justify-between gap-3 py-2 border-b border-white/[0.05] last:border-0"
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="dashboard-insight-icon" aria-hidden>
-                <InsightIcon type={row.icon} />
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        {cards.map((card) => (
+          <div key={card.key} className="insight-stat-card">
+            <div className="flex items-start justify-between gap-2">
+              <span className={`flex h-9 w-9 items-center justify-center rounded-lg border ${card.iconBg}`}>
+                <InsightIcon type={card.icon} />
               </span>
-              <span className="text-[13px] text-gray-300">{row.label}</span>
+              <span
+                className={`text-[11px] font-semibold tabular-nums ${
+                  card.trendUp ? "text-emerald-400" : "text-rose-400"
+                }`}
+              >
+                {card.trend}
+              </span>
             </div>
-            <span className="text-base font-semibold text-white tabular-nums shrink-0">{row.value}</span>
-          </li>
+            <div>
+              <p className="text-2xl font-bold text-white tabular-nums leading-none">{card.value}</p>
+              <p className="text-[11px] text-gray-500 mt-1">Today</p>
+            </div>
+            <p className="text-[12px] text-gray-400 leading-snug">{card.label}</p>
+          </div>
         ))}
-      </ul>
+      </div>
       {onViewAll ? (
         <button
           type="button"
           onClick={onViewAll}
-          className="mt-3 w-full text-center text-[12px] font-medium text-indigo-300 hover:text-indigo-200 py-2 rounded-lg border border-indigo-500/20 bg-indigo-950/20"
+          className="self-start text-[12px] font-medium text-indigo-300 hover:text-indigo-200"
         >
           View all insights →
         </button>
       ) : null}
+    </div>
+  );
+}
+
+export function LiveCameraTabBar({ cameras = [], activeId, onSelect, onAdd, detecting }) {
+  if (!cameras.length) return null;
+  return (
+    <div className="shrink-0 px-4 lg:px-6 py-3 border-b border-white/[0.06] bg-[#0a0f18]/60">
+      <div className="flex items-center gap-2 mobile-scroll-x pb-0.5">
+        {cameras.map((c, idx) => {
+          const active = String(c.id) === String(activeId);
+          const dot = CAMERA_TAB_DOTS[idx % CAMERA_TAB_DOTS.length];
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onSelect(c.id)}
+              className={`live-camera-tab ${active ? "live-camera-tab-active" : "live-camera-tab-idle"}`}
+            >
+              <span className={`h-2 w-2 rounded-full shrink-0 ${dot}`} aria-hidden />
+              {c.name}
+            </button>
+          );
+        })}
+        {typeof onAdd === "function" ? (
+          <button
+            type="button"
+            disabled={detecting}
+            onClick={onAdd}
+            className="live-camera-tab live-camera-tab-idle text-indigo-300 border-indigo-500/30 bg-indigo-600/10 hover:bg-indigo-600/20"
+          >
+            {detecting ? "…" : "+ Add Camera"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function QuickCamerasGrid({ cameras = [], activeId, onSelect, renderThumb }) {
+  if (!cameras.length || typeof renderThumb !== "function") return null;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h2 className="text-sm font-semibold text-gray-100">Quick Cameras</h2>
+        <button type="button" className="text-[12px] text-indigo-300 hover:text-indigo-200">
+          View All
+        </button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {cameras.slice(0, 4).map((c) => {
+          const active = String(c.id) === String(activeId);
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onSelect(c.id)}
+              className={`quick-camera-card group ${active ? "ring-1 ring-indigo-500/50" : ""}`}
+            >
+              <div className="aspect-video bg-black relative overflow-hidden pointer-events-none">
+                {renderThumb(c)}
+                {active ? (
+                  <span className="absolute top-2 left-2 text-[9px] font-bold uppercase tracking-wide text-red-300 bg-red-500/20 border border-red-500/40 px-1.5 py-0.5 rounded">
+                    Live
+                  </span>
+                ) : null}
+              </div>
+              <div className="px-2.5 py-2 flex items-center justify-between gap-1">
+                <span className="text-[12px] font-medium text-gray-200 truncate">{c.name}</span>
+                <span className="text-gray-600 text-xs">⋯</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function RecentEventsStrip({ events = [], onViewAll }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h2 className="text-sm font-semibold text-gray-100">Recent Events</h2>
+        {onViewAll ? (
+          <button type="button" onClick={onViewAll} className="text-[12px] text-indigo-300 hover:text-indigo-200">
+            View All
+          </button>
+        ) : null}
+      </div>
+      {events.length === 0 ? (
+        <p className="text-xs text-gray-500">No events yet today.</p>
+      ) : (
+        <div className="flex gap-3 mobile-scroll-x pb-1">
+          {events.map((ev, i) => (
+            <div key={`${ev.ts}-${i}`} className="recent-event-card">
+              <div className="aspect-video bg-[#161d2c] flex items-center justify-center text-gray-600 text-[10px]">
+                {ev.thumb || "Event"}
+              </div>
+              <div className="p-2.5">
+                <p className="text-[10px] text-gray-500 font-mono">{ev.time}</p>
+                <p className="text-[12px] font-medium text-gray-100 mt-0.5 leading-snug">{ev.label}</p>
+                <p className="text-[10px] text-gray-500 truncate mt-0.5">{ev.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AiProtectionCard() {
+  return (
+    <div className="ai-protection-card relative overflow-hidden">
+      <div className="relative z-[1] max-w-[70%]">
+        <p className="text-[13px] font-semibold text-white leading-snug">AI-Powered Protection</p>
+        <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
+          Smart detection, real-time alerts, and complete peace of mind.
+        </p>
+        <button type="button" className="mt-3 dashboard-btn-primary dashboard-btn-sm">
+          Learn More
+        </button>
+      </div>
+      <span
+        className="absolute right-2 bottom-2 flex h-20 w-20 items-center justify-center rounded-2xl bg-indigo-500/10 border border-indigo-500/20 opacity-80 select-none pointer-events-none"
+        aria-hidden
+      >
+        <MonitorRecorder size={40} variant="Bulk" color="#6366f1" />
+      </span>
     </div>
   );
 }
@@ -616,21 +795,6 @@ export function ActivityTimeline({ items = [] }) {
       )}
     </ul>
   );
-}
-
-const ZOOM_MIN = 1;
-const ZOOM_MAX = 4;
-const ZOOM_STEP = 0.5;
-
-function clampZoom(value) {
-  if (typeof value !== "number" || Number.isNaN(value)) return ZOOM_MIN;
-  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
-  return Math.round(clamped * 10) / 10;
-}
-
-function formatZoomLabel(value) {
-  const z = clampZoom(value);
-  return Number.isInteger(z) ? `${z}x` : `${z.toFixed(1)}x`;
 }
 
 /** Camera / mic / speaker / fullscreen chips overlaid on the live video (hero tile). */
@@ -698,7 +862,6 @@ export function LiveVideoOverlayControls({
 
 export function LiveDashboardPage({
   cameraName,
-  isPrimary,
   streamLabel,
   personCount,
   animalCount = 0,
@@ -710,10 +873,11 @@ export function LiveDashboardPage({
   activeCameraId,
   onSelectCamera,
   liveVideo,
-  thumbStrip,
+  renderCameraThumb,
   cameraInsights,
   activityItems,
-  cameraInfo,
+  recentEvents = [],
+  onViewAllEvents,
   onTalk,
   onSnapshot,
   onRecord,
@@ -722,227 +886,155 @@ export function LiveDashboardPage({
   recordDisabled,
   recordingMode = "motion",
 }) {
-  const [zoom, setZoom] = useState(ZOOM_MIN);
-  useEffect(() => {
-    setZoom(ZOOM_MIN);
-  }, [activeCameraId]);
-
-  const handleZoomIn = () => setZoom((z) => clampZoom(z + ZOOM_STEP));
-  const handleZoomOut = () => setZoom((z) => clampZoom(z - ZOOM_STEP));
-  const handleResetZoom = () => setZoom(ZOOM_MIN);
-
-  const canZoomIn = zoom < ZOOM_MAX;
-  const canZoomOut = zoom > ZOOM_MIN;
-  const isZoomed = zoom > ZOOM_MIN;
-  const zoomLabel = formatZoomLabel(zoom);
   const hasLive = streamLabel === "LIVE";
-
-  const headerZoomGroup = (visibilityClass = "inline-flex") => (
-    <span className={`dashboard-zoom-group dashboard-zoom-group-header ${visibilityClass}`} role="group" aria-label="Zoom">
-      <button
-        type="button"
-        onClick={handleZoomOut}
-        disabled={!canZoomOut}
-        className="dashboard-zoom-btn"
-        aria-label="Zoom out"
-        title="Zoom out"
-      >
-        <SearchZoomOut size={14} variant="Outline" color="#cbd5e1" aria-hidden />
-      </button>
-      <button
-        type="button"
-        onClick={handleResetZoom}
-        disabled={!isZoomed}
-        className="dashboard-zoom-label"
-        aria-label="Reset zoom"
-        title="Reset zoom"
-      >
-        {zoomLabel}
-      </button>
-      <button
-        type="button"
-        onClick={handleZoomIn}
-        disabled={!canZoomIn}
-        className="dashboard-zoom-btn"
-        aria-label="Zoom in"
-        title="Zoom in"
-      >
-        <SearchZoomIn size={14} variant="Outline" color="#cbd5e1" aria-hidden />
-      </button>
-    </span>
-  );
 
   return (
     <div className="live-dashboard-page flex flex-col flex-1 min-h-0">
-      <DashboardPageHeader
-        compact
-        eyebrow="Camera"
-        title={cameraName || "Live view"}
-        badge={isPrimary ? "Primary" : null}
-        badges={
-          <>
-            {hasLive ? (
-              <StatusPill variant="live">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
-                Live
-              </StatusPill>
-            ) : (
-              <StatusPill variant="offline">No signal</StatusPill>
-            )}
-            {recording ? (
-              <StatusPill variant="recording">
-                <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                Recording
-              </StatusPill>
-            ) : null}
-            {personCount > 0 ? (
-              <span className="text-[11px] text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10">
-                {personCount} person{personCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            {animalCount > 0 ? (
-              <span className="text-[11px] text-amber-200 px-2.5 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10">
-                {animalCount} animal{animalCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-          </>
-        }
-        actions={
-          <>
-            <button
-              type="button"
-              disabled={detecting}
-              onClick={onFindCameras}
-              className="dashboard-btn-primary dashboard-btn-sm hidden sm:inline-flex"
-            >
-              {detecting ? "…" : "+ Add Camera"}
+      <header className="live-page-header">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-white tracking-tight">Live View</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Monitor your cameras in real-time.</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm relative" aria-label="Notifications">
+              <Notification size={16} variant="Outline" color="#cbd5e1" aria-hidden />
+              <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[#0a0f18]" />
             </button>
-            <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Notifications">
-              <Notification size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+            <button type="button" className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Settings">
+              <Setting2 size={16} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
-            <span className="dashboard-btn-icon dashboard-btn-icon-sm rounded-full bg-indigo-600/30 text-[10px] font-bold text-indigo-100">
-              A
-            </span>
-            {headerZoomGroup()}
-            <button
-              type="button"
-              onClick={onFullscreen}
-              className="dashboard-btn-icon dashboard-btn-icon-sm"
-              aria-label="Fullscreen"
-            >
-              <Maximize3 size={14} variant="Outline" color="#cbd5e1" aria-hidden />
+            <select className="dashboard-select dashboard-select-sm hidden sm:inline-flex" defaultValue="high" aria-label="Stream quality">
+              <option value="high">High Quality 1080p</option>
+              <option value="medium">Medium 720p</option>
+              <option value="low">Low 480p</option>
+            </select>
+            <button type="button" onClick={onFullscreen} className="dashboard-btn-icon dashboard-btn-icon-sm" aria-label="Fullscreen">
+              <Maximize3 size={16} variant="Outline" color="#cbd5e1" aria-hidden />
             </button>
-          </>
-        }
-        subActions={
-          <select className="dashboard-select dashboard-select-sm hidden lg:inline-flex" defaultValue="high" aria-label="Stream quality">
-            <option value="high">High Quality 1080p</option>
-            <option value="medium">Medium 720p</option>
-            <option value="low">Low 480p</option>
-          </select>
-        }
+          </div>
+        </div>
+      </header>
+
+      <LiveCameraTabBar
+        cameras={cameras}
+        activeId={activeCameraId}
+        onSelect={onSelectCamera}
+        onAdd={onFindCameras}
+        detecting={detecting}
       />
 
-      <div className="live-view-scroll">
-        <div className="live-view-inner">
-        <div className="live-view-media-block flex flex-col gap-2.5">
-          <div className="dashboard-video-shell dashboard-video-shell-hero dashboard-video-shell-live w-full">
-            <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
-              {hasLive ? (
-                <span className="pointer-events-auto inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
-                  Live
-                  {recording ? (
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.75)] ring-1 ring-white/80 animate-pulse"
-                      aria-label="Recording"
-                      title="Recording"
+      <div className="live-view-scroll flex-1 min-h-0">
+        <div className="live-view-inner max-w-none">
+          <div className="live-view-main-grid">
+            <div className="live-view-center flex flex-col gap-5 min-w-0">
+              <div className="dashboard-video-shell dashboard-video-shell-live w-full">
+                <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-3 py-2.5 mobile-video-gradient-top pointer-events-none">
+                  <div className="pointer-events-auto flex items-center gap-2 flex-wrap">
+                    {hasLive ? (
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 rounded">
+                        Live
+                        {recording ? (
+                          <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" aria-hidden />
+                        ) : null}
+                      </span>
+                    ) : null}
+                    {cameraName ? (
+                      <span className="text-[11px] font-medium text-white/90">{cameraName}</span>
+                    ) : null}
+                    {personCount > 0 ? (
+                      <span className="text-[10px] text-indigo-200 px-2 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10">
+                        {personCount} person{personCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    {animalCount > 0 ? (
+                      <span className="text-[10px] text-amber-200 px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10">
+                        {animalCount} animal{animalCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+                  <LiveClock />
+                </div>
+
+                <div className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full">
+                  {liveVideo}
+                </div>
+
+                <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-12 mobile-video-gradient-bottom pointer-events-none">
+                  <div className="hidden lg:flex justify-center pointer-events-auto">
+                    <VideoOverlayActions
+                      onTalk={onTalk}
+                      onSnapshot={onSnapshot}
+                      onRecord={onRecord}
+                      onSiren={onSiren}
+                      onLight={onLight}
+                      recording={recording}
+                      recordDisabled={recordDisabled}
+                      recordingMode={recordingMode}
                     />
-                  ) : null}
-                </span>
-              ) : null}
-              <LiveClock />
-            </div>
-
-            <div
-              className="absolute inset-0 z-10 [&>div]:h-full [&>div]:w-full"
-              style={{
-                transform: isZoomed ? `scale(${zoom})` : undefined,
-                transformOrigin: "center center",
-                transition: "transform 180ms ease-out",
-                willChange: isZoomed ? "transform" : undefined,
-              }}
-            >
-              {liveVideo}
-            </div>
-
-            <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 pt-10 mobile-video-gradient-bottom pointer-events-none">
-              <div className="flex items-end justify-end gap-2 pointer-events-none">
-                <span className="ml-auto text-[10px] text-gray-300 flex items-center gap-2 font-mono pointer-events-auto">
-                  <span>98%</span>
-                  <Wifi size={14} variant="Bulk" color="#34d399" aria-hidden />
-                </span>
+                  </div>
+                  <div className="lg:hidden mt-2 pointer-events-auto">
+                    <LiveQuickActions
+                      onTalk={onTalk}
+                      onSnapshot={onSnapshot}
+                      onRecord={onRecord}
+                      onSiren={onSiren}
+                      onLight={onLight}
+                      recording={recording}
+                      recordDisabled={recordDisabled}
+                      recordingMode={recordingMode}
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="hidden lg:block">
-                <VideoOverlayActions
-                  onTalk={onTalk}
-                  onSnapshot={onSnapshot}
-                  onRecord={onRecord}
-                  onSiren={onSiren}
-                  onLight={onLight}
-                  recording={recording}
-                  recordDisabled={recordDisabled}
-                  recordingMode={recordingMode}
+              {typeof renderCameraThumb === "function" ? (
+                <QuickCamerasGrid
+                  cameras={cameras}
+                  activeId={activeCameraId}
+                  onSelect={onSelectCamera}
+                  renderThumb={renderCameraThumb}
                 />
-              </div>
-            </div>
-          </div>
-
-          {thumbStrip ? <div className="shrink-0">{thumbStrip}</div> : null}
-
-          <div className="lg:hidden">
-            <LiveQuickActions
-              onTalk={onTalk}
-              onSnapshot={onSnapshot}
-              onRecord={onRecord}
-              onSiren={onSiren}
-              onLight={onLight}
-              recording={recording}
-              recordDisabled={recordDisabled}
-              recordingMode={recordingMode}
-            />
-          </div>
-        </div>
-
-        <div className="live-view-bottom-grid grid grid-cols-1 gap-4">
-          <div className="dashboard-panel">
-            <div className="flex justify-between items-center mb-3 gap-2">
-              <h2 className="dashboard-panel-title">Camera Insights</h2>
-              <select className="dashboard-select text-[10px] py-1 px-2 w-auto" defaultValue="today" aria-label="Insights period">
-                <option value="today">Today</option>
-              </select>
-            </div>
-            {cameraInsights}
-          </div>
-
-          <div className="dashboard-panel">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="dashboard-panel-title">Activity Timeline</h2>
-              {hasLive ? (
-                <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Live
-                </span>
               ) : null}
-            </div>
-            <ActivityTimeline items={activityItems} />
-          </div>
 
-          <div className="dashboard-panel">
-            <h2 className="dashboard-panel-title mb-3">Camera Info</h2>
-            {cameraInfo}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-gray-100">Camera Insights</h2>
+                  <select className="dashboard-select text-[10px] py-1 px-2 w-auto" defaultValue="today" aria-label="Insights period">
+                    <option value="today">Today</option>
+                  </select>
+                </div>
+                {cameraInsights}
+              </div>
+
+              <RecentEventsStrip events={recentEvents} onViewAll={onViewAllEvents} />
+            </div>
+
+            <aside className="live-view-right-rail flex flex-col gap-4 min-w-0">
+              <div className="dashboard-panel">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-gray-100">Activity Feed</h2>
+                  {hasLive ? (
+                    <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Live
+                    </span>
+                  ) : null}
+                </div>
+                <ActivityTimeline items={activityItems} />
+                {onViewAllEvents ? (
+                  <button
+                    type="button"
+                    onClick={onViewAllEvents}
+                    className="mt-3 w-full text-center text-[12px] font-medium text-indigo-300 hover:text-indigo-200 py-2"
+                  >
+                    View All Events
+                  </button>
+                ) : null}
+              </div>
+              <AiProtectionCard />
+            </aside>
           </div>
-        </div>
         </div>
       </div>
     </div>

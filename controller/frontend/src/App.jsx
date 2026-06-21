@@ -2486,6 +2486,7 @@ export default function App() {
   const [playingClip, setPlayingClip] = useState(null);
   /** Person-detected events today for Camera insights (active camera). */
   const [insightsPeopleToday, setInsightsPeopleToday] = useState(0);
+  const [insightsAnimalsToday, setInsightsAnimalsToday] = useState(0);
   const [todayEvents, setTodayEvents] = useState([]);
   const [liveSessionStarted, setLiveSessionStarted] = useState(() => new Date().toISOString());
   const [camerasLoadError, setCamerasLoadError] = useState("");
@@ -2690,6 +2691,7 @@ export default function App() {
   useEffect(() => {
     if (!isSetCameraId(effectiveActiveCameraId)) {
       setInsightsPeopleToday(0);
+      setInsightsAnimalsToday(0);
       setTodayEvents([]);
       return undefined;
     }
@@ -2704,14 +2706,15 @@ export default function App() {
         if (!res.ok || cancelled) return;
         const data = await res.json();
         const rows = Array.isArray(data.events) ? data.events : [];
-        const personRows = rows.filter((ev) => ev?.event_type === "person_detected");
         if (!cancelled) {
-          setInsightsPeopleToday(personRows.length);
-          setTodayEvents(personRows);
+          setInsightsPeopleToday(rows.filter((ev) => ev?.event_type === "person_detected").length);
+          setInsightsAnimalsToday(rows.filter((ev) => ev?.event_type === "animal_detected").length);
+          setTodayEvents(rows);
         }
       } catch {
         if (!cancelled) {
           setInsightsPeopleToday(0);
+          setInsightsAnimalsToday(0);
           setTodayEvents([]);
         }
       }
@@ -3259,14 +3262,17 @@ export default function App() {
         motionClipActiveForCam(motionClipById, mobileLiveCam.id));
   const showLivePanel = mainTab === "live";
   const showClipsPanel = mainTab === "clips";
-  const showEventsPanel = mainTab === "events";
-  const showDevicesPanel = mainTab === "devices";
+  const showEventsPanel = mainTab === "events" || mainTab === "people" || mainTab === "vehicles";
+  const showDevicesPanel = mainTab === "devices" || mainTab === "settings";
   const deviceDetailCam =
     deviceDetailId != null ? cams.find((c) => cameraIdsMatch(c.id, deviceDetailId)) : null;
 
   const handleTabChange = (tab) => {
     setMainTab(tab);
-    if (tab !== "devices") {
+    if (tab === "settings") {
+      setDevicesView("grid");
+      setDeviceDetailId(null);
+    } else if (tab !== "devices") {
       setDevicesView("grid");
       setDeviceDetailId(null);
     }
@@ -3307,23 +3313,7 @@ export default function App() {
     );
   };
 
-  const liveMeta = cameraDisplayMeta(mobileLiveCam);
-  const isPrimaryCamera =
-    mobileLiveCam && cams.length > 0 && cameraIdsMatch(cams[0].id, mobileLiveCam.id);
-  const cameraInfoRows = mobileLiveCam
-    ? [
-        ["Camera Name", mobileLiveCam.name || "—"],
-        ["Resolution", liveMeta.resolution],
-        ["Frame Rate", `${liveMeta.fps} FPS`],
-        ["Bitrate", liveMeta.bitrate],
-        ["Connection", "Excellent"],
-        ["Recording", mobileLiveCam.settings?.recording_mode || "motion"],
-        [
-          "Pre / Post",
-          `${mobileLiveCam.settings?.pre_record_seconds ?? 10}s / ${mobileLiveCam.settings?.post_record_seconds ?? 50}s`,
-        ],
-      ]
-    : [];
+
   const liveActivityItems = useMemo(() => {
     const nowIso = new Date().toISOString();
     const camLabel = mobileLiveCam?.name || activeCamera?.name || "Camera";
@@ -3387,6 +3377,20 @@ export default function App() {
       return tb - ta;
     });
   }, [todayEvents, mobilePersonCount, mobileAnimalCount, mobileRecording, liveSessionStarted, mobileLiveCam?.name, activeCamera?.name]);
+
+  const recentEventsStrip = useMemo(() => {
+    const camLabel = mobileLiveCam?.name || activeCamera?.name || "Camera";
+    return [...todayEvents]
+      .sort((a, b) => new Date(b?.ts || 0).getTime() - new Date(a?.ts || 0).getTime())
+      .slice(0, 5)
+      .map((ev) => ({
+        ts: ev.ts,
+        time: formatTimelineClock(ev.ts),
+        label: formatEventType(ev.event_type),
+        detail: camLabel,
+      }));
+  }, [todayEvents, mobileLiveCam?.name, activeCamera?.name]);
+
   const handleLiveFullscreen = () => {
     const el = document.querySelector(".dashboard-video-shell");
     if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
@@ -3407,7 +3411,7 @@ export default function App() {
         activeTab={mainTab}
         onTabChange={handleTabChange}
         clipCount={allRecordings.length}
-        eventCount={0}
+        eventCount={todayEvents.length}
         cameraCount={cams.length}
         cameras={liveCams}
         activeCameraId={effectiveActiveCameraId}
@@ -3416,7 +3420,6 @@ export default function App() {
         {showLivePanel ? (
           <LiveDashboardPage
             cameraName={mobileLiveCam?.name}
-            isPrimary={Boolean(isPrimaryCamera)}
             streamLabel={liveCams.length > 0 ? "LIVE" : "NO SIGNAL"}
             personCount={mobilePersonCount}
             animalCount={mobileAnimalCount}
@@ -3435,6 +3438,11 @@ export default function App() {
               (!cameraRtspUrl(mobileLiveCam) && !String(mobileLiveCam.edge_base_url || "").trim())
             }
             activityItems={liveActivityItems}
+            recentEvents={recentEventsStrip}
+            onViewAllEvents={() => setMainTab("events")}
+            renderCameraThumb={(c) => (
+              <div className="pointer-events-none h-full w-full">{renderLiveTile(c, "thumb")}</div>
+            )}
             liveVideo={
               liveCams.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full min-h-[280px] p-8 text-center">
@@ -3461,27 +3469,15 @@ export default function App() {
                 renderLiveTile(mobileLiveCam, "heroShell")
               ) : null
             }
-            thumbStrip={
-              liveCams.length > 1 ? (
-                <LiveCameraThumbStrip
-                  cameras={liveCams}
-                  activeId={effectiveActiveCameraId}
-                  onSelect={setActiveCameraId}
-                  renderThumb={(c) => renderLiveTile(c, "thumb")}
-                  mobile
-                />
-              ) : null
-            }
             cameraInsights={
               <CameraInsights
                 peopleDetected={insightsPeopleToday}
                 vehiclesDetected={0}
-                animalsDetected={mobileAnimalCount}
+                animalsDetected={insightsAnimalsToday}
                 recordingCount={recordingsForActiveCamera.length}
                 onViewAll={() => setMainTab("events")}
               />
             }
-            cameraInfo={<CameraInfoTable rows={cameraInfoRows} />}
           />
         ) : null}
 
