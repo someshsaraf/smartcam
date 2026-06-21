@@ -47,6 +47,9 @@ Environment:
   SMARTCAM_EDGE_PORT    Edge agent HTTP (default 8080)
   CONTROLLER_MEDIAMTX_BIN  Optional path to mediamtx binary (else PATH or backend/bin/mediamtx)
   SMARTCAM_MEDIAMTX_RTSP_TRANSPORT  RTSP pull transport for generated paths: tcp (default), automatic, udp, multicast
+  SMARTCAM_AUTO_APT=0     Disable apt install of nodejs/npm/hailo-all from start.sh (default: try apt)
+  SMARTCAM_HAILO_WHEEL    Path to hailo_platform-*.whl for backend/.venv (see docs/SETUP_PI5.md §4b)
+  SMARTCAM_INSTALL_HAILO=0  Skip automatic hailo_platform install attempts on start
 
 Examples:
   ./start.sh controller --install
@@ -110,6 +113,44 @@ controller_pythonpath_export() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
+}
+
+smartcam_auto_apt_enabled() {
+  local v="${SMARTCAM_AUTO_APT:-1}"
+  case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in
+    0 | false | no | off) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+try_apt_install_pkgs() {
+  local pkgs=("$@")
+  if ! smartcam_auto_apt_enabled; then
+    return 1
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 1
+  fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo -n true 2>/dev/null; then
+      sudo apt-get update -qq
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+      return 0
+    fi
+    log "WARN: need sudo for apt install (${pkgs[*]}) — run: sudo apt-get install -y ${pkgs[*]}"
+  fi
+  return 1
+}
+
+controller_ensure_npm() {
+  command -v npm >/dev/null 2>&1 && return 0
+  log "npm not found — installing nodejs npm via apt…"
+  try_apt_install_pkgs nodejs npm
 }
 
 sed_prefix() {
@@ -189,8 +230,43 @@ controller_setup_frontend() {
     log "Skipping frontend install: no $FRONTEND_ROOT — use a full SmartCam tree or API-only: ./start.sh controller --backend-only"
     return 0
   fi
-  need_cmd npm
+  controller_ensure_npm || true
+  if ! command -v npm >/dev/null 2>&1; then
+    if [[ "$FRONTEND_ONLY" -eq 1 ]]; then
+      die "Missing command: npm — install Node.js: sudo apt-get install -y nodejs npm (or set SMARTCAM_AUTO_APT=1 and passwordless sudo)"
+    fi
+    log "WARN: npm not found — skipping frontend install (API/MediaMTX install still OK)."
+    log "      Install: sudo apt-get install -y nodejs npm && ./start.sh controller"
+    return 0
+  fi
   (cd "$FRONTEND_ROOT" && npm install)
+}
+
+controller_ensure_frontend_deps() {
+  [[ "$BACKEND_ONLY" -eq 1 ]] && return 0
+  if ! controller_has_frontend; then
+    return 0
+  fi
+  controller_ensure_npm || true
+  if ! command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ ! -d "$FRONTEND_ROOT/node_modules" ]]; then
+    log "Frontend node_modules missing — running npm install…"
+    (cd "$FRONTEND_ROOT" && npm install)
+  fi
+}
+
+controller_ensure_hailo() {
+  [[ "$FRONTEND_ONLY" -eq 1 ]] && return 0
+  local venv="$BACKEND_ROOT/.venv"
+  [[ -d "$venv" ]] || return 0
+  if "$venv/bin/python3" -c "import hailo_platform" 2>/dev/null; then
+    return 0
+  fi
+  if [[ -f "$BACKEND_ROOT/scripts/install_hailo_platform.sh" ]]; then
+    bash "$BACKEND_ROOT/scripts/install_hailo_platform.sh" || true
+  fi
 }
 
 controller_start_mediamtx() {
@@ -261,7 +337,20 @@ controller_start_frontend() {
     log "Skipping Vite: no controller/frontend — open http://${host}:${CONTROLLER_API_PORT}/docs on the LAN."
     return 0
   fi
-  [[ -d "$FRONTEND_ROOT/node_modules" ]] || die "Run: ./start.sh controller --install"
+  if ! command -v npm >/dev/null 2>&1; then
+    controller_ensure_npm || true
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    local host
+    host="$(lan_hint_from_env)"
+    log "WARN: npm not found — skipping Vite UI. API: http://${host}:${CONTROLLER_API_PORT}/docs"
+    log "      Install: sudo apt-get install -y nodejs npm && ./start.sh controller"
+    return 0
+  fi
+  if [[ ! -d "$FRONTEND_ROOT/node_modules" ]]; then
+    log "Frontend node_modules missing — running npm install…"
+    (cd "$FRONTEND_ROOT" && npm install)
+  fi
   cd "$FRONTEND_ROOT"
   # Drop stale Vite pre-bundles so UI picks up App.jsx changes after git pull.
   rm -rf node_modules/.vite 2>/dev/null || true
@@ -278,7 +367,12 @@ run_controller() {
     log "Installing controller…"
     controller_setup
     controller_setup_frontend
+    controller_ensure_hailo
     log "Controller install done."
+  else
+    [[ -d "$BACKEND_ROOT/.venv" ]] || die "Run: ./start.sh controller --install"
+    controller_ensure_hailo
+    controller_ensure_frontend_deps
   fi
   if [[ "$FRONTEND_ONLY" -eq 0 ]]; then
     controller_start_mediamtx
@@ -286,8 +380,8 @@ run_controller() {
   fi
   [[ "$BACKEND_ONLY" -eq 0 ]] && controller_start_frontend
   log "Controller running. Ctrl+C to stop."
-  if [[ "$FRONTEND_ONLY" -eq 0 && -x "$BACKEND_ROOT/scripts/check_hailo.sh" ]]; then
-    sleep 2
+  if [[ "$FRONTEND_ONLY" -eq 0 && -f "$BACKEND_ROOT/scripts/check_hailo.sh" ]]; then
+    sleep 4
     bash "$BACKEND_ROOT/scripts/check_hailo.sh" || true
   fi
 }
