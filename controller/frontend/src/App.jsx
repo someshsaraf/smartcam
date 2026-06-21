@@ -8,7 +8,6 @@ import {
   MEDIAMTX_BASE,
   preferNativeHlsPlayback,
   preferWebRtcLive,
-  showStreamDebugUrls,
   WS_DETECTIONS,
   WS_RECORDING,
 } from "./envConfig";
@@ -1829,10 +1828,6 @@ function LiveTile({
   const isHeroShell = layout === "heroShell";
   const isThumb = layout === "thumb";
   const heroLayout = (isHero || isHeroShell) && !isThumb;
-  const showCenterStreamDebug =
-    streamDebug &&
-    (!isThumb || streamError || Boolean(edgeHint)) &&
-    (streamError || showStreamDebugUrls());
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -2264,14 +2259,6 @@ function LiveTile({
                   </p>
                 </div>
               ) : null}
-              {showCenterStreamDebug && useWebRtc ? (
-                <div className="pointer-events-none absolute left-1 right-1 top-[12%] z-[35] max-h-[48%] overflow-y-auto rounded-md bg-black/88 border border-cyan-500/35 p-2 text-left shadow-xl backdrop-blur-sm">
-                  <p className="text-[9px] text-cyan-300/95 uppercase tracking-wide mb-1 font-semibold">
-                    Stream debug (WebRTC — see Console)
-                  </p>
-                  <LiveTileStreamDebug streamDebug={streamDebug} />
-                </div>
-              ) : null}
             </div>
           ) : (
             <div className="relative w-full h-full min-h-[140px] bg-black">
@@ -2299,13 +2286,6 @@ function LiveTile({
                     with MediaMTX. Otherwise check path <span className="font-mono">cam{cam.id}</span> vs{" "}
                     <span className="font-mono">mediamtx.generated.yml</span>. Open DevTools → Console for{" "}
                     <span className="font-mono text-gray-300">[SmartCam stream_health]</span> lines.
-                  </p>
-                  <LiveTileStreamDebug streamDebug={streamDebug} />
-                </div>
-              ) : showCenterStreamDebug && !useWebRtc ? (
-                <div className="pointer-events-none absolute left-1 right-1 top-[12%] z-[25] max-h-[50%] overflow-y-auto rounded-md bg-black/85 border border-amber-500/40 p-2 text-left shadow-xl backdrop-blur-sm">
-                  <p className="text-[9px] text-amber-400/95 uppercase tracking-wide mb-1 font-semibold">
-                    Stream debug (check Console too)
                   </p>
                   <LiveTileStreamDebug streamDebug={streamDebug} />
                 </div>
