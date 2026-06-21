@@ -1023,7 +1023,7 @@ export function DevicesDashboardPage({
           <DashboardPageHeader
             eyebrow="Devices"
             title="All devices"
-            subtitle="Manage cameras, streams, and recording settings"
+            subtitle="Commercial cameras from backend/.env; use Add Camera for Pi 4 edge agents"
             actions={
               <>
                 <div className="hidden sm:flex rounded-lg border border-white/10 p-0.5 bg-black/20">
@@ -1043,7 +1043,7 @@ export function DevicesDashboardPage({
                   </button>
                 </div>
                 <button type="button" disabled={detecting} onClick={onFindCameras} className="dashboard-btn-primary text-xs">
-                  {detecting ? "…" : "Find new cameras"}
+                  {detecting ? "…" : "+ Add Camera"}
                 </button>
               </>
             }

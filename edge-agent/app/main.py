@@ -35,6 +35,7 @@ from surveillance_shared.recording_thumbnails import (
 )
 
 from .local_publisher import LocalPublisher
+from .onvif_discovery import discover_onvif_main_stream
 from .worker import EdgeRecorder
 from .zeroconf_publish import EdgeZeroconfPublisher
 
@@ -67,6 +68,20 @@ _CONTROLLER_PI5_IP = "192.168.2.139"
 def _env(name: str, default: str = "") -> str:
     v = os.environ.get(name)
     return default if v is None else str(v)
+
+
+def _resolve_rtsp_via_onvif(username: str, password: str) -> tuple[str, Optional[str]]:
+    """Return (rtsp_url, error). Empty URL when discovery fails."""
+    pwd = str(password or "").strip()
+    if not pwd:
+        return "", "SURVEILLANCE_ONVIF_PASS not set"
+    user = (username or "admin").strip() or "admin"
+    uri, err, meta = discover_onvif_main_stream(user, pwd)
+    if uri:
+        host = meta.get("host") or "?"
+        logger.info("[edge] ONVIF resolved RTSP for %s", host)
+        return str(uri), None
+    return "", err or "ONVIF discovery failed"
 
 
 _EDGE_ROOT = Path(__file__).resolve().parent.parent
@@ -127,9 +142,17 @@ async def lifespan(_app: FastAPI):
         # Operator-supplied override always wins; we both consume and advertise it.
         _effective_rtsp = _rtsp_explicit
         _advertised_rtsp = _rtsp_explicit
+    elif pub_loopback:
+        _effective_rtsp = pub_loopback
+        _advertised_rtsp = pub_lan or pub_loopback
     else:
-        _effective_rtsp = pub_loopback or ""
-        _advertised_rtsp = pub_lan or ""
+        onvif_user = _env("SURVEILLANCE_ONVIF_USER", "admin").strip() or "admin"
+        onvif_pass = _env("SURVEILLANCE_ONVIF_PASS", "").strip()
+        resolved, onvif_err = _resolve_rtsp_via_onvif(onvif_user, onvif_pass)
+        _effective_rtsp = resolved
+        _advertised_rtsp = resolved
+        if not resolved and onvif_pass:
+            logger.warning("[edge] ONVIF discovery failed: %s", onvif_err)
 
     # 3) Register mDNS with whatever URL we resolved (empty string is fine; the
     # controller will mark the row ``incomplete`` instead of fabricating one).
@@ -171,8 +194,9 @@ async def lifespan(_app: FastAPI):
         else:
             print(
                 "[edge] No RTSP URL: set SURVEILLANCE_PI_CAMERA=1 to enable the "
-                "built-in publisher, or SURVEILLANCE_RTSP_URL to point at an "
-                "external source. Recorder not started."
+                "built-in publisher, SURVEILLANCE_RTSP_URL for a fixed stream, or "
+                "SURVEILLANCE_ONVIF_USER / SURVEILLANCE_ONVIF_PASS for ONVIF discovery. "
+                "Recorder not started."
             )
         yield
     finally:
@@ -510,6 +534,40 @@ async def motion_clip_status():
     if _recorder is None:
         return {"active": False, "phase": "idle", "remaining_seconds": 0}
     return await asyncio.to_thread(_recorder.motion_clip_status)
+
+
+@app.post("/discover/onvif")
+def discover_onvif(body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """
+    ONVIF WS-Discovery on the edge LAN + GetStreamUri.
+
+    Credentials: JSON body ``username`` / ``password``, or edge env
+    ``SURVEILLANCE_ONVIF_USER`` / ``SURVEILLANCE_ONVIF_PASS``.
+    """
+    payload = body if isinstance(body, dict) else {}
+    user = str(payload.get("username") or _env("SURVEILLANCE_ONVIF_USER", "admin")).strip() or "admin"
+    if "password" in payload:
+        pwd = str(payload.get("password") or "")
+    else:
+        pwd = _env("SURVEILLANCE_ONVIF_PASS", "")
+    if not str(pwd).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="ONVIF password required (set SURVEILLANCE_ONVIF_PASS on the edge or pass password in JSON)",
+        )
+    uri, err, meta = discover_onvif_main_stream(user, pwd)
+    out: dict[str, Any] = {
+        "main_stream": uri,
+        "url": uri,
+        "incomplete": not bool(uri),
+    }
+    if err and not uri:
+        out["detail"] = err
+    if isinstance(meta, dict):
+        for k in ("host", "name", "manufacturer", "model", "firmware"):
+            if meta.get(k):
+                out[k] = meta[k]
+    return out
 
 
 @app.get("/settings")

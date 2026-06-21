@@ -1347,7 +1347,7 @@ function AppHeader({
             onClick={onDetect}
             className="text-xs font-medium px-3 py-2 rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-50"
           >
-            {detecting ? "…" : "Find"}
+            {detecting ? "…" : "Add Pi"}
           </button>
           <button
             type="button"
@@ -2826,103 +2826,16 @@ export default function App() {
     };
   }, []);
 
-  /**
-   * After ONVIF discovery: for each registered camera whose RTSP host matches a discovered ONVIF host,
-   * PATCH stored `url` — use resolved stream from discovery when present, otherwise inject the password
-   * from the discover prompt (typical VIGI: same account for ONVIF and RTSP).
-   */
-  const applyDiscoverPasswordToMatchingCameras = async (devices, pass, camsSnapshot) => {
-    const devicesArr = Array.isArray(devices) ? devices : [];
-    const onvifRows = devicesArr.filter((d) => d && d.kind === "onvif" && String(d.host || "").trim());
-    if (onvifRows.length === 0) return;
-
-    const passTrim = String(pass || "").trim();
-    const list = Array.isArray(camsSnapshot) ? camsSnapshot : [];
-    const updates = [];
-
-    for (const cam of list) {
-      if (!cam || cam.id == null) continue;
-      const cur = cameraRtspUrl(cam);
-      if (!cur) continue;
-      let hostname = "";
-      try {
-        hostname = new URL(cur).hostname;
-      } catch {
-        hostname = String(cam.ip || "").trim();
-      }
-      if (!hostname) continue;
-
-      for (const d of onvifRows) {
-        const dh = String(d.host || "").trim();
-        if (dh !== hostname) continue;
-
-        let newUrl = null;
-        const resolved = cameraRtspUrl(d);
-        if (!d.incomplete && resolved) {
-          newUrl = resolved;
-        } else if (passTrim) {
-          newUrl = applyRtspPasswordToUrl(cur, passTrim);
-        }
-        if (newUrl && newUrl !== cur) {
-          updates.push({ id: Number(cam.id), url: newUrl });
-        }
-        break;
-      }
-    }
-
-    const seen = new Set();
-    const uniq = updates.filter((u) => {
-      if (!Number.isFinite(u.id) || seen.has(u.id)) return false;
-      seen.add(u.id);
-      return true;
-    });
-
-    for (const u of uniq) {
-      try {
-        const r = await fetch(`${API}/cameras/${u.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: u.url }),
-        });
-        if (!r.ok) {
-          console.warn("[discover] PATCH camera failed", u.id, r.status);
-        }
-      } catch (e) {
-        console.warn("[discover] PATCH camera error", u.id, e);
-      }
-    }
-    if (uniq.length > 0) {
-      await load();
-      window.alert(
-        `Updated the saved RTSP URL for ${uniq.length} camera(s): used the stream ONVIF returned when available, ` +
-          `otherwise applied the password from the discover dialog for matching camera hosts.`,
-      );
-    }
-  };
-
   const detectCameras = async () => {
     setDetecting(true);
     setDiscoveredEdges([]);
     try {
-      const user = window.prompt("ONVIF username (Cancel aborts discovery)", "admin");
-      if (user === null) {
-        return;
-      }
-      let pass = window.prompt(
-        "ONVIF password — leave empty to list cameras without resolving RTSP. Cancel uses empty password.",
-        "",
-      );
-      if (pass === null) {
-        pass = "";
-      }
       const res = await fetch(`${API}/cameras/discover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: String(user).trim() || "admin",
-          password: pass,
           timeout_seconds: 12,
-          scan_onvif: true,
+          scan_onvif: false,
           scan_edges: true,
         }),
       });
@@ -2939,16 +2852,20 @@ export default function App() {
         window.alert(j.message);
         return;
       }
-      const devices = Array.isArray(j.devices) ? j.devices : [];
+      const devices = (Array.isArray(j.devices) ? j.devices : []).filter(
+        (d) => d && d.kind === "edge",
+      );
       setDiscoveredEdges(devices);
-      // Discovered rows (with per-device "Add") only render on the Devices tab — Find from Live
-      // would otherwise feel like a no-op after the credential prompts.
       if (devices.length > 0) {
         setDeviceDetailId(null);
         setDevicesView("grid");
         setMainTab("devices");
+      } else {
+        window.alert(
+          "No Pi edge agents found on the LAN. Commercial cameras are configured in controller/backend/.env (SMARTCAM_VIGI_*). " +
+            "For Pi 4 edges, ensure the edge agent is running and avahi-daemon is enabled.",
+        );
       }
-      await applyDiscoverPasswordToMatchingCameras(devices, pass, cams);
       if (Array.isArray(j.errors) && j.errors.length) {
         console.warn("[discover]", j.errors);
       }
@@ -2970,8 +2887,9 @@ export default function App() {
       "";
     if (!url) {
       window.alert(
-        "RTSP URL is missing — enter the stream URL for this edge, or enable SURVEILLANCE_PI_CAMERA=1 " +
-          "with mediamtx on the Pi (see docs/SETUP_PI4.md)."
+        "RTSP URL is missing for this Pi edge. Set SURVEILLANCE_PI_CAMERA=1, SURVEILLANCE_RTSP_URL, or " +
+          "ONVIF credentials (SURVEILLANCE_ONVIF_* on the edge and SMARTCAM_EDGE_ONVIF_* on the controller). " +
+          "See docs/SETUP_PI4.md.",
       );
       return;
     }
@@ -3433,9 +3351,11 @@ export default function App() {
                     <>
                       <p className="text-gray-300 font-medium mb-1">No cameras yet</p>
                       <p className="text-gray-500 text-sm">
-                        Use <span className="text-gray-400">Find new cameras</span> above — after you enter ONVIF credentials,
-                        the app switches to <strong className="text-gray-400">Devices</strong> where each found camera has
-                        an <strong className="text-gray-400">Add</strong> button (discovery does not add them automatically).
+                        Commercial cameras are added from{" "}
+                        <span className="font-mono text-gray-400">SMARTCAM_VIGI_*</span> in{" "}
+                        <span className="font-mono text-gray-400">controller/backend/.env</span>. Use{" "}
+                        <strong className="text-gray-400">+ Add Camera</strong> on Devices to find Raspberry Pi 4
+                        edge agents on the LAN.
                       </p>
                     </>
                   )}
@@ -3529,9 +3449,13 @@ export default function App() {
                     {discoveredEdges.map((e, i) => (
                       <div key={`${e.kind || "dev"}-${e.edge_base_url || ""}-${e.host || ""}-${i}`} className="dashboard-card p-3 text-xs flex justify-between gap-2 items-center">
                         <span className="truncate min-w-0">
-                          <span className="text-[9px] uppercase text-gray-500 mr-1">{e.kind === "edge" ? "Edge" : "ONVIF"}</span>
+                          <span className="text-[9px] uppercase text-gray-500 mr-1">Edge</span>
                           <span className="font-medium">{e.name}</span>
-                          {e.incomplete ? <span className="text-amber-400/90 ml-1">(incomplete)</span> : null}
+                          {e.incomplete ? (
+                            <span className="text-amber-400/90 ml-1" title={e.detail || ""}>
+                              (no stream)
+                            </span>
+                          ) : null}
                         </span>
                         <button type="button" onClick={() => addDiscovered(e)} className="dashboard-btn-primary text-[11px] !py-1 shrink-0">Add</button>
                       </div>
@@ -3803,8 +3727,8 @@ export default function App() {
                   <p className="text-xs text-amber-300 mt-2 leading-snug rounded-md border border-amber-500/40 bg-amber-950/35 px-2 py-2">
                     This camera still uses the sample placeholder{" "}
                     <span className="font-mono text-amber-100">CHANGE_ME</span> in the URL (from the default
-                    bootstrap). Run <strong className="text-amber-100">Find</strong> with your ONVIF password — if the
-                    camera host matches discovery, the URL updates automatically — or edit the URL / use
+                    bootstrap). Set <span className="font-mono text-amber-100">SMARTCAM_VIGI_*</span> in{" "}
+                    <span className="font-mono text-amber-100">controller/backend/.env</span>, or edit the URL / use
                     &quot;Camera RTSP password&quot; below and Save.
                   </p>
                 ) : null}

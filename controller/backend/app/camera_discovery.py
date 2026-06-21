@@ -20,7 +20,9 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import camera_store
+import httpx
+
+from .rtsp_url_build import rtsp_userinfo
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +213,7 @@ def _inject_rtsp_credentials(uri: str, username: str, password: str) -> str:
         tail = p.path or ""
         if p.query:
             tail += f"?{p.query}"
-        ui = camera_store._rtsp_userinfo(username, password)
+        ui = rtsp_userinfo(username, password)
         scheme = "rtsps" if u.startswith("rtsps") else "rtsp"
         return f"{scheme}://{ui}@{host}{port}{tail}"
     except Exception:
@@ -616,18 +618,76 @@ def discover_vigilance_edges(*, browse_sec: float = 4.0) -> List[Dict[str, Any]]
     return list(found)
 
 
+def _edge_onvif_credentials() -> Tuple[str, str]:
+    """Shared ONVIF credentials for Pi edge agents (controller/backend/.env)."""
+    user = _nonempty_str(os.environ.get("SMARTCAM_EDGE_ONVIF_USER"), "admin")
+    pwd = str(os.environ.get("SMARTCAM_EDGE_ONVIF_PASS") or "")
+    return user, pwd
+
+
+def enrich_edges_with_onvif_streams(edges: List[Dict[str, Any]]) -> None:
+    """
+    For edge rows missing RTSP, call the edge agent's ``POST /discover/onvif`` using
+    ``SMARTCAM_EDGE_ONVIF_USER`` / ``SMARTCAM_EDGE_ONVIF_PASS`` from the controller .env.
+    Mutates rows in place.
+    """
+    user, pwd = _edge_onvif_credentials()
+    if not pwd.strip():
+        for row in edges:
+            if isinstance(row, dict) and row.get("kind") == "edge" and row.get("incomplete"):
+                row.setdefault(
+                    "detail",
+                    "Set SMARTCAM_EDGE_ONVIF_PASS in controller/backend/.env to resolve edge ONVIF streams",
+                )
+        return
+    for row in edges:
+        if not isinstance(row, dict) or row.get("kind") != "edge":
+            continue
+        stream = (row.get("main_stream") or row.get("url") or "").strip()
+        if stream and not row.get("incomplete"):
+            continue
+        edge = str(row.get("edge_base_url") or "").strip().rstrip("/")
+        if not edge.startswith(("http://", "https://")):
+            continue
+        try:
+            with httpx.Client(timeout=25.0) as client:
+                r = client.post(
+                    f"{edge}/discover/onvif",
+                    json={"username": user, "password": pwd},
+                )
+            if r.status_code >= 400:
+                row["detail"] = f"edge ONVIF HTTP {r.status_code}"
+                continue
+            data = r.json()
+            if not isinstance(data, dict):
+                row["detail"] = "edge ONVIF returned non-JSON"
+                continue
+            resolved = (data.get("main_stream") or data.get("url") or "").strip()
+            if resolved:
+                row["main_stream"] = resolved
+                row["incomplete"] = False
+            elif data.get("detail"):
+                row["detail"] = str(data["detail"])
+        except Exception as e:
+            row["detail"] = f"edge ONVIF request failed: {e!s}"
+
+
 def run_camera_discovery(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Validate ``body`` and run selected discovery strategies.
 
+    Dashboard **Add Camera** uses edge mDNS only (``scan_edges`` default true,
+    ``scan_onvif`` default false). Commercial cameras (VIGI) are configured via
+    ``SMARTCAM_VIGI_*`` in ``backend/.env``, not through this endpoint.
+
     Body keys (all optional):
-    - ``username`` / ``password``: ONVIF credentials (password required for RTSP URIs).
-    - ``timeout_seconds``: split between WS-Discovery and per-device ONVIF (scaled).
-    - ``scan_onvif`` (default true) / ``scan_edges`` (default true).
+    - ``username`` / ``password``: only used when ``scan_onvif`` is true (API/advanced).
+    - ``timeout_seconds``: scales mDNS browse and optional ONVIF probes.
+    - ``scan_onvif`` (default false) / ``scan_edges`` (default true).
     """
     body = body if isinstance(body, dict) else {}
 
-    scan_onvif = body.get("scan_onvif", True)
+    scan_onvif = body.get("scan_onvif", False)
     scan_edges = body.get("scan_edges", True)
     if isinstance(scan_onvif, str):
         scan_onvif = scan_onvif.lower() not in ("0", "false", "no")
@@ -674,12 +734,13 @@ def run_camera_discovery(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     if scan_edges:
         try:
             edges_list = discover_vigilance_edges(browse_sec=browse)
+            enrich_edges_with_onvif_streams(edges_list)
         except Exception as e:
             logger.exception("[discover] edge mDNS failed")
             errors.append(f"edges: {e}")
 
-    # Back-compat: some callers expect a flat ``devices`` list (edges first).
-    devices = [*edges_list, *onvif_list]
+    # UI Add Camera lists Pi edge agents only; ONVIF LAN cameras use SMARTCAM_VIGI_* env.
+    devices = list(edges_list) if not scan_onvif else [*edges_list, *onvif_list]
     return {
         "edges": edges_list,
         "onvif": onvif_list,

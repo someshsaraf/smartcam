@@ -336,8 +336,9 @@ export function SmartcamDebugPanel({
                               <p className="text-[10px] text-amber-300 mt-2 leading-snug border-t border-amber-500/30 pt-2">
                                 <strong>Placeholder:</strong> URL still contains sample{" "}
                                 <span className="font-mono">CHANGE_ME</span>. Use{" "}
-                                <strong>Manage → camera settings</strong> or <strong>Find</strong> with your ONVIF
-                                password.
+                                <strong>Manage → camera settings</strong>, or set{" "}
+                                <span className="font-mono">SMARTCAM_VIGI_*</span> in{" "}
+                                <span className="font-mono">backend/.env</span>.
                               </p>
                             ) : null}
                           </div>

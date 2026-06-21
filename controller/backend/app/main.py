@@ -423,10 +423,12 @@ def detect_edges() -> List[Any]:
 @app.post("/cameras/discover")
 def discover_cameras(body: Optional[Dict[str, Any]] = Body(None)) -> Dict[str, Any]:
     """
-    ONVIF WS-Discovery + stream URI (VIGI / ONVIF cameras), plus mDNS for Vigilance edge agents.
+    mDNS browse for Pi 4 edge agents (dashboard **Add Camera**).
 
-    Optional JSON body: ``username``, ``password``, ``timeout_seconds``, ``scan_onvif``, ``scan_edges``.
-    Password is required on most cameras to resolve RTSP URLs; omit or empty to list devices only.
+    Commercial ONVIF cameras (e.g. VIGI) are registered from ``SMARTCAM_VIGI_*`` in
+    ``backend/.env``, not via this endpoint. Optional body: ``timeout_seconds``,
+    ``scan_edges`` (default true), ``scan_onvif`` (default false, API-only).
+    Edge ONVIF credentials: ``SMARTCAM_EDGE_ONVIF_USER`` / ``SMARTCAM_EDGE_ONVIF_PASS``.
     """
     if body is not None and not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
