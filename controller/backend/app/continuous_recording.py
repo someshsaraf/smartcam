@@ -85,11 +85,10 @@ def motion_proxy_to_edge(cam: Dict[str, Any], edge: str) -> bool:
     """
     True when person-motion clips should run on the Pi edge agent.
 
-    Direct LAN cameras (VIGI: RTSP host matches camera ``ip``, not the edge Pi) stay on
-    the controller. Edge-attached cameras (including MediaMTX restream URLs on the
-    controller) proxy to the edge agent.
+    Only cameras with ``edge_base_url`` on the row use the edge (Pi feeds). Standalone
+    LAN cameras (VIGI via ``SMARTCAM_VIGI_*``, no edge URL) always record on the controller.
     """
-    if not edge:
+    if not edge or not str(cam.get("edge_base_url") or "").strip():
         return False
     ru = rtsp_url(cam).strip()
     if not ru.startswith(("rtsp://", "rtsps://")):

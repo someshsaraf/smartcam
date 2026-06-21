@@ -113,8 +113,9 @@ def _camera_worker(
             faces = []
 
         now_ts = time.time()
-        push_motion_buffer_frame(camera_id, frame, now_ts)
+        # Trigger/arm clip before buffering so the same frame can enter post-roll.
         on_person_detected(camera_id, len(faces), detected_at=now_ts)
+        push_motion_buffer_frame(camera_id, frame, now_ts)
 
         ts = datetime.now(timezone.utc).isoformat()
         payload: Dict[str, Any] = {

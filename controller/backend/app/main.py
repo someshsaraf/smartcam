@@ -33,6 +33,7 @@ from .continuous_recording import (
     start_continuous_recording_background,
 )
 from .motion_recording import (
+    motion_debug_status,
     motion_status_for_camera,
     sync_all_edge_settings,
     sync_edge_settings_for_camera,
@@ -477,6 +478,14 @@ def motion_clip_status(camera_id: int) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Camera not found")
     cam = dict(row)
     return motion_status_for_camera(cam, int(camera_id))
+
+
+@app.get("/cameras/{camera_id}/recordings/motion/debug")
+def motion_clip_debug(camera_id: int) -> Dict[str, Any]:
+    """Why motion clips may not fire (busy/streak/mode/buffer)."""
+    if camera_store.get_camera(camera_id) is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    return motion_debug_status(int(camera_id))
 
 
 @app.post("/cameras/{camera_id}/recordings/manual/{path}")
