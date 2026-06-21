@@ -182,6 +182,10 @@ async def lifespan(app: FastAPI):
     hub = get_detections_hub()
     hub.attach_loop(asyncio.get_running_loop())
     stop_ev = threading.Event()
+    try:
+        mediamtx_yaml_sync.sync_all_cameras_to_mediamtx()
+    except Exception as e:
+        logger.warning("[mediamtx] startup sync failed: %s", e)
     start_person_detection_background(hub, stop_ev)
     yield
     stop_ev.set()
@@ -597,6 +601,20 @@ def stream_health(
             "until the URL includes credentials, e.g. rtsp://admin:password@192.168.x.x:554/stream1 "
             "(special characters in the password must be percent-encoded in the URL)."
         )
+    mtx_src = mediamtx_yaml_sync.fetch_mediamtx_path_source(path_key)
+    if not mtx_src:
+        mtx_src = mediamtx_yaml_sync.read_generated_yaml_path_source(path_key)
+    mtx_redacted = redact_rtsp_url_for_debug(mtx_src or "")
+    if mtx_src and ru and mtx_src.strip() != ru.strip():
+        warnings.append(
+            "MediaMTX path source differs from camera_store RTSP URL — restart ./start.sh controller "
+            "or Save camera settings to push the URL to MediaMTX (:9997)."
+        )
+    if mtx_src and ru.startswith(("rtsp://", "rtsps://")) and not rtsp_url_has_userinfo(mtx_src):
+        warnings.append(
+            "MediaMTX is configured with an RTSP URL that has no username — mediamtx logs will show 401 "
+            "until the path source includes rtsp://USER:PASS@host/…"
+        )
     diag = person_detector_diagnostics()
     ssd = bool(diag.get("model_load_ok"))
     lines = [
@@ -605,6 +623,12 @@ def stream_health(
         "Saving a camera (name/URL/mediamtx_path) regenerates data/mediamtx.generated.yml and tries to push the path to MediaMTX (:9997); "
         "HLS manifest 404 usually means MediaMTX has no path yet or RTSP pull failed — check mediamtx logs.",
     ]
+    if ru.startswith(("rtsp://", "rtsps://")) and rtsp_url_has_userinfo(ru):
+        lines.append(
+            "MediaMTX RTSP 401 with credentials present: wrong password (VIGI device verification password, "
+            "not Omada-only), wrong path (/stream1), stale MediaMTX path (check mediamtx_source_redacted), "
+            "or unquoted $ in SMARTCAM_VIGI_PASS (.env)."
+        )
     if person_detection_enabled() and ssd:
         lines.append(
             "Person overlays: OpenCV MobileNet-SSD workers read each camera RTSP and "
@@ -621,6 +645,10 @@ def stream_health(
         "mediamtx_path": path_key,
         "rtsp_has_userinfo": rtsp_url_has_userinfo(ru),
         "rtsp_url_redacted": redact_rtsp_url_for_debug(ru),
+        "mediamtx_source_redacted": mtx_redacted or None,
+        "mediamtx_source_matches_store": (
+            bool(mtx_src and ru) and mtx_src.strip() == ru.strip()
+        ),
         "hls_api_playlist_url": hls_api_playlist,
         "hls_mediamtx_manifest_url": hls_mediamtx_manifest,
         "warnings": warnings,

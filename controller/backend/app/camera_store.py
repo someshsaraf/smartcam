@@ -5,7 +5,8 @@ Central camera registry and selected camera state.
 
 Initialization order (first match wins):
 1. JSON file from SMARTCAM_CAMERAS_JSON, or data/cameras.json next to cwd, if it
-   contains at least one camera object.
+   contains at least one camera object. When SMARTCAM_VIGI_* is also set, RTSP URLs
+   on cameras whose IP/host matches SMARTCAM_VIGI_IP are refreshed from env on load.
 2. One camera from env: SMARTCAM_VIGI_IP + SMARTCAM_VIGI_USER + SMARTCAM_VIGI_PASS
 3. Hardcoded bootstrap_default_cameras() (replace CHANGE_ME in the RTSP URL from **Manage → settings**, use the **Camera RTSP password** field, or use env SMARTCAM_VIGI_* / JSON as above).
 
@@ -21,7 +22,7 @@ import os
 import time
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
 def _preload_backend_dotenv() -> None:
@@ -34,7 +35,7 @@ def _preload_backend_dotenv() -> None:
     for rel in ("../.env", "../../.env"):
         p = os.path.normpath(os.path.join(here, rel))
         if os.path.isfile(p):
-            load_dotenv(p, override=False)
+            load_dotenv(p, override=False, interpolate=False)
             return
 
 
@@ -301,16 +302,95 @@ def _init_from_json() -> bool:
     return False
 
 
-def _init_from_env_vigi() -> bool:
+def _vigi_env_credentials() -> Optional[tuple[str, str, str, str]]:
+    """Return (ip, user, password, name) when SMARTCAM_VIGI_* env is complete."""
     ip = os.environ.get("SMARTCAM_VIGI_IP", "").strip()
     if not ip:
-        return False
+        return None
     user = os.environ.get("SMARTCAM_VIGI_USER", "admin").strip() or "admin"
     password = os.environ.get("SMARTCAM_VIGI_PASS", "").strip()
     if not password:
-        print("[camera_store] SMARTCAM_VIGI_IP set but SMARTCAM_VIGI_PASS is empty; skipping env camera")
-        return False
+        return None
     name = os.environ.get("SMARTCAM_VIGI_NAME", "Camera").strip() or "Camera"
+    return ip, user, password, name
+
+
+def _camera_matches_vigi_ip(cam: dict, ip: str) -> bool:
+    if str(cam.get("ip") or "").strip() == ip:
+        return True
+    u = str(cam.get("url") or cam.get("main_stream") or cam.get("mainStream") or "").strip()
+    if u.startswith(("rtsp://", "rtsps://")):
+        try:
+            return (urlparse(u).hostname or "").strip() == ip
+        except Exception:
+            return False
+    return False
+
+
+def _apply_env_vigi_overrides() -> None:
+    """
+    When SMARTCAM_VIGI_* is set, refresh RTSP URLs on any loaded camera whose IP/host
+    matches — even if cameras.json was loaded first (JSON alone does not read .env creds).
+    """
+    creds = _vigi_env_credentials()
+    if not creds:
+        if os.environ.get("SMARTCAM_VIGI_IP", "").strip() and not os.environ.get(
+            "SMARTCAM_VIGI_PASS", ""
+        ).strip():
+            print(
+                "[camera_store] SMARTCAM_VIGI_IP set but SMARTCAM_VIGI_PASS is empty; "
+                "not updating RTSP URLs",
+                flush=True,
+            )
+        return
+    ip, user, password, _name = creds
+    userinfo = _rtsp_userinfo(user, password)
+    new_main = f"rtsp://{userinfo}@{ip}:554/stream1"
+    new_sub = f"rtsp://{userinfo}@{ip}:554/stream2"
+    updated: List[int] = []
+    for cam in list_cameras():
+        if not isinstance(cam, dict) or cam.get("id") is None:
+            continue
+        if not _camera_matches_vigi_ip(cam, ip):
+            continue
+        cid = int(cam["id"])
+        cur = str(cam.get("url") or cam.get("main_stream") or "").strip()
+        cur_sub = str(cam.get("sub_stream") or "").strip()
+        if cur == new_main and cur_sub == new_sub:
+            continue
+        update_camera(
+            cid,
+            {
+                "url": new_main,
+                "main_stream": new_main,
+                "sub_stream": new_sub,
+                "ip": ip,
+            },
+        )
+        updated.append(cid)
+    if updated:
+        print(
+            f"[camera_store] applied SMARTCAM_VIGI_* RTSP URL to camera id(s) {updated} "
+            f"(host {ip}; password len={len(password)} — quote .env if it contains $)",
+            flush=True,
+        )
+        persist_cameras_to_json()
+        try:
+            from . import mediamtx_yaml_sync
+
+            mediamtx_yaml_sync.sync_all_cameras_to_mediamtx()
+        except Exception as e:
+            print(f"[camera_store] mediamtx sync after VIGI env apply failed: {e}", flush=True)
+
+
+def _init_from_env_vigi() -> bool:
+    creds = _vigi_env_credentials()
+    if not creds:
+        ip_only = os.environ.get("SMARTCAM_VIGI_IP", "").strip()
+        if ip_only:
+            print("[camera_store] SMARTCAM_VIGI_IP set but SMARTCAM_VIGI_PASS is empty; skipping env camera")
+        return False
+    ip, user, password, name = creds
     register_vigi_camera(ip=ip, username=user, password=password, name=name)
     print(f"[camera_store] registered camera from env SMARTCAM_VIGI_IP={ip}")
     return True
@@ -318,6 +398,7 @@ def _init_from_env_vigi() -> bool:
 
 def _init_store() -> None:
     if _init_from_json():
+        _apply_env_vigi_overrides()
         return
     if _init_from_env_vigi():
         return

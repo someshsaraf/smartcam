@@ -96,6 +96,81 @@ def push_mediamtx_path_for_camera(cam: Dict[str, Any]) -> None:
         logger.debug("[mediamtx] API push skipped: %s", e)
 
 
+def fetch_mediamtx_path_source(path_key: str) -> Optional[str]:
+    """Read running MediaMTX path ``source`` via control API (localhost)."""
+    if not path_key or not str(path_key).strip():
+        return None
+    base = os.environ.get("SMARTCAM_MEDIAMTX_API", "http://127.0.0.1:9997").strip().rstrip("/")
+    if not base:
+        return None
+    seg = quote(str(path_key).strip(), safe="")
+    try:
+        import httpx
+
+        with httpx.Client(timeout=3.0) as client:
+            r = client.get(f"{base}/v3/config/paths/get/{seg}")
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if not isinstance(data, dict):
+                return None
+            src = data.get("source")
+            return str(src).strip() if src else None
+    except Exception:
+        return None
+
+
+def read_generated_yaml_path_source(path_key: str) -> Optional[str]:
+    """Best-effort read of ``source`` for ``path_key`` from mediamtx.generated.yml."""
+    if not path_key or not str(path_key).strip():
+        return None
+    yaml_path = os.path.join(BACKEND_ROOT, "data", "mediamtx.generated.yml")
+    if not os.path.isfile(yaml_path):
+        return None
+    key = str(path_key).strip()
+    in_path = False
+    try:
+        with open(yaml_path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(f"{key}:"):
+                    in_path = True
+                    continue
+                if in_path:
+                    if stripped.startswith("source:"):
+                        raw = stripped.split(":", 1)[1].strip()
+                        if raw.startswith('"') and raw.endswith('"'):
+                            import json as _json
+
+                            try:
+                                return str(_json.loads(raw)).strip()
+                            except _json.JSONDecodeError:
+                                return raw.strip('"')
+                        return raw
+                    if stripped and not line.startswith(" ") and not line.startswith("\t"):
+                        break
+    except OSError:
+        return None
+    return None
+
+
+def sync_all_cameras_to_mediamtx() -> None:
+    """Regenerate YAML and push every camera RTSP path to the running MediaMTX."""
+    ok, msg = regenerate_controller_mediamtx_yaml()
+    if ok:
+        logger.info("[mediamtx] yaml: %s", msg)
+    else:
+        logger.warning("[mediamtx] yaml regen failed: %s", msg)
+    try:
+        from . import camera_store
+
+        for row in camera_store.list_cameras():
+            if isinstance(row, dict):
+                push_mediamtx_path_for_camera(dict(row))
+    except Exception as e:
+        logger.debug("[mediamtx] sync_all push skipped: %s", e)
+
+
 def sync_after_camera_mutation(updated_camera: Optional[Dict[str, Any]] = None) -> None:
     """Call after POST/PATCH camera or DELETE (pass None)."""
     ok, msg = regenerate_controller_mediamtx_yaml()
