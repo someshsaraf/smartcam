@@ -56,6 +56,31 @@ function computeObjectContainLayout(containerW, containerH, videoW, videoH) {
   };
 }
 
+/** Match CSS ``object-cover`` — full frame fills the container (cropped). */
+function computeObjectCoverLayout(containerW, containerH, videoW, videoH) {
+  if (containerW < 2 || containerH < 2 || videoW < 2 || videoH < 2) return null;
+  const scale = Math.max(containerW / videoW, containerH / videoH);
+  const drawW = videoW * scale;
+  const drawH = videoH * scale;
+  return {
+    containerW,
+    containerH,
+    offsetX: (containerW - drawW) / 2,
+    offsetY: (containerH - drawH) / 2,
+    drawW,
+    drawH,
+    videoW,
+    videoH,
+    scale,
+  };
+}
+
+function computeVideoFitLayout(containerW, containerH, videoW, videoH, fit = "contain") {
+  return fit === "cover"
+    ? computeObjectCoverLayout(containerW, containerH, videoW, videoH)
+    : computeObjectContainLayout(containerW, containerH, videoW, videoH);
+}
+
 const ANIMAL_LABELS = new Set(["bird", "cat", "cow", "dog", "horse", "sheep", "animal"]);
 
 function isAnimalDetection(d) {
@@ -110,7 +135,7 @@ function formatDetectionLabel(det) {
   return score !== "—" ? `${label} ${score}` : label;
 }
 
-function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
+function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect, fitMode = "contain" }) {
   const [layout, setLayout] = useState(null);
   const boxes = overlayDetections(faces);
 
@@ -130,7 +155,7 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
         video && video.videoHeight > 0
           ? video.videoHeight
           : assumedAspect?.h ?? 9;
-      setLayout(computeObjectContainLayout(cw, ch, vw, vh));
+      setLayout(computeVideoFitLayout(cw, ch, vw, vh, fitMode));
     };
 
     measure();
@@ -139,6 +164,7 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
     if (video) {
       video.addEventListener("loadedmetadata", measure);
       video.addEventListener("loadeddata", measure);
+      video.addEventListener("resize", measure);
     }
     window.addEventListener("orientationchange", measure);
     const tick = window.setInterval(measure, 250);
@@ -147,16 +173,17 @@ function PersonBoxesOverlay({ faces, videoRef, containerRef, assumedAspect }) {
       if (video) {
         video.removeEventListener("loadedmetadata", measure);
         video.removeEventListener("loadeddata", measure);
+        video.removeEventListener("resize", measure);
       }
       window.removeEventListener("orientationchange", measure);
       window.clearInterval(tick);
     };
-  }, [faces, videoRef, containerRef, assumedAspect?.w, assumedAspect?.h]);
+  }, [faces, videoRef, containerRef, assumedAspect?.w, assumedAspect?.h, fitMode]);
 
   if (!layout || boxes.length === 0) return null;
 
   return (
-    <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden" aria-hidden>
+    <div className="absolute inset-0 z-[30] pointer-events-none overflow-hidden" aria-hidden>
       {boxes.map((f, i) => {
         const style = detectionOverlayStyle(f);
         const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
@@ -1852,7 +1879,6 @@ function LiveTile({
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
   const hlsRef = useRef(null);
   const overlaySync = detectionOverlaySyncEnabled();
   const backendInferenceDelayMs =
@@ -1901,6 +1927,7 @@ function LiveTile({
   const isHeroShell = layout === "heroShell";
   const isThumb = layout === "thumb";
   const heroLayout = (isHero || isHeroShell) && !isThumb;
+  const overlayFit = isHeroShell ? "cover" : "contain";
 
   const zoomIn = useCallback(() => setScale((s) => Math.min(4, s * 1.15)), []);
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
@@ -2179,82 +2206,6 @@ function LiveTile({
     };
   }, [cam.id, rtspSource, hlsUrl, hlsProxyUrl, hlsDirectUrl, useWebRtc]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const container = wrapRef.current;
-    if (!video || !canvas || useWebRtc) return undefined;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return undefined;
-
-    const paint = () => {
-      const cw = container?.clientWidth || video.clientWidth;
-      const ch = container?.clientHeight || video.clientHeight;
-      if (cw < 2 || ch < 2) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 3);
-      canvas.width = Math.round(cw * dpr);
-      canvas.height = Math.round(ch * dpr);
-      canvas.style.width = `${cw}px`;
-      canvas.style.height = `${ch}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, cw, ch);
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      if (!vw || !vh) return;
-      const layout = computeObjectContainLayout(cw, ch, vw, vh);
-      if (!layout) return;
-      const lineW = heroLayout ? 3 : 2;
-      ctx.lineWidth = lineW;
-      ctx.font = heroLayout
-        ? "12px ui-monospace, system-ui, sans-serif"
-        : "11px ui-monospace, system-ui, sans-serif";
-      const faceList = overlayDetections(drawFaces);
-      for (const f of faceList) {
-        const x = layout.offsetX + Number(f.x) * layout.videoW * layout.scale;
-        const y = layout.offsetY + Number(f.y) * layout.videoH * layout.scale;
-        const w = Number(f.w) * layout.videoW * layout.scale;
-        const h = Number(f.h) * layout.videoH * layout.scale;
-        const animal = isAnimalDetection(f);
-        ctx.strokeStyle = animal ? "rgba(251, 191, 36, 0.95)" : "rgba(59, 130, 246, 0.95)";
-        ctx.strokeRect(x, y, w, h);
-        const label = formatDetectionLabel(f);
-        if (!label) continue;
-        const padX = 4;
-        const padY = 2;
-        const textY = Math.max(12, y - 4);
-        const metrics = ctx.measureText(label);
-        const boxW = metrics.width + padX * 2;
-        const boxH = heroLayout ? 16 : 14;
-        const labelX = Math.min(Math.max(0, x), cw - boxW);
-        const labelTop = Math.max(0, textY - boxH + 2);
-        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
-        ctx.fillRect(labelX, labelTop, boxW, boxH);
-        ctx.fillStyle = animal ? "rgba(251, 191, 36, 1)" : "rgba(96, 165, 250, 1)";
-        ctx.fillText(label, labelX + padX, labelTop + boxH - padY - 2);
-      }
-    };
-
-    paint();
-    video.addEventListener("loadedmetadata", paint);
-    video.addEventListener("loadeddata", paint);
-    video.addEventListener("playing", paint);
-    video.addEventListener("timeupdate", paint);
-    const ro = new ResizeObserver(paint);
-    if (container) ro.observe(container);
-    ro.observe(video);
-    window.addEventListener("orientationchange", paint);
-    const overlayTick = window.setInterval(paint, 150);
-    return () => {
-      video.removeEventListener("loadedmetadata", paint);
-      video.removeEventListener("loadeddata", paint);
-      video.removeEventListener("playing", paint);
-      video.removeEventListener("timeupdate", paint);
-      ro.disconnect();
-      window.removeEventListener("orientationchange", paint);
-      window.clearInterval(overlayTick);
-    };
-  }, [drawFaces, useWebRtc, cam.id, heroLayout]);
-
   return (
     <div
       className={`flex flex-col min-h-0 h-full ${
@@ -2360,6 +2311,7 @@ function LiveTile({
                 faces={drawFaces}
                 containerRef={wrapRef}
                 assumedAspect={{ w: 16, h: 9 }}
+                fitMode={overlayFit}
               />
               {edgeHint && !overlayDetections(drawFaces).length ? (
                 <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 p-3 text-center bg-black/35">
@@ -2383,10 +2335,11 @@ function LiveTile({
                 muted
                 autoPlay
               />
-              <canvas
-                ref={canvasRef}
-                className="absolute inset-0 z-10 w-full h-full pointer-events-none"
-                aria-hidden="true"
+              <PersonBoxesOverlay
+                faces={drawFaces}
+                videoRef={videoRef}
+                containerRef={wrapRef}
+                fitMode={overlayFit}
               />
               {streamError ? (
                 <div className="pointer-events-none absolute inset-0 z-[25] flex flex-col items-center justify-start gap-2 overflow-y-auto bg-black/90 pt-16 pb-28 px-3 text-center">

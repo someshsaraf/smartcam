@@ -113,10 +113,16 @@ def _camera_worker(
             faces = []
 
         person_count = sum(
-            1 for d in faces if str(d.get("category") or d.get("label") or "").lower() == "person"
+            1
+            for d in faces
+            if str(d.get("category") or d.get("label") or "").lower() == "person"
         )
         animal_count = sum(
-            1 for d in faces if str(d.get("category") or "").lower() == "animal"
+            1
+            for d in faces
+            if str(d.get("category") or "").lower() == "animal"
+            or str(d.get("label") or "").lower()
+            in ("bird", "cat", "cow", "dog", "horse", "sheep")
         )
         motion_count = person_count + animal_count
 

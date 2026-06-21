@@ -23,7 +23,18 @@ export function estimatePlaybackLagMs(video, hls) {
 function countPeople(faces, personCount) {
   if (typeof personCount === "number") return personCount;
   if (!Array.isArray(faces)) return 0;
-  return faces.filter((d) => String(d?.label || "").toLowerCase() === "person").length;
+  return faces.filter((d) => String(d?.category || d?.label || "").toLowerCase() === "person").length;
+}
+
+function hasOverlayDetections(faces, personCount) {
+  if (countPeople(faces, personCount) > 0) return true;
+  if (!Array.isArray(faces)) return false;
+  const animalLabels = new Set(["bird", "cat", "cow", "dog", "horse", "sheep", "animal"]);
+  return faces.some(
+    (d) =>
+      String(d?.category || "").toLowerCase() === "animal" ||
+      animalLabels.has(String(d?.label || "").toLowerCase()),
+  );
 }
 
 function snapshot(faces, personCount) {
@@ -66,7 +77,7 @@ export function useOverlaySyncedDetections(faces, personCount, opts) {
       return undefined;
     }
 
-    if (latest.faces.length === 0 && latest.personCount === 0) {
+    if (!hasOverlayDetections(latest.faces, latest.personCount)) {
       queueRef.current = [];
       setDisplayed(latest);
       return undefined;

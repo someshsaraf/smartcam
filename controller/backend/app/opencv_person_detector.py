@@ -34,6 +34,9 @@ _VOC_CLASS_NAMES: Dict[int, str] = {
     17: "sheep",
     15: "person",
 }
+# Lying pets (overhead cameras) are often misclassified as person — reclassify wide boxes.
+_HORIZONTAL_PERSON_ASPECT = 1.12
+_OVERLAP_IOU = 0.35
 
 
 def _backend_dir() -> Path:
@@ -90,10 +93,11 @@ def person_detector_diagnostics() -> Dict[str, Any]:
             err = str(e)
     try:
         conf = _parse_float_env("SMARTCAM_PERSON_CONFIDENCE", 0.45, 0.0, 1.0)
+        animal_conf = _parse_float_env("SMARTCAM_ANIMAL_CONFIDENCE", 0.32, 0.0, 1.0)
         min_frac = _parse_float_env("SMARTCAM_PERSON_MIN_BOX_FRACTION", 0.0005, 0.0, 1.0)
         env_err = None
     except ValueError as e:
-        conf, min_frac = 0.45, 0.0005
+        conf, animal_conf, min_frac = 0.45, 0.32, 0.0005
         env_err = str(e)
     return {
         "pipeline": "opencv_mobilenet_ssd_person_animal",
@@ -103,9 +107,72 @@ def person_detector_diagnostics() -> Dict[str, Any]:
         "model_load_ok": load_ok,
         "model_load_error": err,
         "confidence_threshold": conf,
+        "animal_confidence_threshold": animal_conf,
         "min_box_fraction": min_frac,
         "env_parse_error": env_err,
     }
+
+
+def _box_iou(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    ax1, ay1 = float(a["x"]), float(a["y"])
+    ax2, ay2 = ax1 + float(a["w"]), ay1 + float(a["h"])
+    bx1, by1 = float(b["x"]), float(b["y"])
+    bx2, by2 = bx1 + float(b["w"]), by1 + float(b["h"])
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    if union <= 0.0:
+        return 0.0
+    return inter / union
+
+
+def _reclassify_horizontal_person(box: Dict[str, Any]) -> Dict[str, Any]:
+    """Overhead lying dogs often score as VOC person — prefer animal when box is wide."""
+    if str(box.get("category") or "") != "person":
+        return box
+    bw = float(box.get("w") or 0.0)
+    bh = float(box.get("h") or 0.0)
+    if bh <= 1e-6:
+        return box
+    if bw / bh < _HORIZONTAL_PERSON_ASPECT:
+        return box
+    out = dict(box)
+    out["category"] = "animal"
+    out["label"] = "dog"
+    out["reclassified"] = True
+    return out
+
+
+def _resolve_overlapping(boxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop duplicate overlaps; when person and animal collide, keep animal."""
+    ordered = sorted(boxes, key=lambda d: float(d.get("score") or 0.0), reverse=True)
+    kept: List[Dict[str, Any]] = []
+    for cand in ordered:
+        replace_idx: Optional[int] = None
+        skip = False
+        for i, existing in enumerate(kept):
+            if _box_iou(cand, existing) < _OVERLAP_IOU:
+                continue
+            cand_animal = str(cand.get("category") or "") == "animal"
+            exist_animal = str(existing.get("category") or "") == "animal"
+            if cand_animal and not exist_animal:
+                replace_idx = i
+                break
+            skip = True
+            break
+        if skip:
+            continue
+        if replace_idx is not None:
+            kept[replace_idx] = cand
+        else:
+            kept.append(cand)
+    return kept
 
 
 class OpenCVPersonDetector:
@@ -134,6 +201,12 @@ class OpenCVPersonDetector:
                 )
             except ValueError:
                 self._min_box_fraction = 0.0005
+        try:
+            self._animal_confidence = _parse_float_env(
+                "SMARTCAM_ANIMAL_CONFIDENCE", 0.32, 0.0, 1.0
+            )
+        except ValueError:
+            self._animal_confidence = 0.32
         self._net: Optional[cv2.dnn.Net] = None
         self._load_failed = False
 
@@ -173,17 +246,19 @@ class OpenCVPersonDetector:
         )
         net.setInput(blob)
         detections = net.forward()
-        out: List[Dict[str, Any]] = []
+        raw: List[Dict[str, Any]] = []
         for i in range(detections.shape[2]):
             conf = float(detections[0, 0, i, 2])
-            if conf < self._confidence:
-                continue
             cls_id = int(detections[0, 0, i, 1])
             if cls_id == _PERSON:
                 category = "person"
+                min_conf = self._confidence
             elif cls_id in _ANIMAL:
                 category = "animal"
+                min_conf = self._animal_confidence
             else:
+                continue
+            if conf < min_conf:
                 continue
             x1 = int(detections[0, 0, i, 3] * w)
             y1 = int(detections[0, 0, i, 4] * h)
@@ -194,7 +269,7 @@ class OpenCVPersonDetector:
             if box_w * box_h < (w * h) * self._min_box_fraction:
                 continue
             label = _VOC_CLASS_NAMES.get(cls_id, category)
-            out.append(
+            raw.append(
                 {
                     "x": round(x1 / float(w), 6),
                     "y": round(y1 / float(h), 6),
@@ -206,4 +281,5 @@ class OpenCVPersonDetector:
                     "source": "opencv_ssd",
                 }
             )
-        return out
+        adjusted = [_reclassify_horizontal_person(b) for b in raw]
+        return _resolve_overlapping(adjusted)
