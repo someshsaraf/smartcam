@@ -300,25 +300,3 @@ body {
     @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-300 text-sm;
   }
 }
-
-
-/* ===== OPTION C PREMIUM SURVEILLANCE UI ===== */
-:root{
-  --vig-bg:#070b14;
-  --vig-panel:#0f1728;
-  --vig-panel-2:#131d33;
-  --vig-accent:#6366f1;
-}
-body{
-  background:
-    radial-gradient(circle at top right, rgba(99,102,241,.15), transparent 25%),
-    radial-gradient(circle at bottom left, rgba(14,165,233,.12), transparent 25%),
-    var(--vig-bg);
-}
-.dashboard-card{
-  border-radius:18px !important;
-  backdrop-filter:blur(18px);
-}
-.live-view-inner{
-  max-width:1920px !important;
-}
