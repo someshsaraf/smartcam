@@ -60,7 +60,13 @@ def _write_clip_thumbnail(
     if not ensure_recording_thumbnail(mp4_path, seek_seconds=seek):
         print("[edge] thumbnail failed:", mp4_path.name)
 
-SEGMENT_SECONDS = 600
+def _segment_seconds() -> int:
+    raw = os.environ.get("SMARTCAM_CONTINUOUS_SEGMENT_SECONDS", "60").strip()
+    try:
+        sec = int(raw)
+    except ValueError:
+        sec = 60
+    return max(30, min(sec, 3600))
 # Match LocalPublisher PRESETS (local_publisher.py) so RTSP reads keep up with the
 # rpiCamera encoder; reading slower causes MediaMTX "reader is too slow, discarding frames".
 QUALITY_CAPTURE_FPS = {"low": 15.0, "medium": 25.0, "high": 25.0}
@@ -983,7 +989,7 @@ class EdgeRecorder:
             "-f",
             "segment",
             "-segment_time",
-            str(int(SEGMENT_SECONDS)),
+            str(_segment_seconds()),
             "-segment_list",
             list_path.name,
             "-segment_list_type",

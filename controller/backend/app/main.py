@@ -27,7 +27,14 @@ import httpx
 
 from . import camera_store, mediamtx_yaml_sync
 from .camera_discovery import discover_vigilance_edges, run_camera_discovery
+from .continuous_recording import (
+    get_continuous_supervisor_thread,
+    notify_settings_changed,
+    recording_ws_payload,
+    start_continuous_recording_background,
+)
 from .detections_hub import get_detections_hub
+from .recording_hub import get_recording_hub
 from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
 from .manual_recording import (
     manual_status_local,
@@ -181,19 +188,26 @@ def _httpx_error_detail(r: httpx.Response) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
     hub = get_detections_hub()
-    hub.attach_loop(asyncio.get_running_loop())
+    hub.attach_loop(loop)
+    rec_hub = get_recording_hub()
+    rec_hub.attach_loop(loop)
     stop_ev = threading.Event()
     try:
         mediamtx_yaml_sync.sync_all_cameras_to_mediamtx()
     except Exception as e:
         logger.warning("[mediamtx] startup sync failed: %s", e)
     start_person_detection_background(hub, stop_ev)
+    start_continuous_recording_background(rec_hub, stop_ev)
     yield
     stop_ev.set()
     sup = get_supervisor_thread()
     if sup is not None and sup.is_alive():
         sup.join(timeout=15.0)
+    cont_sup = get_continuous_supervisor_thread()
+    if cont_sup is not None and cont_sup.is_alive():
+        cont_sup.join(timeout=15.0)
 
 
 app = FastAPI(title="SmartCam controller", version="0.1.0", lifespan=lifespan)
@@ -368,6 +382,7 @@ def patch_settings(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str
             detail="Settings updated in memory but could not write cameras.json "
             "(check SMARTCAM_CAMERAS_JSON path and permissions).",
         )
+    notify_settings_changed(int(camera_id))
     return _effective_settings(int(camera_id))
 
 
@@ -800,13 +815,17 @@ def hls_playlist_redirect(camera_id: int, request: Request) -> RedirectResponse:
 
 @app.websocket("/ws/recording")
 async def ws_recording(ws: WebSocket) -> None:
+    hub = get_recording_hub()
     await ws.accept()
+    await hub.add(ws)
     try:
-        await ws.send_json({"cameras": {}})
+        await ws.send_json(recording_ws_payload())
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
-        return
+        pass
+    finally:
+        await hub.remove(ws)
 
 
 @app.websocket("/ws/detections")

@@ -22,6 +22,7 @@ import {
   DeviceDetailHeader,
   DevicesDashboardPage,
   LiveDashboardPage,
+  LiveVideoOverlayControls,
   PlaybackDashboardPage,
   PlaybackTimelineBar,
   VigilanceShell,
@@ -1778,6 +1779,7 @@ function LiveTile({
   motionClipCountdown,
   overlayDelayMs,
   layout = "default",
+  onRequestFullscreen,
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
@@ -1815,6 +1817,7 @@ function LiveTile({
   const [edgeHint, setEdgeHint] = useState("");
   /** From GET /cameras/{id}/stream_health — RTSP redacted + HLS URLs for debugging. */
   const [streamDebug, setStreamDebug] = useState(null);
+  const [audioMuted, setAudioMuted] = useState(true);
   const rtspSource = cameraRtspUrl(cam);
   const streamUrl = streamUrlForCamera(cam);
   const hlsProxyUrl = hlsPlaylistUrlForCamera(cam, true);
@@ -1833,10 +1836,41 @@ function LiveTile({
   const zoomOut = useCallback(() => setScale((s) => Math.max(0.5, s / 1.15)), []);
 
   const goFs = () => {
+    if (typeof onRequestFullscreen === "function") {
+      onRequestFullscreen();
+      return;
+    }
     const el = wrapRef.current;
     if (!el?.requestFullscreen) return;
     el.requestFullscreen().catch(() => {});
   };
+
+  const handleToggleMute = useCallback(() => {
+    if (useWebRtc) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const next = !v.muted;
+    v.muted = next;
+    setAudioMuted(next);
+  }, [useWebRtc]);
+
+  const handleOverlayFullscreen = useCallback(() => {
+    if (typeof onRequestFullscreen === "function") {
+      onRequestFullscreen();
+      return;
+    }
+    wrapRef.current?.requestFullscreen?.().catch(() => {});
+  }, [onRequestFullscreen]);
+
+  useEffect(() => {
+    setAudioMuted(true);
+  }, [cam?.id]);
+
+  useEffect(() => {
+    if (useWebRtc) return;
+    const v = videoRef.current;
+    if (v) v.muted = audioMuted;
+  }, [audioMuted, useWebRtc]);
 
   useEffect(() => {
     setUseWebRtc(preferWebRtcLive());
@@ -2205,7 +2239,14 @@ function LiveTile({
             <div className="absolute inset-x-0 bottom-0 h-24 mobile-video-gradient-bottom pointer-events-none z-[5]" />
           </>
         ) : null}
-        {recording && !isHeroShell ? (
+        {isHeroShell ? (
+          <LiveVideoOverlayControls
+            muted={audioMuted}
+            onToggleMute={useWebRtc ? undefined : handleToggleMute}
+            onFullscreen={handleOverlayFullscreen}
+          />
+        ) : null}
+        {recording ? (
           <div
             className={`absolute z-20 flex items-center gap-1.5 ${
               heroLayout ? "top-3 right-3" : "top-2 right-2"
@@ -3259,6 +3300,7 @@ export default function App() {
           : undefined
       }
       motionClipCountdown={null}
+      onRequestFullscreen={layout === "heroShell" ? handleLiveFullscreen : undefined}
     />
   );
 
@@ -3817,8 +3859,8 @@ export default function App() {
                 </select>
                 {form.recording_mode === "continuous" ? (
                   <p className="text-xs text-amber-400 mt-2">
-                    Continuous recording fills the SD card (or NAS) quickly. Use retention or
-                    lower quality on the edge.
+                    Records 1-minute MP4 segments continuously. Clips fill storage quickly — use
+                    retention or lower quality where available.
                   </p>
                 ) : null}
                 {form.recording_mode === "off" ? (

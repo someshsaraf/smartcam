@@ -195,6 +195,12 @@ body {
   .dashboard-video-chip {
     @apply inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/90 backdrop-blur-sm border border-white/10;
   }
+  button.dashboard-video-chip {
+    @apply cursor-pointer transition-colors hover:bg-black/70 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  button.dashboard-video-chip-active {
+    @apply border-emerald-500/50 bg-emerald-950/40;
+  }
   /* Video overlay (desktop only): full mock-style cards centered on the video bottom. */
   .video-overlay-actions {
     position: relative;

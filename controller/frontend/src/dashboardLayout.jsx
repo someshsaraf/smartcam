@@ -606,6 +606,69 @@ function formatZoomLabel(value) {
   return Number.isInteger(z) ? `${z}x` : `${z.toFixed(1)}x`;
 }
 
+/** Camera / mic / speaker / fullscreen chips overlaid on the live video (hero tile). */
+export function LiveVideoOverlayControls({
+  muted = true,
+  onToggleMute,
+  onFullscreen,
+  onSnapshot,
+  onTalk,
+  className = "",
+}) {
+  return (
+    <div
+      className={`absolute top-12 right-3 z-30 flex items-center gap-1.5 pointer-events-auto ${className}`.trim()}
+      role="toolbar"
+      aria-label="Live video controls"
+    >
+      <button
+        type="button"
+        className="dashboard-video-chip"
+        aria-label="Snapshot"
+        title="Snapshot"
+        onClick={onSnapshot}
+        disabled={!onSnapshot}
+      >
+        <Camera size={14} variant="Outline" color="#f1f5f9" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="dashboard-video-chip"
+        aria-label="Talk"
+        title="Talk"
+        onClick={onTalk}
+        disabled={!onTalk}
+      >
+        <Microphone2 size={14} variant="Outline" color="#f1f5f9" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className={`dashboard-video-chip ${muted ? "" : "dashboard-video-chip-active"}`}
+        aria-label={muted ? "Unmute live audio" : "Mute live audio"}
+        title={muted ? "Unmute" : "Mute"}
+        onClick={onToggleMute}
+        disabled={!onToggleMute}
+      >
+        {muted ? (
+          <VolumeHigh size={14} variant="Outline" color="#f1f5f9" aria-hidden />
+        ) : (
+          <VolumeHigh size={14} variant="Bold" color="#34d399" aria-hidden />
+        )}
+      </button>
+      <button
+        type="button"
+        className="dashboard-video-chip"
+        aria-label="Fullscreen"
+        title="Fullscreen"
+        onClick={onFullscreen}
+        disabled={!onFullscreen}
+      >
+        <Maximize3 size={14} variant="Outline" color="#f1f5f9" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 export function LiveDashboardPage({
   cameraName,
   isPrimary,
@@ -764,17 +827,6 @@ export function LiveDashboardPage({
                 </span>
               ) : null}
               <LiveClock />
-              <span className="flex gap-1.5 pointer-events-none opacity-80">
-                <span className="dashboard-video-chip" aria-hidden>
-                  <Camera size={14} variant="Outline" color="#f1f5f9" />
-                </span>
-                <span className="dashboard-video-chip" aria-hidden>
-                  <Microphone2 size={14} variant="Outline" color="#f1f5f9" />
-                </span>
-                <span className="dashboard-video-chip" aria-hidden>
-                  <VolumeHigh size={14} variant="Outline" color="#f1f5f9" />
-                </span>
-              </span>
             </div>
 
             <div
