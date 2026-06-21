@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 import httpx
 
-from . import camera_store, mediamtx_yaml_sync
+from . import camera_store, event_store, mediamtx_yaml_sync
 from .camera_discovery import discover_vigilance_edges, run_camera_discovery
 from .continuous_recording import (
     get_continuous_supervisor_thread,
@@ -296,6 +296,7 @@ def create_camera(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def delete_camera(camera_id: int) -> Dict[str, str]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
+    event_store.delete_events_for_camera(int(camera_id))
     camera_store.remove_camera(camera_id)
     camera_store.persist_cameras_to_json()
     mediamtx_yaml_sync.sync_after_camera_mutation(None)
@@ -397,16 +398,46 @@ def patch_settings(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str
 
 
 @app.get("/cameras/{camera_id}/events")
-def list_events(camera_id: int) -> Dict[str, Any]:
-    """
-    Person / timeline events (stub: always empty).
-
-    Returns 200 with an empty list even when ``camera_id`` is unknown so UIs do not
-    spam 404s during reload races; persist only valid ids in ``cameras.json``.
-    """
+def list_events(
+    camera_id: int,
+    limit: int = Query(200, ge=1, le=1000),
+    from_ts: Optional[str] = Query(None),
+    to_ts: Optional[str] = Query(None),
+) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         return {"events": [], "unknown_camera": True}
-    return {"events": []}
+    events = event_store.list_events(
+        int(camera_id),
+        limit=limit,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+    return {"events": events}
+
+
+@app.delete("/cameras/{camera_id}/events/{event_id}")
+def delete_camera_event(camera_id: int, event_id: int) -> Dict[str, str]:
+    if camera_store.get_camera(camera_id) is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not event_store.delete_event(int(camera_id), int(event_id)):
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"status": "deleted"}
+
+
+@app.delete("/cameras/{camera_id}/events")
+def delete_camera_events(
+    camera_id: int,
+    from_ts: Optional[str] = Query(None),
+    to_ts: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    if camera_store.get_camera(camera_id) is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    count = event_store.delete_events_filtered(
+        int(camera_id),
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+    return {"status": "deleted", "count": count}
 
 
 @app.get("/recordings")

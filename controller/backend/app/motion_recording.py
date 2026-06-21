@@ -23,7 +23,7 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 import cv2
 import httpx
 
-from . import camera_store
+from . import camera_store, event_store
 from .continuous_recording import _edge_base, motion_proxy_to_edge, push_settings_to_edge
 from .ffmpeg_mobile import finalize_mp4_for_mobile, h264_mobile_output_args, mp4_ios_playable
 from .manual_recording import recordings_dir_for
@@ -286,7 +286,7 @@ def on_person_detected(
     )
     threading.Thread(
         target=_dispatch_motion_clip,
-        args=(cid, now),
+        args=(cid, now, int(person_count)),
         name=f"motion-trigger-{cid}",
         daemon=True,
     ).start()
@@ -306,7 +306,49 @@ def _release_motion_trigger(camera_id: int, *, rearm: bool = True) -> None:
         _reset_motion_episode(cid)
 
 
-def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
+def _record_person_detected_event(
+    camera_id: int,
+    detected_at: float,
+    recording_id: str,
+    *,
+    person_count: Optional[int] = None,
+) -> None:
+    try:
+        event_store.add_event(
+            int(camera_id),
+            "person_detected",
+            float(detected_at),
+            recording_id=str(recording_id),
+            person_count=person_count,
+        )
+    except Exception as e:
+        logger.warning("[motion] event log failed cam %s: %s", camera_id, e)
+
+
+def _finalize_person_event_recording(
+    camera_id: int,
+    recording_id: str,
+    *,
+    filename: Optional[str] = None,
+    failed: bool = False,
+) -> None:
+    rid = str(recording_id or "").strip()
+    if not rid:
+        return
+    try:
+        if filename:
+            event_store.update_event_by_recording_id(
+                int(camera_id), rid, filename=str(filename)
+            )
+        elif failed:
+            event_store.update_event_by_recording_id(
+                int(camera_id), rid, clear_recording_id=True
+            )
+    except Exception as e:
+        logger.warning("[motion] event finalize failed cam %s: %s", camera_id, e)
+
+
+def _dispatch_motion_clip(camera_id: int, detected_at: float, person_count: int = 0) -> None:
     row = camera_store.get_camera(camera_id)
     if row is None:
         _release_motion_trigger(camera_id)
@@ -321,7 +363,9 @@ def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
     try:
         use_edge = bool(edge and motion_proxy_to_edge(cam, edge))
         if use_edge:
-            ok = _trigger_edge_clip(camera_id, edge, detected_at, pre_s, post_s, duration_s)
+            ok = _trigger_edge_clip(
+                camera_id, edge, detected_at, pre_s, post_s, duration_s, person_count
+            )
             if ok:
                 return
             logger.warning(
@@ -329,7 +373,9 @@ def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
                 camera_id,
                 edge,
             )
-        _trigger_local_clip(camera_id, cam, settings, detected_at, pre_s, post_s, duration_s)
+        _trigger_local_clip(
+            camera_id, cam, settings, detected_at, pre_s, post_s, duration_s, person_count
+        )
     except Exception as e:
         logger.exception("[motion] dispatch failed cam %s: %s", camera_id, e)
         _release_motion_trigger(camera_id)
@@ -343,6 +389,7 @@ def _trigger_edge_clip(
     pre_s: int,
     post_s: int,
     duration_s: int,
+    person_count: int = 0,
 ) -> bool:
     url = f"{edge.rstrip('/')}/recordings/motion/trigger"
     body = {
@@ -367,10 +414,14 @@ def _trigger_edge_clip(
             cache_motion_status(camera_id, data)
             if data.get("accepted"):
                 logger.info("[motion] edge clip accepted for camera %s", camera_id)
+                rid = str(data.get("recording_id") or f"evt_{int(time.time() * 1000)}")
+                _record_person_detected_event(
+                    camera_id, detected_at, rid, person_count=person_count
+                )
                 _set_motion_recording_active(camera_id, True)
                 threading.Thread(
                     target=_edge_recording_watch,
-                    args=(camera_id, edge, float(duration_s)),
+                    args=(camera_id, edge, float(duration_s), rid),
                     name=f"motion-edge-watch-{camera_id}",
                     daemon=True,
                 ).start()
@@ -386,13 +437,22 @@ def _trigger_edge_clip(
     return False
 
 
-def _edge_recording_watch(camera_id: int, edge: str, clip_seconds: float) -> None:
+def _edge_recording_watch(
+    camera_id: int, edge: str, clip_seconds: float, recording_id: str
+) -> None:
     deadline = time.time() + max(30.0, float(clip_seconds) + 120.0)
+    last_st: Dict[str, Any] = {}
     while time.time() < deadline:
         st = fetch_edge_motion_status(edge, int(camera_id))
-        if not (st.get("active") or st.get("capture_active")):
+        last_st = dict(st) if isinstance(st, dict) else {}
+        if not (last_st.get("active") or last_st.get("capture_active")):
             break
         time.sleep(1.0)
+    fn = str(last_st.get("filename") or "").strip()
+    if fn:
+        _finalize_person_event_recording(camera_id, recording_id, filename=fn)
+    elif not (last_st.get("active") or last_st.get("capture_active")):
+        _finalize_person_event_recording(camera_id, recording_id, failed=True)
     _set_motion_recording_active(camera_id, False)
     _release_motion_trigger(camera_id)
 
@@ -410,6 +470,7 @@ def _trigger_local_clip(
     pre_s: int,
     post_s: int,
     duration_s: int,
+    person_count: int = 0,
 ) -> None:
     cid = int(camera_id)
     with _state_lock:
@@ -417,6 +478,9 @@ def _trigger_local_clip(
             _busy[cid] = True
 
     rid = f"evt_{int(time.time() * 1000)}"
+    _record_person_detected_event(
+        cid, detected_at, rid, person_count=person_count
+    )
     clip_end = detected_at + float(post_s)
     clip_start = float(detected_at) - float(pre_s)
     pre_jpegs = _buffer_frames_in_range(cid, clip_start, float(detected_at))
@@ -462,6 +526,7 @@ def _run_local_motion_clip(
     pre_jpegs: List[bytes],
 ) -> None:
     cid = int(camera_id)
+    saved_filename: Optional[str] = None
     read_fps = 15.0
     q = str(settings.get("quality", "medium")).lower()
     if q == "high":
@@ -567,6 +632,7 @@ def _run_local_motion_clip(
             return
 
         write_recording_thumbnail(out_mp4, seek_seconds=max(0.5, float(pre_s) - 0.5))
+        saved_filename = out_mp4.name
         logger.info("[motion] camera %s saved %s (%d frames)", cid, out_mp4.name, idx)
         _set_local_status(
             cid,
@@ -584,6 +650,10 @@ def _run_local_motion_clip(
     except Exception as e:
         logger.exception("[motion] camera %s clip failed: %s", cid, e)
     finally:
+        if saved_filename:
+            _finalize_person_event_recording(cid, rid, filename=saved_filename)
+        else:
+            _finalize_person_event_recording(cid, rid, failed=True)
         try:
             shutil.rmtree(tmp, ignore_errors=True)
         except Exception:
