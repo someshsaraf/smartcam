@@ -26,7 +26,10 @@ from .motion_recording import (
     motion_capture_busy,
     on_person_detected,
     person_record_eligible,
+    person_trigger_streak,
+    person_trigger_min_frames,
     push_motion_buffer_frame,
+    reset_person_trigger_state,
 )
 from .opencv_person_detector import OpenCVPersonDetector, ssd_model_files_present
 from .rtsp_capture import apply_rtsp_env
@@ -95,6 +98,7 @@ def _camera_worker(
         logger.error("[person_rtsp] camera %s: failed to open RTSP", camera_id)
         return
 
+    reset_person_trigger_state(camera_id)
     interval = _interval_seconds()
     logger.info("[person_rtsp] camera %s: reader started", camera_id)
     while not local_stop.is_set() and not global_stop.is_set():
@@ -122,6 +126,8 @@ def _camera_worker(
             "person_detected": len(faces) > 0,
             "person_capture_busy": motion_capture_busy(camera_id),
             "person_record_eligible": person_record_eligible(camera_id),
+            "person_trigger_streak": person_trigger_streak(camera_id),
+            "person_trigger_min_frames": person_trigger_min_frames(),
             "hailo_ready": False,
             "backend": "opencv_ssd",
             "person_detection_source": "opencv_ssd",

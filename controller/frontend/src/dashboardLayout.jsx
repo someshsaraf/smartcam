@@ -348,8 +348,33 @@ function QuickActionIconButton({ icon, label, onClick, disabled, active, danger,
   );
 }
 
-export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLight, recording, recordDisabled }) {
+function recordActionLabels(recordingMode, recording) {
+  if (recordingMode === "motion") {
+    return {
+      label: recording ? "Recording" : "Auto rec",
+      hint: recording ? "Motion clip active" : "Starts when person detected",
+      disabled: true,
+    };
+  }
+  return {
+    label: recording ? "Stop recording" : "Record",
+    hint: recording ? "Stop clip" : "Start recording",
+    disabled: false,
+  };
+}
+
+export function LiveQuickActions({
+  onTalk,
+  onSnapshot,
+  onRecord,
+  onSiren,
+  onLight,
+  recording,
+  recordDisabled,
+  recordingMode = "motion",
+}) {
   const size = 20;
+  const rec = recordActionLabels(recordingMode, recording);
   return (
     <div className="live-quick-actions-icons" role="toolbar" aria-label="Quick actions">
       <QuickActionIconButton
@@ -376,9 +401,9 @@ export function LiveQuickActions({ onTalk, onSnapshot, onRecord, onSiren, onLigh
             aria-hidden
           />
         }
-        label={recording ? "Stop recording" : "Record"}
+        label={rec.label}
         onClick={onRecord}
-        disabled={recordDisabled}
+        disabled={rec.disabled || recordDisabled}
         active={recording}
         danger
         iconTone="red"
@@ -409,8 +434,10 @@ export function VideoOverlayActions({
   onLight,
   recording,
   recordDisabled,
+  recordingMode = "motion",
 }) {
   const size = 18;
+  const rec = recordActionLabels(recordingMode, recording);
   return (
     <div className="video-overlay-actions pointer-events-none">
       <div className="video-overlay-cards pointer-events-auto">
@@ -443,10 +470,10 @@ export function VideoOverlayActions({
               aria-hidden
             />
           }
-          label={recording ? "Recording" : "Record"}
-          hint={recording ? "Stop clip" : "Start recording"}
+          label={rec.label}
+          hint={rec.hint}
           onClick={onRecord}
-          disabled={recordDisabled}
+          disabled={rec.disabled || recordDisabled}
           active={recording}
           danger
           iconTone="red"
@@ -692,6 +719,7 @@ export function LiveDashboardPage({
   onSiren,
   onLight,
   recordDisabled,
+  recordingMode = "motion",
 }) {
   const [zoom, setZoom] = useState(ZOOM_MIN);
   useEffect(() => {
@@ -858,6 +886,7 @@ export function LiveDashboardPage({
                   onLight={onLight}
                   recording={recording}
                   recordDisabled={recordDisabled}
+                  recordingMode={recordingMode}
                 />
               </div>
             </div>
@@ -874,6 +903,7 @@ export function LiveDashboardPage({
               onLight={onLight}
               recording={recording}
               recordDisabled={recordDisabled}
+              recordingMode={recordingMode}
             />
           </div>
         </div>

@@ -30,16 +30,16 @@ from .camera_discovery import discover_vigilance_edges, run_camera_discovery
 from .continuous_recording import (
     get_continuous_supervisor_thread,
     notify_settings_changed,
-    recording_ws_payload,
     start_continuous_recording_background,
 )
 from .motion_recording import (
     fetch_edge_motion_status,
     local_motion_status,
+    sync_all_edge_settings,
     sync_edge_settings_for_camera,
 )
+from .recording_hub import combined_recording_ws_payload, get_recording_hub
 from .detections_hub import get_detections_hub
-from .recording_hub import get_recording_hub
 from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
 from .manual_recording import (
     manual_status_local,
@@ -205,6 +205,10 @@ async def lifespan(app: FastAPI):
         logger.warning("[mediamtx] startup sync failed: %s", e)
     start_person_detection_background(hub, stop_ev)
     start_continuous_recording_background(rec_hub, stop_ev)
+    try:
+        sync_all_edge_settings()
+    except Exception as e:
+        logger.warning("[settings] edge sync on startup failed: %s", e)
     yield
     stop_ev.set()
     sup = get_supervisor_thread()
@@ -840,7 +844,7 @@ async def ws_recording(ws: WebSocket) -> None:
     await ws.accept()
     await hub.add(ws)
     try:
-        await ws.send_json(recording_ws_payload())
+        await ws.send_json(combined_recording_ws_payload())
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:

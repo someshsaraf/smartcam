@@ -74,3 +74,33 @@ def get_recording_hub() -> RecordingHub:
     if _hub is None:
         _hub = RecordingHub()
     return _hub
+
+
+_last_combined_payload: Optional[Dict[str, Any]] = None
+
+
+def combined_recording_ws_payload() -> Dict[str, Any]:
+    """Merge continuous + person-motion clip activity for ``/ws/recording``."""
+    active: Set[int] = set()
+    try:
+        from .continuous_recording import get_continuous_recording_active_ids
+
+        active |= get_continuous_recording_active_ids()
+    except Exception:
+        pass
+    try:
+        from .motion_recording import get_motion_recording_active_ids
+
+        active |= get_motion_recording_active_ids()
+    except Exception:
+        pass
+    return {"cameras": {str(cid): {"recording": True} for cid in sorted(active)}}
+
+
+def broadcast_combined_recording_state() -> None:
+    global _last_combined_payload
+    payload = combined_recording_ws_payload()
+    if payload == _last_combined_payload:
+        return
+    _last_combined_payload = payload
+    get_recording_hub().schedule_broadcast(payload)

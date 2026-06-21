@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import cv2
 import httpx
@@ -50,9 +50,52 @@ _buffers: Dict[int, Deque[Tuple[float, bytes]]] = {}
 _buffer_lock = threading.Lock()
 _last_had_person: Dict[int, bool] = {}
 _last_trigger_at: Dict[int, float] = {}
+_streak: Dict[int, int] = {}
+_episode_triggered: Dict[int, bool] = {}
 _state_lock = threading.Lock()
 _local_status: Dict[int, Dict[str, Any]] = {}
 _busy: Dict[int, bool] = {}
+_motion_active: Set[int] = set()
+
+
+def _min_trigger_frames() -> int:
+    raw = os.environ.get("SMARTCAM_PERSON_TRIGGER_MIN_FRAMES", "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 3
+    return max(1, min(n, 30))
+
+
+def get_motion_recording_active_ids() -> Set[int]:
+    with _state_lock:
+        return set(_motion_active)
+
+
+def reset_person_trigger_state(camera_id: int) -> None:
+    cid = int(camera_id)
+    _last_had_person.pop(cid, None)
+    _streak.pop(cid, None)
+    _episode_triggered.pop(cid, None)
+
+
+def _clear_episode_trigger(camera_id: int) -> None:
+    _episode_triggered[int(camera_id)] = False
+
+
+def _set_motion_recording_active(camera_id: int, active: bool) -> None:
+    cid = int(camera_id)
+    with _state_lock:
+        if active:
+            _motion_active.add(cid)
+        else:
+            _motion_active.discard(cid)
+    try:
+        from .recording_hub import broadcast_combined_recording_state
+
+        broadcast_combined_recording_state()
+    except Exception as e:
+        logger.debug("[motion] recording ws broadcast failed cam %s: %s", cid, e)
 
 
 def _buffer_seconds() -> float:
@@ -129,23 +172,47 @@ def _buffer_frames_in_range(camera_id: int, start: float, until: float) -> List[
         return [blob for t, blob in dq if start <= t <= until]
 
 
+def person_trigger_streak(camera_id: int) -> int:
+    return int(_streak.get(int(camera_id), 0))
+
+
+def person_trigger_min_frames() -> int:
+    return _min_trigger_frames()
+
+
 def on_person_detected(
     camera_id: int,
     person_count: int,
     *,
     detected_at: Optional[float] = None,
 ) -> None:
-    """Rising-edge person detection → schedule a motion clip (cooldown + busy guards)."""
+    """
+    After ``SMARTCAM_PERSON_TRIGGER_MIN_FRAMES`` consecutive person frames (default 3),
+    start one motion clip per presence episode (re-arms when the person leaves).
+    """
     cid = int(camera_id)
     settings = _effective_settings(cid)
     if str(settings.get("recording_mode", "")).strip().lower() != "motion":
         _last_had_person[cid] = person_count > 0
+        _streak[cid] = 0
+        _episode_triggered[cid] = False
         return
 
-    had_person = _last_had_person.get(cid, False)
     now_person = int(person_count) > 0
-    _last_had_person[cid] = now_person
-    if not now_person or had_person:
+    if not now_person:
+        _last_had_person[cid] = False
+        _streak[cid] = 0
+        _episode_triggered[cid] = False
+        return
+
+    _streak[cid] = _streak.get(cid, 0) + 1
+    _last_had_person[cid] = True
+
+    if _episode_triggered.get(cid):
+        return
+    if _streak[cid] < _min_trigger_frames():
+        return
+    if motion_capture_busy(cid):
         return
 
     ts = float(detected_at if detected_at is not None else time.time())
@@ -155,7 +222,15 @@ def on_person_detected(
         if _busy.get(cid):
             return
         _last_trigger_at[cid] = ts
+        _episode_triggered[cid] = True
 
+    logger.info(
+        "[motion] triggering clip for camera %s (streak=%s, pre=%ss post=%ss)",
+        cid,
+        _streak[cid],
+        settings.get("pre_record_seconds", 10),
+        settings.get("post_record_seconds", 50),
+    )
     threading.Thread(
         target=_dispatch_motion_clip,
         args=(cid, ts),
@@ -167,6 +242,7 @@ def on_person_detected(
 def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
     row = camera_store.get_camera(camera_id)
     if row is None:
+        _clear_episode_trigger(camera_id)
         return
     cam = dict(row)
     settings = _effective_settings(camera_id)
@@ -175,10 +251,17 @@ def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
     duration_s = pre_s + post_s
 
     edge = _edge_base(cam)
-    if edge and _proxy_to_edge(cam, edge):
-        _trigger_edge_clip(camera_id, edge, detected_at, pre_s, post_s, duration_s)
-    else:
-        _trigger_local_clip(camera_id, cam, settings, detected_at, pre_s, post_s, duration_s)
+    try:
+        if edge and _proxy_to_edge(cam, edge):
+            ok = _trigger_edge_clip(camera_id, edge, detected_at, pre_s, post_s, duration_s)
+            if not ok:
+                _clear_episode_trigger(camera_id)
+        else:
+            _trigger_local_clip(camera_id, cam, settings, detected_at, pre_s, post_s, duration_s)
+    except Exception as e:
+        logger.exception("[motion] dispatch failed cam %s: %s", camera_id, e)
+        _clear_episode_trigger(camera_id)
+        _set_motion_recording_active(camera_id, False)
 
 
 def _trigger_edge_clip(
@@ -188,7 +271,7 @@ def _trigger_edge_clip(
     pre_s: int,
     post_s: int,
     duration_s: int,
-) -> None:
+) -> bool:
     url = f"{edge.rstrip('/')}/recordings/motion/trigger"
     body = {
         "person_detected_at": detected_at,
@@ -206,14 +289,34 @@ def _trigger_edge_clip(
                 r.status_code,
                 (r.text or "")[:200],
             )
-            return
+            return False
         data = r.json()
         if isinstance(data, dict):
             cache_motion_status(camera_id, data)
             if data.get("accepted"):
                 logger.info("[motion] edge clip accepted for camera %s", camera_id)
+                _set_motion_recording_active(camera_id, True)
+                threading.Thread(
+                    target=_edge_recording_watch,
+                    args=(camera_id, float(post_s)),
+                    name=f"motion-edge-watch-{camera_id}",
+                    daemon=True,
+                ).start()
+                return True
+            logger.warning(
+                "[motion] edge rejected clip cam %s: %s",
+                camera_id,
+                data.get("reason") or data,
+            )
+            return False
     except Exception as e:
         logger.warning("[motion] edge trigger failed cam %s: %s", camera_id, e)
+    return False
+
+
+def _edge_recording_watch(camera_id: int, post_seconds: float) -> None:
+    time.sleep(max(1.0, float(post_seconds)) + 2.0)
+    _set_motion_recording_active(camera_id, False)
 
 
 def _set_local_status(camera_id: int, status: Dict[str, Any]) -> None:
@@ -238,6 +341,7 @@ def _trigger_local_clip(
 
     rid = f"evt_{int(time.time() * 1000)}"
     clip_end = detected_at + float(post_s)
+    _set_motion_recording_active(cid, True)
     _set_local_status(
         cid,
         {
@@ -293,9 +397,11 @@ def _run_local_motion_clip(
         ff = shutil.which("ffmpeg")
         if not ff:
             logger.warning("[motion] camera %s: ffmpeg missing", cid)
+            _clear_episode_trigger(cid)
             return
         if not url.startswith(("rtsp://", "rtsps://")):
             logger.warning("[motion] camera %s: no RTSP URL", cid)
+            _clear_episode_trigger(cid)
             return
 
         tmp.mkdir(parents=True, exist_ok=True)
@@ -361,6 +467,7 @@ def _run_local_motion_clip(
 
         if idx == 0:
             logger.warning("[motion] camera %s: no frames for clip", cid)
+            _clear_episode_trigger(cid)
             return
 
         cmd = [
@@ -386,6 +493,7 @@ def _run_local_motion_clip(
         )
         if r.returncode != 0:
             logger.warning("[motion] camera %s ffmpeg failed: %s", cid, (r.stderr or "")[-300:])
+            _clear_episode_trigger(cid)
             return
         if not finalize_mp4_for_mobile(out_mp4) or not mp4_ios_playable(out_mp4):
             logger.warning("[motion] camera %s clip unusable: %s", cid, out_mp4.name)
@@ -393,6 +501,7 @@ def _run_local_motion_clip(
                 out_mp4.unlink(missing_ok=True)
             except OSError:
                 pass
+            _clear_episode_trigger(cid)
             return
 
         write_recording_thumbnail(out_mp4, seek_seconds=max(0.5, float(pre_s) - 0.5))
@@ -412,6 +521,7 @@ def _run_local_motion_clip(
         )
     except Exception as e:
         logger.exception("[motion] camera %s clip failed: %s", cid, e)
+        _clear_episode_trigger(cid)
     finally:
         try:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -421,6 +531,7 @@ def _run_local_motion_clip(
             _buffers.pop(cid, None)
         with _state_lock:
             _busy[cid] = False
+        _set_motion_recording_active(cid, False)
         st = _local_status.get(cid, _idle_status())
         if st.get("capture_active"):
             _set_local_status(cid, _idle_status())
@@ -470,3 +581,13 @@ def sync_edge_settings_for_camera(camera_id: int) -> None:
     if not edge or not _proxy_to_edge(cam, edge):
         return
     push_settings_to_edge(edge, _effective_settings(camera_id))
+
+
+def sync_all_edge_settings() -> None:
+    for row in camera_store.list_cameras():
+        if not isinstance(row, dict) or row.get("id") is None:
+            continue
+        try:
+            sync_edge_settings_for_camera(int(row["id"]))
+        except Exception as e:
+            logger.warning("[motion] edge settings sync cam %s: %s", row.get("id"), e)

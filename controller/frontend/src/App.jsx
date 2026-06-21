@@ -3390,6 +3390,7 @@ export default function App() {
             onFindCameras={detectCameras}
             detecting={detecting}
             onFullscreen={handleLiveFullscreen}
+            recordingMode={mobileLiveCam?.settings?.recording_mode || "motion"}
             cameras={liveCams}
             activeCameraId={effectiveActiveCameraId}
             onSelectCamera={setActiveCameraId}

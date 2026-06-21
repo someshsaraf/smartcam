@@ -97,19 +97,21 @@ def _settings_sync_key(settings: Dict[str, Any]) -> str:
     return "|".join(f"{k}={settings.get(k)!r}" for k in keys)
 
 
-def recording_ws_payload() -> Dict[str, Any]:
+def get_continuous_recording_active_ids() -> Set[int]:
     with _STATE_LOCK:
-        return {"cameras": {str(cid): {"recording": True} for cid in sorted(_recording_active)}}
+        return set(_recording_active)
+
+
+def recording_ws_payload() -> Dict[str, Any]:
+    from .recording_hub import combined_recording_ws_payload
+
+    return combined_recording_ws_payload()
 
 
 def _broadcast_if_changed(hub: RecordingHub) -> None:
-    global _last_payload
-    payload = recording_ws_payload()
-    with _STATE_LOCK:
-        if payload == _last_payload:
-            return
-        _last_payload = payload
-    hub.schedule_broadcast(payload)
+    from .recording_hub import broadcast_combined_recording_state
+
+    broadcast_combined_recording_state()
 
 
 def _set_active(camera_ids: Set[int], hub: RecordingHub) -> None:
