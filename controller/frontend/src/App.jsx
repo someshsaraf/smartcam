@@ -1080,6 +1080,19 @@ function recordingActiveForCam(recordingById, camId) {
   return recordingById[String(camId)] === true;
 }
 
+function motionClipActiveForCam(motionClipById, camId) {
+  if (!motionClipById || camId == null) return false;
+  const st = motionClipById[camId] ?? motionClipById[Number(camId)] ?? motionClipById[String(camId)];
+  return Boolean(st && (st.active || st.capture_active));
+}
+
+function formatMotionCountdown(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
 function recordingKey(r) {
   return `${r.camId}-${r.name}`;
 }
@@ -2413,6 +2426,7 @@ export default function App() {
   const [cams, setCams] = useState([]);
   const [discoveredEdges, setDiscoveredEdges] = useState([]);
   const [recordingById, setRecordingById] = useState({});
+  const [motionClipById, setMotionClipById] = useState({});
   const [settingsCam, setSettingsCam] = useState(null);
   /** Flat list: one entry per file, newest first (all cameras). */
   const [allRecordings, setAllRecordings] = useState([]);
@@ -2602,6 +2616,45 @@ export default function App() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [cams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const prevActive = {};
+    const poll = async () => {
+      const next = {};
+      let anyStopped = false;
+      for (const c of cams) {
+        if ((c.settings?.recording_mode || "motion") !== "motion") continue;
+        try {
+          const res = await fetch(`${API}/cameras/${c.id}/recordings/motion/status`);
+          if (!res.ok) continue;
+          const j = await res.json();
+          next[c.id] = j;
+          const was = Boolean(prevActive[c.id]);
+          const now = Boolean(j.active || j.capture_active);
+          if (was && !now) anyStopped = true;
+          prevActive[c.id] = now;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (cancelled) return;
+      setMotionClipById(next);
+      if (anyStopped) {
+        const load = loadAllRecordingsRef.current;
+        const camsNow = camsRef.current;
+        if (typeof load === "function" && camsNow?.length) {
+          load(camsNow, { sync: true });
+        }
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
     };
   }, [cams]);
 
@@ -3181,7 +3234,8 @@ export default function App() {
     mobileLiveCam &&
     ((mobileLiveCam.settings?.recording_mode || "motion") === "off"
       ? manualRecordingById[mobileLiveCam.id] === true
-      : recordingActiveForCam(recordingById, mobileLiveCam.id));
+      : recordingActiveForCam(recordingById, mobileLiveCam.id) ||
+        motionClipActiveForCam(motionClipById, mobileLiveCam.id));
   const showLivePanel = mainTab === "live";
   const showClipsPanel = mainTab === "clips";
   const showEventsPanel = mainTab === "events";
@@ -3197,14 +3251,21 @@ export default function App() {
     }
   };
 
-  const renderLiveTile = (c, layout) => (
+  const renderLiveTile = (c, layout) => {
+    const motionSt = motionClipById[c.id];
+    const motionClipCountdown =
+      motionSt && (motionSt.active || motionSt.capture_active) && motionSt.remaining_seconds > 0
+        ? formatMotionCountdown(motionSt.remaining_seconds)
+        : null;
+    return (
     <LiveTile
       cam={c}
       layout={layout}
       recording={
         (c.settings?.recording_mode || "motion") === "off"
           ? manualRecordingById[c.id] === true
-          : recordingActiveForCam(recordingById, c.id)
+          : recordingActiveForCam(recordingById, c.id) ||
+            motionClipActiveForCam(motionClipById, c.id)
       }
       recordingMode={c.settings?.recording_mode || "motion"}
       manualRecording={manualRecordingById[c.id] === true}
@@ -3217,10 +3278,11 @@ export default function App() {
           ? detectionSystem.overlay_delay_ms
           : undefined
       }
-      motionClipCountdown={null}
+      motionClipCountdown={motionClipCountdown}
       onRequestFullscreen={layout === "heroShell" ? handleLiveFullscreen : undefined}
     />
-  );
+    );
+  };
 
   const liveMeta = cameraDisplayMeta(mobileLiveCam);
   const isPrimaryCamera =

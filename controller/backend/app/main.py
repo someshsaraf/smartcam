@@ -33,6 +33,11 @@ from .continuous_recording import (
     recording_ws_payload,
     start_continuous_recording_background,
 )
+from .motion_recording import (
+    fetch_edge_motion_status,
+    local_motion_status,
+    sync_edge_settings_for_camera,
+)
 from .detections_hub import get_detections_hub
 from .recording_hub import get_recording_hub
 from .ffmpeg_mobile import finalize_mp4_for_mobile, mp4_ios_playable, mp4_listable_fast
@@ -383,6 +388,7 @@ def patch_settings(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str
             "(check SMARTCAM_CAMERAS_JSON path and permissions).",
         )
     notify_settings_changed(int(camera_id))
+    sync_edge_settings_for_camera(int(camera_id))
     return _effective_settings(int(camera_id))
 
 
@@ -458,6 +464,19 @@ def manual_status(camera_id: int) -> Dict[str, Any]:
         except Exception:
             return {"active": False, "filename": None}
     return manual_status_local(int(camera_id))
+
+
+@app.get("/cameras/{camera_id}/recordings/motion/status")
+def motion_clip_status(camera_id: int) -> Dict[str, Any]:
+    """Motion clip capture progress (local ffmpeg or proxied Pi edge). Always 200 when camera exists."""
+    row = camera_store.get_camera(camera_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    cam = dict(row)
+    _, edge = _camera_and_edge(camera_id)
+    if edge and _manual_proxy_to_edge(cam, edge):
+        return fetch_edge_motion_status(edge, int(camera_id))
+    return local_motion_status(int(camera_id))
 
 
 @app.post("/cameras/{camera_id}/recordings/manual/{path}")

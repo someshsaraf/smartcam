@@ -22,6 +22,12 @@ from typing import Any, Dict, Optional, Tuple
 from . import camera_store
 from .detections_hub import DetectionsHub
 from .mediamtx_paths import rtsp_url
+from .motion_recording import (
+    motion_capture_busy,
+    on_person_detected,
+    person_record_eligible,
+    push_motion_buffer_frame,
+)
 from .opencv_person_detector import OpenCVPersonDetector, ssd_model_files_present
 from .rtsp_capture import apply_rtsp_env
 
@@ -102,6 +108,10 @@ def _camera_worker(
             logger.exception("[person_rtsp] camera %s: detect error: %s", camera_id, e)
             faces = []
 
+        now_ts = time.time()
+        push_motion_buffer_frame(camera_id, frame, now_ts)
+        on_person_detected(camera_id, len(faces), detected_at=now_ts)
+
         ts = datetime.now(timezone.utc).isoformat()
         payload: Dict[str, Any] = {
             "type": "detections",
@@ -110,6 +120,8 @@ def _camera_worker(
             "faces": faces,
             "person_count": len(faces),
             "person_detected": len(faces) > 0,
+            "person_capture_busy": motion_capture_busy(camera_id),
+            "person_record_eligible": person_record_eligible(camera_id),
             "hailo_ready": False,
             "backend": "opencv_ssd",
             "person_detection_source": "opencv_ssd",
