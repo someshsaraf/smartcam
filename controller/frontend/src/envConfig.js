@@ -7,9 +7,47 @@ function trimUrl(v) {
   return String(v || "").replace(/\/$/, "");
 }
 
+function parseUrl(raw) {
+  const s = trimUrl(raw);
+  if (!s) return null;
+  try {
+    return new URL(s.startsWith("http") ? s : `http://${s}`);
+  } catch {
+    return null;
+  }
+}
+
+/** LAN UI opened at :5173 should talk to API on the same host (not a stale .env IP). */
+function preferPageHostname(envUrl) {
+  if (typeof window === "undefined" || !window.location?.hostname) {
+    return null;
+  }
+  const pageHost = window.location.hostname;
+  if (!pageHost || pageHost === "localhost" || pageHost === "127.0.0.1") {
+    return null;
+  }
+  const parsed = parseUrl(envUrl);
+  if (parsed && parsed.hostname === pageHost) {
+    return null;
+  }
+  const proto = window.location.protocol === "https:" ? "https" : "http";
+  return `${proto}://${pageHost}:8000`;
+}
+
 /** @returns {string} */
 export function resolveApiUrl() {
   const env = import.meta.env.VITE_API_URL;
+  const fromPage = typeof env === "string" && env.trim() ? preferPageHostname(env) : null;
+  if (fromPage) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        "[SmartCam] VITE_API_URL host differs from this page — using",
+        fromPage,
+        "(update controller/frontend/.env and restart Vite)",
+      );
+    }
+    return trimUrl(fromPage);
+  }
   if (typeof env === "string" && env.trim()) {
     return trimUrl(env.trim());
   }
@@ -57,21 +95,18 @@ export function showStreamDebugUrls() {
   return false;
 }
 
-export const MEDIAMTX_BASE = trimUrl(
-  import.meta.env.VITE_MEDIAMTX_BASE || baseFromApi(8889)
-);
+export const MEDIAMTX_BASE = baseFromApi(8889);
 
-export const HLS_BASE = trimUrl(import.meta.env.VITE_HLS_BASE || baseFromApi(8888));
+export const HLS_BASE = baseFromApi(8888);
 
-export const WS_RECORDING = trimUrl(
-  import.meta.env.VITE_WS_RECORDING_URL ||
-    `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/recording`
-);
+function wsFromApi(path) {
+  const base = API.replace(/^http/, "ws").replace(/^https/, "wss");
+  return trimUrl(`${base}${path.startsWith("/") ? path : `/${path}`}`);
+}
 
-export const WS_DETECTIONS = trimUrl(
-  import.meta.env.VITE_WS_DETECTIONS_URL ||
-    `${API.replace(/^http/, "ws").replace(/^https/, "wss")}/ws/detections`
-);
+export const WS_RECORDING = wsFromApi("/ws/recording");
+
+export const WS_DETECTIONS = wsFromApi("/ws/detections");
 
 /**
  * Extra UI delay (ms) on top of backend inference delay.
