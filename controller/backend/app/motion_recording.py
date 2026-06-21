@@ -50,8 +50,8 @@ _buffers: Dict[int, Deque[Tuple[float, bytes]]] = {}
 _buffer_lock = threading.Lock()
 _last_had_person: Dict[int, bool] = {}
 _last_trigger_at: Dict[int, float] = {}
+_last_person_seen_at: Dict[int, float] = {}
 _streak: Dict[int, int] = {}
-_episode_triggered: Dict[int, bool] = {}
 _state_lock = threading.Lock()
 _local_status: Dict[int, Dict[str, Any]] = {}
 _busy: Dict[int, bool] = {}
@@ -72,16 +72,35 @@ def get_motion_recording_active_ids() -> Set[int]:
         return set(_motion_active)
 
 
+def _person_gap_seconds() -> float:
+    """No person detections for this long starts a new motion episode."""
+    raw = os.environ.get("SMARTCAM_MOTION_PERSON_GAP_SECONDS", "2.5").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 2.5
+    return max(0.5, min(v, 30.0))
+
+
+def _clip_cooldown_seconds(settings: Dict[str, Any]) -> float:
+    raw = os.environ.get("SMARTCAM_MOTION_CLIP_COOLDOWN_SECONDS", "5").strip()
+    try:
+        env_sec = float(raw)
+    except ValueError:
+        env_sec = 5.0
+    return max(COOLDOWN_SEC, min(env_sec, 120.0))
+
+
 def reset_person_trigger_state(camera_id: int) -> None:
     cid = int(camera_id)
     _last_had_person.pop(cid, None)
+    _last_person_seen_at.pop(cid, None)
     _streak.pop(cid, None)
-    _episode_triggered.pop(cid, None)
 
 
-def _clear_episode_trigger(camera_id: int) -> None:
-    _episode_triggered[int(camera_id)] = False
-
+def _reset_motion_episode(camera_id: int) -> None:
+    cid = int(camera_id)
+    _streak[cid] = 0
 
 def _set_motion_recording_active(camera_id: int, active: bool) -> None:
     cid = int(camera_id)
@@ -188,41 +207,43 @@ def on_person_detected(
 ) -> None:
     """
     After ``SMARTCAM_PERSON_TRIGGER_MIN_FRAMES`` consecutive person frames (default 3),
-    start one motion clip per presence episode (re-arms when the person leaves).
+    start a motion clip. Re-arms when the person is absent for ``SMARTCAM_MOTION_PERSON_GAP_SECONDS``
+    or after a clip finishes (while someone is still in view, respects cooldown).
     """
     cid = int(camera_id)
     settings = _effective_settings(cid)
+    now = float(detected_at if detected_at is not None else time.time())
     if str(settings.get("recording_mode", "")).strip().lower() != "motion":
         _last_had_person[cid] = person_count > 0
         _streak[cid] = 0
-        _episode_triggered[cid] = False
+        _last_person_seen_at.pop(cid, None)
         return
 
     now_person = int(person_count) > 0
     if not now_person:
         _last_had_person[cid] = False
-        _streak[cid] = 0
-        _episode_triggered[cid] = False
+        last_seen = _last_person_seen_at.get(cid, 0.0)
+        if last_seen > 0.0 and (now - last_seen) >= _person_gap_seconds():
+            _reset_motion_episode(cid)
         return
 
+    _last_person_seen_at[cid] = now
     _streak[cid] = _streak.get(cid, 0) + 1
     _last_had_person[cid] = True
 
-    if _episode_triggered.get(cid):
-        return
     if _streak[cid] < _min_trigger_frames():
         return
     if motion_capture_busy(cid):
         return
 
-    ts = float(detected_at if detected_at is not None else time.time())
+    cooldown = _clip_cooldown_seconds(settings)
     with _state_lock:
-        if ts - _last_trigger_at.get(cid, 0.0) < COOLDOWN_SEC:
+        if now - _last_trigger_at.get(cid, 0.0) < cooldown:
             return
         if _busy.get(cid):
             return
-        _last_trigger_at[cid] = ts
-        _episode_triggered[cid] = True
+        _last_trigger_at[cid] = now
+        _busy[cid] = True
 
     logger.info(
         "[motion] triggering clip for camera %s (streak=%s, pre=%ss post=%ss)",
@@ -233,16 +254,25 @@ def on_person_detected(
     )
     threading.Thread(
         target=_dispatch_motion_clip,
-        args=(cid, ts),
+        args=(cid, now),
         name=f"motion-trigger-{cid}",
         daemon=True,
     ).start()
 
 
+def _release_motion_trigger(camera_id: int, *, rearm: bool = True) -> None:
+    """Clear busy flag; optionally allow a new clip while the person is still present."""
+    cid = int(camera_id)
+    with _state_lock:
+        _busy[cid] = False
+    if rearm:
+        _reset_motion_episode(cid)
+
+
 def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
     row = camera_store.get_camera(camera_id)
     if row is None:
-        _clear_episode_trigger(camera_id)
+        _release_motion_trigger(camera_id)
         return
     cam = dict(row)
     settings = _effective_settings(camera_id)
@@ -255,12 +285,12 @@ def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
         if edge and _proxy_to_edge(cam, edge):
             ok = _trigger_edge_clip(camera_id, edge, detected_at, pre_s, post_s, duration_s)
             if not ok:
-                _clear_episode_trigger(camera_id)
+                _release_motion_trigger(camera_id)
         else:
             _trigger_local_clip(camera_id, cam, settings, detected_at, pre_s, post_s, duration_s)
     except Exception as e:
         logger.exception("[motion] dispatch failed cam %s: %s", camera_id, e)
-        _clear_episode_trigger(camera_id)
+        _release_motion_trigger(camera_id)
         _set_motion_recording_active(camera_id, False)
 
 
@@ -317,6 +347,7 @@ def _trigger_edge_clip(
 def _edge_recording_watch(camera_id: int, post_seconds: float) -> None:
     time.sleep(max(1.0, float(post_seconds)) + 2.0)
     _set_motion_recording_active(camera_id, False)
+    _release_motion_trigger(camera_id)
 
 
 def _set_local_status(camera_id: int, status: Dict[str, Any]) -> None:
@@ -335,9 +366,8 @@ def _trigger_local_clip(
 ) -> None:
     cid = int(camera_id)
     with _state_lock:
-        if _busy.get(cid):
-            return
-        _busy[cid] = True
+        if not _busy.get(cid):
+            _busy[cid] = True
 
     rid = f"evt_{int(time.time() * 1000)}"
     clip_end = detected_at + float(post_s)
@@ -397,11 +427,9 @@ def _run_local_motion_clip(
         ff = shutil.which("ffmpeg")
         if not ff:
             logger.warning("[motion] camera %s: ffmpeg missing", cid)
-            _clear_episode_trigger(cid)
             return
         if not url.startswith(("rtsp://", "rtsps://")):
             logger.warning("[motion] camera %s: no RTSP URL", cid)
-            _clear_episode_trigger(cid)
             return
 
         tmp.mkdir(parents=True, exist_ok=True)
@@ -467,7 +495,6 @@ def _run_local_motion_clip(
 
         if idx == 0:
             logger.warning("[motion] camera %s: no frames for clip", cid)
-            _clear_episode_trigger(cid)
             return
 
         cmd = [
@@ -493,7 +520,6 @@ def _run_local_motion_clip(
         )
         if r.returncode != 0:
             logger.warning("[motion] camera %s ffmpeg failed: %s", cid, (r.stderr or "")[-300:])
-            _clear_episode_trigger(cid)
             return
         if not finalize_mp4_for_mobile(out_mp4) or not mp4_ios_playable(out_mp4):
             logger.warning("[motion] camera %s clip unusable: %s", cid, out_mp4.name)
@@ -501,7 +527,6 @@ def _run_local_motion_clip(
                 out_mp4.unlink(missing_ok=True)
             except OSError:
                 pass
-            _clear_episode_trigger(cid)
             return
 
         write_recording_thumbnail(out_mp4, seek_seconds=max(0.5, float(pre_s) - 0.5))
@@ -521,7 +546,6 @@ def _run_local_motion_clip(
         )
     except Exception as e:
         logger.exception("[motion] camera %s clip failed: %s", cid, e)
-        _clear_episode_trigger(cid)
     finally:
         try:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -529,12 +553,11 @@ def _run_local_motion_clip(
             pass
         with _buffer_lock:
             _buffers.pop(cid, None)
-        with _state_lock:
-            _busy[cid] = False
         _set_motion_recording_active(cid, False)
         st = _local_status.get(cid, _idle_status())
         if st.get("capture_active"):
             _set_local_status(cid, _idle_status())
+        _release_motion_trigger(cid)
 
 
 def cache_motion_status(camera_id: int, data: Dict[str, Any]) -> None:
