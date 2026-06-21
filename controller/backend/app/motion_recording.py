@@ -24,12 +24,10 @@ import cv2
 import httpx
 
 from . import camera_store
-from .continuous_recording import _edge_base, _proxy_to_edge, push_settings_to_edge
+from .continuous_recording import _edge_base, motion_proxy_to_edge, push_settings_to_edge
 from .ffmpeg_mobile import finalize_mp4_for_mobile, h264_mobile_output_args, mp4_ios_playable
 from .manual_recording import recordings_dir_for
-from .mediamtx_paths import rtsp_url
 from .recording_thumbnails import write_recording_thumbnail
-from .rtsp_capture import apply_rtsp_env
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +47,15 @@ _STATUS_CACHE: Dict[int, Tuple[float, Dict[str, Any]]] = {}
 _buffers: Dict[int, Deque[Tuple[float, bytes]]] = {}
 _buffer_lock = threading.Lock()
 _last_had_person: Dict[int, bool] = {}
-_last_trigger_at: Dict[int, float] = {}
+_next_trigger_allowed_at: Dict[int, float] = {}
 _last_person_seen_at: Dict[int, float] = {}
 _streak: Dict[int, int] = {}
 _state_lock = threading.Lock()
 _local_status: Dict[int, Dict[str, Any]] = {}
 _busy: Dict[int, bool] = {}
 _motion_active: Set[int] = set()
+_post_roll_lock = threading.Lock()
+_post_roll: Dict[int, Dict[str, Any]] = {}
 
 
 def _min_trigger_frames() -> int:
@@ -96,6 +96,9 @@ def reset_person_trigger_state(camera_id: int) -> None:
     _last_had_person.pop(cid, None)
     _last_person_seen_at.pop(cid, None)
     _streak.pop(cid, None)
+    _next_trigger_allowed_at.pop(cid, None)
+    with _post_roll_lock:
+        _post_roll.pop(cid, None)
 
 
 def _reset_motion_episode(camera_id: int) -> None:
@@ -150,11 +153,9 @@ def _idle_status() -> Dict[str, Any]:
 
 
 def motion_capture_busy(camera_id: int) -> bool:
+    """True while a motion clip thread owns the camera (post-roll uses the detection reader)."""
     with _state_lock:
-        if _busy.get(int(camera_id)):
-            return True
-        st = _local_status.get(int(camera_id), {})
-        return bool(st.get("active") or st.get("capture_active"))
+        return bool(_busy.get(int(camera_id)))
 
 
 def person_record_eligible(camera_id: int) -> bool:
@@ -163,12 +164,26 @@ def person_record_eligible(camera_id: int) -> bool:
     return not motion_capture_busy(camera_id)
 
 
+def _start_post_roll_collection(camera_id: int, detected_at: float, post_seconds: int) -> None:
+    cid = int(camera_id)
+    end = float(detected_at) + float(post_seconds)
+    with _post_roll_lock:
+        _post_roll[cid] = {"end": end, "frames": []}
+
+
+def _finish_post_roll_collection(camera_id: int) -> List[bytes]:
+    cid = int(camera_id)
+    with _post_roll_lock:
+        active = _post_roll.pop(cid, None)
+    if not active:
+        return []
+    return list(active.get("frames") or [])
+
+
 def push_motion_buffer_frame(camera_id: int, frame_bgr: Any, ts: Optional[float] = None) -> None:
     """Append a JPEG to the rolling pre-roll buffer (motion mode only)."""
     cid = int(camera_id)
     if not _motion_mode(cid):
-        return
-    if motion_capture_busy(cid):
         return
     if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
         return
@@ -177,6 +192,16 @@ def push_motion_buffer_frame(camera_id: int, frame_bgr: Any, ts: Optional[float]
     if not enc_ok:
         return
     blob = jpg.tobytes()
+
+    with _post_roll_lock:
+        active = _post_roll.get(cid)
+        if active is not None and now <= float(active.get("end") or 0.0) + 0.5:
+            frames = active.setdefault("frames", [])
+            frames.append(blob)
+
+    if motion_capture_busy(cid):
+        return
+
     cutoff = now - _buffer_seconds()
     with _buffer_lock:
         dq = _buffers.setdefault(cid, collections.deque())
@@ -235,14 +260,14 @@ def on_person_detected(
         return
     if motion_capture_busy(cid):
         return
+    if time.time() < _next_trigger_allowed_at.get(cid, 0.0):
+        return
 
-    cooldown = _clip_cooldown_seconds(settings)
     with _state_lock:
-        if now - _last_trigger_at.get(cid, 0.0) < cooldown:
-            return
         if _busy.get(cid):
             return
-        _last_trigger_at[cid] = now
+        if time.time() < _next_trigger_allowed_at.get(cid, 0.0):
+            return
         _busy[cid] = True
 
     logger.info(
@@ -263,8 +288,13 @@ def on_person_detected(
 def _release_motion_trigger(camera_id: int, *, rearm: bool = True) -> None:
     """Clear busy flag; optionally allow a new clip while the person is still present."""
     cid = int(camera_id)
+    settings = _effective_settings(cid)
+    cooldown = _clip_cooldown_seconds(settings)
     with _state_lock:
         _busy[cid] = False
+        _next_trigger_allowed_at[cid] = time.time() + cooldown
+    with _post_roll_lock:
+        _post_roll.pop(cid, None)
     if rearm:
         _reset_motion_episode(cid)
 
@@ -282,7 +312,7 @@ def _dispatch_motion_clip(camera_id: int, detected_at: float) -> None:
 
     edge = _edge_base(cam)
     try:
-        if edge and _proxy_to_edge(cam, edge):
+        if edge and motion_proxy_to_edge(cam, edge):
             ok = _trigger_edge_clip(camera_id, edge, detected_at, pre_s, post_s, duration_s)
             if not ok:
                 _release_motion_trigger(camera_id)
@@ -328,7 +358,7 @@ def _trigger_edge_clip(
                 _set_motion_recording_active(camera_id, True)
                 threading.Thread(
                     target=_edge_recording_watch,
-                    args=(camera_id, float(post_s)),
+                    args=(camera_id, edge, float(duration_s)),
                     name=f"motion-edge-watch-{camera_id}",
                     daemon=True,
                 ).start()
@@ -344,8 +374,13 @@ def _trigger_edge_clip(
     return False
 
 
-def _edge_recording_watch(camera_id: int, post_seconds: float) -> None:
-    time.sleep(max(1.0, float(post_seconds)) + 2.0)
+def _edge_recording_watch(camera_id: int, edge: str, clip_seconds: float) -> None:
+    deadline = time.time() + max(30.0, float(clip_seconds) + 120.0)
+    while time.time() < deadline:
+        st = fetch_edge_motion_status(edge, int(camera_id))
+        if not (st.get("active") or st.get("capture_active")):
+            break
+        time.sleep(1.0)
     _set_motion_recording_active(camera_id, False)
     _release_motion_trigger(camera_id)
 
@@ -405,10 +440,7 @@ def _run_local_motion_clip(
     duration_s: int,
     rid: str,
 ) -> None:
-    apply_rtsp_env()
     cid = int(camera_id)
-    url = rtsp_url(cam).strip()
-    flip = bool(settings.get("flip_180"))
     read_fps = 15.0
     q = str(settings.get("quality", "medium")).lower()
     if q == "high":
@@ -428,9 +460,6 @@ def _run_local_motion_clip(
         if not ff:
             logger.warning("[motion] camera %s: ffmpeg missing", cid)
             return
-        if not url.startswith(("rtsp://", "rtsps://")):
-            logger.warning("[motion] camera %s: no RTSP URL", cid)
-            return
 
         tmp.mkdir(parents=True, exist_ok=True)
         for blob in pre_jpegs:
@@ -438,6 +467,7 @@ def _run_local_motion_clip(
             idx += 1
 
         clip_end = float(detected_at) + float(post_s)
+        _start_post_roll_collection(cid, float(detected_at), post_s)
         _set_local_status(
             cid,
             {
@@ -453,12 +483,6 @@ def _run_local_motion_clip(
                 "recording_id": rid,
             },
         )
-
-        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-        try:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
 
         while time.time() < clip_end:
             _set_local_status(
@@ -476,22 +500,11 @@ def _run_local_motion_clip(
                     "recording_id": rid,
                 },
             )
-            if not cap.isOpened():
-                break
-            loop_t0 = time.perf_counter()
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                time.sleep(0.05)
-                continue
-            if flip:
-                frame = cv2.flip(cv2.flip(frame, 0), 1)
-            enc_ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-            if enc_ok:
-                (tmp / f"{idx:05d}.jpg").write_bytes(jpg.tobytes())
-                idx += 1
-            elapsed = time.perf_counter() - loop_t0
-            time.sleep(max(0.0, (1.0 / read_fps) - elapsed))
-        cap.release()
+            time.sleep(0.2)
+
+        for blob in _finish_post_roll_collection(cid):
+            (tmp / f"{idx:05d}.jpg").write_bytes(blob)
+            idx += 1
 
         if idx == 0:
             logger.warning("[motion] camera %s: no frames for clip", cid)
@@ -594,6 +607,13 @@ def local_motion_status(camera_id: int) -> Dict[str, Any]:
     return _idle_status()
 
 
+def motion_status_for_camera(cam: Dict[str, Any], camera_id: int) -> Dict[str, Any]:
+    edge = _edge_base(cam)
+    if edge and motion_proxy_to_edge(cam, edge):
+        return fetch_edge_motion_status(edge, int(camera_id))
+    return local_motion_status(int(camera_id))
+
+
 def sync_edge_settings_for_camera(camera_id: int) -> None:
     """Push recording settings to a Pi edge when the camera row uses edge proxy."""
     row = camera_store.get_camera(camera_id)
@@ -601,7 +621,7 @@ def sync_edge_settings_for_camera(camera_id: int) -> None:
         return
     cam = dict(row)
     edge = _edge_base(cam)
-    if not edge or not _proxy_to_edge(cam, edge):
+    if not edge or not motion_proxy_to_edge(cam, edge):
         return
     push_settings_to_edge(edge, _effective_settings(camera_id))
 

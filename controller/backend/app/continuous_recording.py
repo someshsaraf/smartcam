@@ -81,6 +81,31 @@ def _proxy_to_edge(cam: Dict[str, Any], edge: str) -> bool:
     return rtsp_h == edge_h
 
 
+def motion_proxy_to_edge(cam: Dict[str, Any], edge: str) -> bool:
+    """
+    True when person-motion clips should run on the Pi edge agent.
+
+    Direct LAN cameras (VIGI: RTSP host matches camera ``ip``, not the edge Pi) stay on
+    the controller. Edge-attached cameras (including MediaMTX restream URLs on the
+    controller) proxy to the edge agent.
+    """
+    if not edge:
+        return False
+    ru = rtsp_url(cam).strip()
+    if not ru.startswith(("rtsp://", "rtsps://")):
+        return True
+    rtsp_h = _url_hostname(ru)
+    edge_h = _url_hostname(edge)
+    cam_ip = str(cam.get("ip") or "").strip().lower()
+    if cam_ip and rtsp_h and rtsp_h == cam_ip and edge_h and rtsp_h != edge_h:
+        return False
+    if rtsp_h in ("127.0.0.1", "localhost", "::1"):
+        return True
+    if rtsp_h and edge_h and rtsp_h == edge_h:
+        return True
+    return True
+
+
 def _edge_base(cam: Dict[str, Any]) -> str:
     u = str(cam.get("edge_base_url") or "").strip().rstrip("/")
     if u.startswith(("http://", "https://")):

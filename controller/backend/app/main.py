@@ -33,8 +33,7 @@ from .continuous_recording import (
     start_continuous_recording_background,
 )
 from .motion_recording import (
-    fetch_edge_motion_status,
-    local_motion_status,
+    motion_status_for_camera,
     sync_all_edge_settings,
     sync_edge_settings_for_camera,
 )
@@ -477,10 +476,7 @@ def motion_clip_status(camera_id: int) -> Dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     cam = dict(row)
-    _, edge = _camera_and_edge(camera_id)
-    if edge and _manual_proxy_to_edge(cam, edge):
-        return fetch_edge_motion_status(edge, int(camera_id))
-    return local_motion_status(int(camera_id))
+    return motion_status_for_camera(cam, int(camera_id))
 
 
 @app.post("/cameras/{camera_id}/recordings/manual/{path}")
