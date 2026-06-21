@@ -282,23 +282,30 @@ class HailoYolov8Detector:
         batch = raw.get(key)
         if batch is None:
             return []
-        arr = np.asarray(batch)
-        if arr.ndim == 4:
-            arr = arr[0]
-        if arr.ndim != 3 or arr.shape[-1] < 5:
+
+        class_groups = self._class_detection_groups(batch)
+        if class_groups is None:
             return []
+
         out: List[Dict[str, Any]] = []
-        for cls_idx, cls_dets in enumerate(arr):
+        for cls_idx, cls_dets in enumerate(class_groups):
             if cls_idx not in _COCO_ALLOWED:
                 continue
             is_person = cls_idx == _COCO_PERSON
             min_conf = self._person_conf if is_person else self._animal_conf
             label = "person" if is_person else _COCO_ANIMALS.get(cls_idx, "animal")
-            for det in cls_dets:
+            for det in self._iter_det_rows(cls_dets):
+                if det is None or det.size < 5:
+                    continue
                 score = float(det[4])
                 if score < min_conf:
                     continue
-                y1, x1, y2, x2 = float(det[0]), float(det[1]), float(det[2]), float(det[3])
+                y1, x1, y2, x2 = (
+                    float(det[0]),
+                    float(det[1]),
+                    float(det[2]),
+                    float(det[3]),
+                )
                 norm = _box_to_normalized(
                     y1, x1, y2, x2, frame_w, frame_h, scale, pad_x, pad_y
                 )
@@ -313,6 +320,69 @@ class HailoYolov8Detector:
                     }
                 )
         return out
+
+    @staticmethod
+    def _class_detection_groups(batch: Any) -> Optional[Any]:
+        """
+        Hailo YOLOv8 NMS may be:
+        - (batch, classes, max_dets, 5) fixed tensor
+        - (batch, classes) object array with ragged (N, 5) per class  [common on Pi]
+        - (classes, max_dets, 5) without batch dim
+        """
+        if batch is None:
+            return None
+        if isinstance(batch, (list, tuple)):
+            if len(batch) == 1:
+                return HailoYolov8Detector._class_detection_groups(batch[0])
+            return batch
+        if not isinstance(batch, np.ndarray):
+            try:
+                batch = np.asarray(batch)
+            except ValueError:
+                return None
+        if batch.ndim == 4 and batch.shape[-1] >= 5:
+            return batch[0]
+        if batch.ndim == 3 and batch.shape[-1] >= 5:
+            return batch
+        if batch.ndim == 2:
+            # (1, 80) ragged: one row per batch item, columns are per-class det lists
+            if batch.shape[0] == 1:
+                return batch[0]
+            # (80, max_dets) unlikely without last dim — still try as class axis
+            if batch.shape[0] == 80:
+                return batch
+        if batch.ndim == 1 and batch.shape[0] == 80:
+            return batch
+        return None
+
+    @staticmethod
+    def _iter_det_rows(cls_dets: Any):
+        """Yield float rows [y1, x1, y2, x2, score] from one class slot."""
+        if cls_dets is None:
+            return
+        if isinstance(cls_dets, (list, tuple)):
+            if not cls_dets:
+                return
+            if len(cls_dets) >= 5 and isinstance(cls_dets[0], (int, float, np.floating)):
+                yield np.asarray(cls_dets, dtype=np.float32)
+                return
+            for item in cls_dets:
+                yield from HailoYolov8Detector._iter_det_rows(item)
+            return
+        try:
+            arr = np.asarray(cls_dets, dtype=np.float32)
+        except (ValueError, TypeError):
+            return
+        if arr.size == 0:
+            return
+        if arr.ndim == 1:
+            if arr.size >= 5:
+                yield arr
+            return
+        if arr.ndim == 2 and arr.shape[-1] >= 5:
+            for row in arr:
+                yield row
+            return
 
 
 def hailo_detector_diagnostics() -> Dict[str, Any]:
