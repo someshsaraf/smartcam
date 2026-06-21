@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 from .mediamtx_paths import mediamtx_path_key, rtsp_url
+from .rtsp_probe import probe_rtsp_url
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,16 @@ def push_mediamtx_path_for_camera(cam: Dict[str, Any]) -> None:
 
     payload = {"source": src}
     seg = quote(path_key, safe="")
+    ok_probe, probe_detail = probe_rtsp_url(src)
+    if not ok_probe:
+        logger.warning(
+            "[mediamtx] RTSP probe failed for %s before push: %s — URL=%s",
+            path_key,
+            probe_detail,
+            src.split("@")[-1] if "@" in src else src[:80],
+        )
+    else:
+        logger.info("[mediamtx] RTSP probe OK for %s", path_key)
     try:
         import httpx
 

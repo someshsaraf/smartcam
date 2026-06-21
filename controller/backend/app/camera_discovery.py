@@ -417,6 +417,32 @@ def _onvif_main_rtsp_from_xaddrs(
     return None, last_err, merged_meta
 
 
+def resolve_vigi_rtsp_for_host(host: str, username: str, password: str) -> Optional[str]:
+    """
+    Resolve main RTSP URL for a known VIGI IP via ONVIF (WS-Discovery + GetStreamUri).
+    Returns URL with credentials embedded, or None.
+    """
+    host = str(host or "").strip()
+    if not host:
+        return None
+    xaddrs: List[str] = []
+    for dev in ws_discovery_probe(timeout_sec=3.0):
+        if str(dev.get("host") or "").strip() == host:
+            xaddrs = list(dev.get("xaddrs") or [])
+            break
+    if not xaddrs:
+        xaddrs = [f"http://{host}:2020/onvif/device_service"]
+    uri, err, _meta = _onvif_main_rtsp_from_xaddrs(
+        xaddrs,
+        username,
+        password,
+        device_host=host,
+    )
+    if err or not uri:
+        return None
+    return uri
+
+
 def discover_onvif_cameras(
     *,
     username: str,

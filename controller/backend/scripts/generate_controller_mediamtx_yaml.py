@@ -112,6 +112,8 @@ def main() -> int:
             )
         lines.append(f"  {pk}:")
         lines.append(f"    source: {json.dumps(src)}")
+        if transport_raw != "automatic":
+            lines.append(f"    rtspTransport: {transport_raw}")
         lines.append("")
 
     with open(out_path, "w", encoding="utf-8") as f:

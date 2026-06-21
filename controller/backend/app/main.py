@@ -54,6 +54,8 @@ from .recording_thumbnails import (
     remove_recording_thumbnail,
 )
 from .recordings_catalog import list_merged_recordings
+from .rtsp_probe import probe_rtsp_url
+from .rtsp_url_build import extract_rtsp_credentials_from_url
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "recording_mode": "motion",
@@ -281,11 +283,36 @@ def delete_camera(camera_id: int) -> Dict[str, str]:
 def patch_camera(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     if camera_store.get_camera(camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    updates = {k: v for k, v in body.items() if k in ("name", "url", "edge_base_url", "main_stream", "mediamtx_path", "mqtt_camera_id") and v is not None}
+    allowed = (
+        "name",
+        "url",
+        "edge_base_url",
+        "main_stream",
+        "mediamtx_path",
+        "mqtt_camera_id",
+        "rtsp_user",
+        "rtsp_pass",
+        "rtsp_password",
+    )
+    updates = {k: v for k, v in body.items() if k in allowed and v is not None}
+    if "rtsp_password" in updates:
+        updates["rtsp_pass"] = updates.pop("rtsp_password")
     if "edge_base_url" in updates and updates["edge_base_url"] == "":
         updates["edge_base_url"] = None
     if "main_stream" in updates and not str(body.get("url") or "").strip():
         updates["url"] = str(updates.pop("main_stream")).strip()
+    url_for_creds = str(updates.get("url") or body.get("url") or "").strip()
+    if not url_for_creds:
+        row = dict(camera_store.get_camera(camera_id) or {})
+        url_for_creds = rtsp_url(row)
+    if url_for_creds.startswith(("rtsp://", "rtsps://")):
+        creds = extract_rtsp_credentials_from_url(url_for_creds)
+        if creds.get("rtsp_user") and "rtsp_user" not in updates:
+            updates["rtsp_user"] = creds["rtsp_user"]
+        if creds.get("rtsp_pass") is not None and "rtsp_pass" not in updates:
+            updates["rtsp_pass"] = creds["rtsp_pass"]
+        if creds.get("ip") and "ip" not in updates:
+            updates["ip"] = creds["ip"]
     if updates:
         camera_store.update_camera(camera_id, updates)
         camera_store.persist_cameras_to_json()
@@ -293,6 +320,29 @@ def patch_camera(camera_id: int, body: Dict[str, Any] = Body(...)) -> Dict[str, 
     if updates:
         mediamtx_yaml_sync.sync_after_camera_mutation(cam)
     return _serialize_camera(cam)
+
+
+@app.post("/cameras/{camera_id}/refresh-stream")
+def refresh_camera_stream(camera_id: int) -> Dict[str, Any]:
+    """
+    Re-apply SMARTCAM_VIGI_* credentials, probe RTSP with ffmpeg, and push path to MediaMTX.
+    Use when mediamtx logs show RTSP 401 but the UI password is correct.
+    """
+    if camera_store.get_camera(camera_id) is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    camera_store._apply_env_vigi_overrides()
+    cam = dict(camera_store.get_camera(camera_id) or {})
+    ru = rtsp_url(cam)
+    ok, detail = probe_rtsp_url(ru)
+    mediamtx_yaml_sync.sync_after_camera_mutation(cam)
+    return {
+        "camera_id": int(camera_id),
+        "rtsp_url_redacted": redact_rtsp_url_for_debug(ru),
+        "rtsp_probe_ok": ok,
+        "rtsp_probe_detail": detail,
+        "mediamtx_path": mediamtx_path_key(cam),
+        "mediamtx_sync": "ok" if ok else "pushed anyway — check mediamtx logs if probe failed",
+    }
 
 
 @app.get("/cameras/{camera_id}/settings")
@@ -672,6 +722,19 @@ def stream_health(
         if ru.strip():
             out["rtsp_url"] = ru
         out["_debug_note"] = "SMARTCAM_DEBUG_FULL_RTSP is set — rtsp_url includes credentials; unset in production."
+    if probe_rtsp and ru.startswith(("rtsp://", "rtsps://")):
+        ok_probe, probe_detail = probe_rtsp_url(ru)
+        out["rtsp_probe_ok"] = ok_probe
+        out["rtsp_probe_detail"] = probe_detail
+        out["ok"] = ok_probe
+        if not ok_probe:
+            warnings.append(f"RTSP probe failed: {probe_detail}")
+            warnings.append(
+                "Fix: quote SMARTCAM_VIGI_PASS in .env if password contains $, then "
+                "POST /cameras/{id}/refresh-stream or Save camera settings."
+            )
+    elif ru.startswith(("rtsp://", "rtsps://")) and rtsp_url_has_userinfo(ru):
+        out["ok"] = None
     if os.environ.get("SMARTCAM_LOG_STREAM_HEALTH", "").strip().lower() in ("1", "true", "yes"):
         logger.info(
             "stream_health camera_id=%s mediamtx_path=%s rtsp_redacted=%s hls_api=%s hls_mtx=%s warnings=%s",

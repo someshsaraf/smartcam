@@ -22,7 +22,9 @@ import os
 import time
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
+
+from .rtsp_url_build import build_rtsp_url, extract_rtsp_credentials_from_url, rtsp_userinfo
 
 
 def _preload_backend_dotenv() -> None:
@@ -51,9 +53,7 @@ _persist_source_path: Optional[str] = None
 
 def _rtsp_userinfo(username: str, password: str) -> str:
     """Percent-encode user/password for rtsp://user:pass@host/... (VLC is lenient; parsers are not)."""
-    u = quote(str(username), safe="")
-    p = quote(str(password), safe="")
-    return f"{u}:{p}"
+    return rtsp_userinfo(username, password)
 
 
 def add_camera(camera: dict) -> None:
@@ -208,7 +208,8 @@ def register_vigi_camera(
     name: str = "TP-Link VIGI",
 ) -> None:
     camera_id = int(ip.split(".")[-1])
-    userinfo = _rtsp_userinfo(username, password)
+    main = build_rtsp_url(username, password, ip, "/stream1")
+    sub = build_rtsp_url(username, password, ip, "/stream2")
 
     add_camera(
         {
@@ -219,8 +220,11 @@ def register_vigi_camera(
             "ip": ip,
             "status": "online",
             "type": "ONVIF/RTSP",
-            "main_stream": f"rtsp://{userinfo}@{ip}:554/stream1",
-            "sub_stream": f"rtsp://{userinfo}@{ip}:554/stream2",
+            "rtsp_user": username,
+            "rtsp_pass": password,
+            "url": main,
+            "main_stream": main,
+            "sub_stream": sub,
             "resolution": "1920x1080",
             "ai_enabled": True,
             "created_at": time.time(),
@@ -327,6 +331,31 @@ def _camera_matches_vigi_ip(cam: dict, ip: str) -> bool:
     return False
 
 
+def _vigi_stream_urls(ip: str, user: str, password: str) -> tuple[str, str]:
+    """Main/sub RTSP URLs for a VIGI — ONVIF GetStreamUri when enabled, else /stream1."""
+    use_onvif = os.environ.get("SMARTCAM_VIGI_ONVIF", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    if use_onvif:
+        try:
+            from .camera_discovery import resolve_vigi_rtsp_for_host
+
+            main = resolve_vigi_rtsp_for_host(ip, user, password)
+            if main:
+                sub = main.replace("/stream1", "/stream2") if "/stream1" in main else build_rtsp_url(
+                    user, password, ip, "/stream2"
+                )
+                return main, sub
+        except Exception as e:
+            print(f"[camera_store] ONVIF RTSP resolve failed for {ip}: {e}", flush=True)
+    main = build_rtsp_url(user, password, ip, "/stream1")
+    sub = build_rtsp_url(user, password, ip, "/stream2")
+    return main, sub
+
+
 def _apply_env_vigi_overrides() -> None:
     """
     When SMARTCAM_VIGI_* is set, refresh RTSP URLs on any loaded camera whose IP/host
@@ -344,9 +373,7 @@ def _apply_env_vigi_overrides() -> None:
             )
         return
     ip, user, password, _name = creds
-    userinfo = _rtsp_userinfo(user, password)
-    new_main = f"rtsp://{userinfo}@{ip}:554/stream1"
-    new_sub = f"rtsp://{userinfo}@{ip}:554/stream2"
+    new_main, new_sub = _vigi_stream_urls(ip, user, password)
     updated: List[int] = []
     for cam in list_cameras():
         if not isinstance(cam, dict) or cam.get("id") is None:
@@ -354,13 +381,11 @@ def _apply_env_vigi_overrides() -> None:
         if not _camera_matches_vigi_ip(cam, ip):
             continue
         cid = int(cam["id"])
-        cur = str(cam.get("url") or cam.get("main_stream") or "").strip()
-        cur_sub = str(cam.get("sub_stream") or "").strip()
-        if cur == new_main and cur_sub == new_sub:
-            continue
         update_camera(
             cid,
             {
+                "rtsp_user": user,
+                "rtsp_pass": password,
                 "url": new_main,
                 "main_stream": new_main,
                 "sub_stream": new_sub,
@@ -370,17 +395,11 @@ def _apply_env_vigi_overrides() -> None:
         updated.append(cid)
     if updated:
         print(
-            f"[camera_store] applied SMARTCAM_VIGI_* RTSP URL to camera id(s) {updated} "
+            f"[camera_store] applied SMARTCAM_VIGI_* to camera id(s) {updated} "
             f"(host {ip}; password len={len(password)} — quote .env if it contains $)",
             flush=True,
         )
         persist_cameras_to_json()
-        try:
-            from . import mediamtx_yaml_sync
-
-            mediamtx_yaml_sync.sync_all_cameras_to_mediamtx()
-        except Exception as e:
-            print(f"[camera_store] mediamtx sync after VIGI env apply failed: {e}", flush=True)
 
 
 def _init_from_env_vigi() -> bool:

@@ -9,13 +9,11 @@ import re
 from typing import Any, Dict
 from urllib.parse import urlparse, urlunparse
 
+from .rtsp_url_build import effective_rtsp_url
+
 
 def rtsp_url(cam: Dict[str, Any]) -> str:
-    return (
-        str(cam.get("url") or "").strip()
-        or str(cam.get("main_stream") or "").strip()
-        or str(cam.get("mainStream") or "").strip()
-    )
+    return effective_rtsp_url(cam if isinstance(cam, dict) else {})
 
 
 def redact_rtsp_url_for_debug(url: str) -> str:
