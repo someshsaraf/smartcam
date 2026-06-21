@@ -34,9 +34,9 @@ _VOC_CLASS_NAMES: Dict[int, str] = {
     17: "sheep",
     15: "person",
 }
-# Lying pets (overhead cameras) are often misclassified as person — reclassify wide boxes.
-_HORIZONTAL_PERSON_ASPECT = 1.12
-_OVERLAP_IOU = 0.35
+_FUSION_FLOOR = 0.12  # weak animal hints used only for overlap fusion
+_OVERLAP_IOU = 0.30
+_OVERLAP_IOU_FUSION = 0.22
 
 
 def _backend_dir() -> Path:
@@ -132,25 +132,114 @@ def _box_iou(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     return inter / union
 
 
+def _box_compactness(bw: float, bh: float) -> float:
+    if bw <= 0.0 or bh <= 0.0:
+        return 0.0
+    return min(bw, bh) / max(bw, bh)
+
+
+def _is_likely_pet_person_mislabel(box: Dict[str, Any]) -> bool:
+    """
+    Overhead cameras: lying dogs/cats often score as VOC person with moderate confidence.
+    Reclassify compact ground-level blobs; skip tall skinny shapes (handled separately).
+    """
+    if str(box.get("category") or "") != "person":
+        return False
+    score = float(box.get("score") or 0.0)
+    if score >= 0.68:
+        return False
+    bw = float(box.get("w") or 0.0)
+    bh = float(box.get("h") or 0.0)
+    if bw <= 0.0 or bh <= 0.0:
+        return False
+    area = bw * bh
+    compact = _box_compactness(bw, bh)
+    aspect = bw / bh
+    tall_aspect = bh / bw
+
+    if tall_aspect >= 1.75 and bw < 0.22:
+        return False
+
+    if area >= 0.010 and compact >= 0.42 and score < 0.62:
+        return True
+    if area >= 0.008 and compact >= 0.38 and score < 0.58:
+        return True
+    if aspect >= 0.85 and area >= 0.006 and score < 0.65:
+        return True
+    return False
+
+
+def _is_likely_person_false_positive(box: Dict[str, Any]) -> bool:
+    """Suppress tall narrow person boxes (shadow/grate artifacts after pet leaves)."""
+    if str(box.get("category") or "") != "person":
+        return False
+    score = float(box.get("score") or 0.0)
+    if score >= 0.80:
+        return False
+    bw = float(box.get("w") or 0.0)
+    bh = float(box.get("h") or 0.0)
+    if bw <= 0.0 or bh <= 0.0:
+        return False
+    tall_aspect = bh / bw
+    area = bw * bh
+    # Very narrow vertical sliver (empty pavement / grate shadow).
+    if tall_aspect >= 1.75 and bw < 0.14:
+        return True
+    # Medium-narrow column with moderate confidence (image 2: person 74.9%).
+    if tall_aspect >= 1.75 and bw < 0.20 and bh >= 0.18 and score < 0.78:
+        return True
+    if tall_aspect >= 2.2 and bw < 0.16:
+        return True
+    if tall_aspect >= 1.6 and bw < 0.16 and bh >= 0.35 and area < 0.12:
+        return True
+    return False
+
+
+def _reclassify_as_dog(box: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+    out = dict(box)
+    out["category"] = "animal"
+    out["label"] = "dog"
+    out["reclassified"] = reason
+    return out
+
+
+def _best_weak_animal_match(
+    person: Dict[str, Any], weak_animals: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    best: Optional[Dict[str, Any]] = None
+    best_iou = 0.0
+    for animal in weak_animals:
+        iou = _box_iou(person, animal)
+        if iou >= _OVERLAP_IOU_FUSION and iou > best_iou:
+            best = animal
+            best_iou = iou
+    return best
+
+
+def _fuse_person_with_animal(
+    person: Dict[str, Any], animal: Dict[str, Any]
+) -> Dict[str, Any]:
+    label = str(animal.get("label") or "dog")
+    score = max(float(person.get("score") or 0.0), float(animal.get("score") or 0.0))
+    out = dict(person)
+    out["category"] = "animal"
+    out["label"] = label
+    out["score"] = round(score, 4)
+    out["reclassified"] = "weak_animal_fusion"
+    return out
+
+
 def _reclassify_horizontal_person(box: Dict[str, Any]) -> Dict[str, Any]:
-    """Overhead lying dogs often score as VOC person — prefer animal when box is wide."""
     if str(box.get("category") or "") != "person":
         return box
     bw = float(box.get("w") or 0.0)
     bh = float(box.get("h") or 0.0)
-    if bh <= 1e-6:
+    if bh <= 1e-6 or bw / bh < 0.85:
         return box
-    if bw / bh < _HORIZONTAL_PERSON_ASPECT:
-        return box
-    out = dict(box)
-    out["category"] = "animal"
-    out["label"] = "dog"
-    out["reclassified"] = True
-    return out
+    return _reclassify_as_dog(box, reason="horizontal_person")
 
 
 def _resolve_overlapping(boxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Drop duplicate overlaps; when person and animal collide, keep animal."""
     ordered = sorted(boxes, key=lambda d: float(d.get("score") or 0.0), reverse=True)
     kept: List[Dict[str, Any]] = []
     for cand in ordered:
@@ -173,6 +262,59 @@ def _resolve_overlapping(boxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         else:
             kept.append(cand)
     return kept
+
+
+def _normalize_candidate(
+    detections: Any,
+    index: int,
+    frame_w: int,
+    frame_h: int,
+    cls_id: int,
+    category: str,
+) -> Dict[str, Any]:
+    conf = float(detections[0, 0, index, 2])
+    x1 = int(detections[0, 0, index, 3] * frame_w)
+    y1 = int(detections[0, 0, index, 4] * frame_h)
+    x2 = int(detections[0, 0, index, 5] * frame_w)
+    y2 = int(detections[0, 0, index, 6] * frame_h)
+    box_w = max(0, x2 - x1)
+    box_h = max(0, y2 - y1)
+    label = _VOC_CLASS_NAMES.get(cls_id, category)
+    return {
+        "x": round(x1 / float(frame_w), 6),
+        "y": round(y1 / float(frame_h), 6),
+        "w": round(box_w / float(frame_w), 6),
+        "h": round(box_h / float(frame_h), 6),
+        "score": round(conf, 4),
+        "label": label,
+        "category": category,
+        "source": "opencv_ssd",
+    }
+
+
+def _refine_person_and_animal_boxes(
+    persons: List[Dict[str, Any]],
+    animals: List[Dict[str, Any]],
+    weak_animals: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = list(animals)
+
+    for person in persons:
+        if _is_likely_person_false_positive(person):
+            continue
+        weak = _best_weak_animal_match(person, weak_animals)
+        if weak is not None:
+            out.append(_fuse_person_with_animal(person, weak))
+            continue
+        refined = _reclassify_horizontal_person(person)
+        if str(refined.get("category") or "") == "animal":
+            out.append(refined)
+            continue
+        if _is_likely_pet_person_mislabel(person):
+            out.append(_reclassify_as_dog(person, reason="pet_person_mislabel"))
+            continue
+        out.append(person)
+    return _resolve_overlapping(out)
 
 
 class OpenCVPersonDetector:
@@ -246,40 +388,37 @@ class OpenCVPersonDetector:
         )
         net.setInput(blob)
         detections = net.forward()
-        raw: List[Dict[str, Any]] = []
+
+        persons: List[Dict[str, Any]] = []
+        animals: List[Dict[str, Any]] = []
+        weak_animals: List[Dict[str, Any]] = []
+        min_area = (w * h) * self._min_box_fraction
+
         for i in range(detections.shape[2]):
             conf = float(detections[0, 0, i, 2])
             cls_id = int(detections[0, 0, i, 1])
             if cls_id == _PERSON:
                 category = "person"
-                min_conf = self._confidence
             elif cls_id in _ANIMAL:
                 category = "animal"
-                min_conf = self._animal_confidence
             else:
                 continue
-            if conf < min_conf:
-                continue
+
             x1 = int(detections[0, 0, i, 3] * w)
             y1 = int(detections[0, 0, i, 4] * h)
             x2 = int(detections[0, 0, i, 5] * w)
             y2 = int(detections[0, 0, i, 6] * h)
-            box_w = max(0, x2 - x1)
-            box_h = max(0, y2 - y1)
-            if box_w * box_h < (w * h) * self._min_box_fraction:
+            if max(0, x2 - x1) * max(0, y2 - y1) < min_area:
                 continue
-            label = _VOC_CLASS_NAMES.get(cls_id, category)
-            raw.append(
-                {
-                    "x": round(x1 / float(w), 6),
-                    "y": round(y1 / float(h), 6),
-                    "w": round(box_w / float(w), 6),
-                    "h": round(box_h / float(h), 6),
-                    "score": round(conf, 4),
-                    "label": label,
-                    "category": category,
-                    "source": "opencv_ssd",
-                }
-            )
-        adjusted = [_reclassify_horizontal_person(b) for b in raw]
-        return _resolve_overlapping(adjusted)
+
+            box = _normalize_candidate(detections, i, w, h, cls_id, category)
+
+            if category == "person" and conf >= self._confidence:
+                persons.append(box)
+            elif category == "animal":
+                if conf >= self._animal_confidence:
+                    animals.append(box)
+                elif conf >= _FUSION_FLOOR:
+                    weak_animals.append(box)
+
+        return _refine_person_and_animal_boxes(persons, animals, weak_animals)
