@@ -94,10 +94,37 @@ def _box_to_normalized(
     scale: float,
     pad_x: float,
     pad_y: float,
+    *,
+    model_size: int,
 ) -> Optional[Dict[str, float]]:
-    """Map model-space box back to normalized 0–1 coords on the original frame."""
-    if scale <= 0:
+    """Map Hailo NMS box to normalized 0–1 coords on the original frame."""
+    y1, x1, y2, x2 = float(y1), float(x1), float(y2), float(x2)
+    if scale <= 0 or frame_w < 2 or frame_h < 2:
         return None
+
+    # Some HEFs return boxes already normalized on the source frame.
+    if (
+        max(y1, x1, y2, x2) <= 1.0
+        and y2 > y1
+        and x2 > x1
+        and (y2 - y1) <= 1.0
+        and (x2 - x1) <= 1.0
+    ):
+        bw = x2 - x1
+        bh = y2 - y1
+        if bw >= 0.002 and bh >= 0.002:
+            return {"x": x1, "y": y1, "w": bw, "h": bh}
+
+    # Hailo often returns 0–1 on the letterboxed model canvas (640×640).
+    if max(y1, x1, y2, x2) <= 1.5:
+        y1 *= model_size
+        x1 *= model_size
+        y2 *= model_size
+        x2 *= model_size
+
+    if y2 <= y1 or x2 <= x1:
+        return None
+
     ox1 = (x1 - pad_x) / scale
     oy1 = (y1 - pad_y) / scale
     ox2 = (x2 - pad_x) / scale
@@ -108,13 +135,17 @@ def _box_to_normalized(
     oy2 = max(0.0, min(float(frame_h), oy2))
     bw = ox2 - ox1
     bh = oy2 - oy1
-    if bw <= 1.0 or bh <= 1.0:
+    if bw < 2.0 or bh < 2.0:
+        return None
+    fw = bw / frame_w
+    fh = bh / frame_h
+    if fw < 0.002 or fh < 0.002:
         return None
     return {
         "x": ox1 / frame_w,
         "y": oy1 / frame_h,
-        "w": bw / frame_w,
-        "h": bh / frame_h,
+        "w": fw,
+        "h": fh,
     }
 
 
@@ -307,7 +338,16 @@ class HailoYolov8Detector:
                     float(det[3]),
                 )
                 norm = _box_to_normalized(
-                    y1, x1, y2, x2, frame_w, frame_h, scale, pad_x, pad_y
+                    y1,
+                    x1,
+                    y2,
+                    x2,
+                    frame_w,
+                    frame_h,
+                    scale,
+                    pad_x,
+                    pad_y,
+                    model_size=self._input_size,
                 )
                 if norm is None:
                     continue

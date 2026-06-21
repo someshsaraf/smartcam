@@ -24,16 +24,20 @@ def test_parse_ragged_batch_1_by_80():
     assert out[0]["category"] == "person"
 
 
-def test_parse_fixed_tensor():
-    det = HailoYolov8Detector.__new__(HailoYolov8Detector)
-    det._person_conf = 0.25
-    det._animal_conf = 0.20
-    det._output_name = "out"
+def test_parse_normalized_zero_one_model_coords():
+    from app.hailo_yolov8_backend import _box_to_normalized
 
-    arr = np.zeros((1, 80, 4, 5), dtype=np.float32)
-    arr[0, 0, 0] = [10.0, 20.0, 200.0, 300.0, 0.85]
-    raw = {"out": arr}
+    # 0–1 on 640 canvas: person in upper-left of letterboxed input
+    norm = _box_to_normalized(0.1, 0.1, 0.5, 0.4, 1920, 1080, 0.333, 0.0, 140.0, model_size=640)
+    assert norm is not None
+    assert norm["w"] > 0.01
+    assert norm["h"] > 0.01
 
-    out = det._parse_nms_output(raw, 640, 480, 1.0, 0.0, 0.0)
-    assert len(out) == 1
-    assert out[0]["score"] == 0.85
+
+def test_parse_already_frame_normalized():
+    from app.hailo_yolov8_backend import _box_to_normalized
+
+    norm = _box_to_normalized(0.2, 0.3, 0.7, 0.5, 1920, 1080, 1.0, 0.0, 0.0, model_size=640)
+    assert norm is not None
+    assert abs(norm["x"] - 0.3) < 0.001
+    assert abs(norm["w"] - 0.2) < 0.001

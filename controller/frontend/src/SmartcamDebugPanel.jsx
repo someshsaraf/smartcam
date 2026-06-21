@@ -235,6 +235,10 @@ export function SmartcamDebugPanel({
                 {envLine("opencv_ssd_ready", ds.opencv_ssd_ready)}
                 {envLine("hailo_ready", ds.hailo_ready)}
                 {envLine("hailo_error", ds.hailo_error)}
+                {envLine("motion_detected", ds.motion_detected)}
+                {envLine("inferred", ds.inferred)}
+                {envLine("raw_detection_count", ds.raw_detection_count)}
+                {envLine("live_person_count", ds.live_person_count)}
               </>
             ) : (
               envLine("hello payload", "not received yet")

@@ -73,6 +73,16 @@ def pipeline_diagnostics() -> Dict[str, Any]:
     }
 
 
+def _mog2_heartbeat_frames() -> int:
+    """Run YOLO every N frames even when MOG2 sees no motion (catches static people)."""
+    raw = os.environ.get("SMARTCAM_MOG2_HEARTBEAT_FRAMES", "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 3
+    return max(0, min(n, 60))
+
+
 class CameraDetectionPipeline:
     """Per-camera MOG2 → detect → track → confirm pipeline."""
 
@@ -82,6 +92,8 @@ class CameraDetectionPipeline:
         self._detector, self._hailo_ready, self._hailo_error = _create_detector()
         self._confirm_frames = _event_confirm_frames()
         self._mog2_on = _mog2_enabled()
+        self._heartbeat = _mog2_heartbeat_frames()
+        self._frame_idx = 0
         self._last_motion = False
 
     @property
@@ -103,17 +115,36 @@ class CameraDetectionPipeline:
         return "opencv_ssd"
 
     def process_frame(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
+        self._frame_idx += 1
         motion = True
         if self._mog2_on:
             motion = self._mog2.has_motion(frame_bgr)
         self._last_motion = motion
-        if not motion:
+
+        heartbeat_infer = (
+            self._heartbeat > 0 and self._frame_idx % self._heartbeat == 0
+        )
+        run_infer = motion or heartbeat_infer
+
+        if not run_infer:
             tracked = self._tracker.update([], confirm_frames=self._confirm_frames)
-            return self._result(tracked, motion=False, inferred=False)
+            return self._result(
+                tracked,
+                motion=motion,
+                inferred=False,
+                raw_count=0,
+                heartbeat_infer=heartbeat_infer,
+            )
 
         raw = self._detector.detect_normalized(frame_bgr)
         tracked = self._tracker.update(raw, confirm_frames=self._confirm_frames)
-        return self._result(tracked, motion=True, inferred=True)
+        return self._result(
+            tracked,
+            motion=motion,
+            inferred=True,
+            raw_count=len(raw),
+            heartbeat_infer=heartbeat_infer,
+        )
 
     def _result(
         self,
@@ -121,6 +152,8 @@ class CameraDetectionPipeline:
         *,
         motion: bool,
         inferred: bool,
+        raw_count: int = 0,
+        heartbeat_infer: bool = False,
     ) -> Dict[str, Any]:
         confirmed = [d for d in tracked if d.get("confirmed")]
         person_all = sum(
@@ -156,5 +189,7 @@ class CameraDetectionPipeline:
             "animal_confirmed_count": animal_confirmed,
             "motion_detected": motion,
             "inferred": inferred,
+            "heartbeat_infer": heartbeat_infer,
+            "raw_detection_count": raw_count,
             "event_count": person_confirmed + animal_confirmed,
         }

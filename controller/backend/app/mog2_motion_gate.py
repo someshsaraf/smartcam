@@ -23,7 +23,7 @@ def _min_area_fraction() -> float:
 
 
 def _warmup_frames() -> int:
-    raw = os.environ.get("SMARTCAM_MOG2_WARMUP_FRAMES", "30").strip()
+    raw = os.environ.get("SMARTCAM_MOG2_WARMUP_FRAMES", "8").strip()
     try:
         n = int(raw)
     except ValueError:

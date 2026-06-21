@@ -2807,11 +2807,14 @@ export default function App() {
             setDetectionSystem(msg);
             return;
           }
-          if (msg.type === "detections" && msg.camera_id != null) {
+            if (msg.type === "detections" && msg.camera_id != null) {
             if (
               msg.backend != null ||
               typeof msg.hailo_ready === "boolean" ||
-              msg.hailo_error != null
+              msg.hailo_error != null ||
+              typeof msg.motion_detected === "boolean" ||
+              typeof msg.inferred === "boolean" ||
+              typeof msg.raw_detection_count === "number"
             ) {
               setDetectionSystem((prev) => ({
                 ...(prev || {}),
@@ -2819,6 +2822,20 @@ export default function App() {
                 hailo_ready:
                   typeof msg.hailo_ready === "boolean" ? msg.hailo_ready : prev?.hailo_ready,
                 hailo_error: msg.hailo_error ?? prev?.hailo_error,
+                motion_detected:
+                  typeof msg.motion_detected === "boolean"
+                    ? msg.motion_detected
+                    : prev?.motion_detected,
+                inferred:
+                  typeof msg.inferred === "boolean" ? msg.inferred : prev?.inferred,
+                raw_detection_count:
+                  typeof msg.raw_detection_count === "number"
+                    ? msg.raw_detection_count
+                    : prev?.raw_detection_count,
+                live_person_count:
+                  typeof msg.person_count === "number"
+                    ? msg.person_count
+                    : prev?.live_person_count,
               }));
             }
             const id = Number(msg.camera_id);

@@ -167,6 +167,8 @@ def _camera_worker(
             "event_count": event_count,
             "motion_detected": bool(result.get("motion_detected")),
             "inferred": bool(result.get("inferred")),
+            "heartbeat_infer": bool(result.get("heartbeat_infer")),
+            "raw_detection_count": int(result.get("raw_detection_count") or 0),
             "person_capture_busy": motion_capture_busy(camera_id),
             "person_record_eligible": person_record_eligible(camera_id),
             "person_trigger_streak": person_trigger_streak(camera_id),
