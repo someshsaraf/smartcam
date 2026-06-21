@@ -106,3 +106,19 @@ def test_overlapping_person_wins_over_dog():
     out = _refine_person_and_animal_boxes([person], [dog], [])
     assert len(out) == 1
     assert out[0]["category"] == "person"
+
+
+def test_human_head_mislabeled_as_bird_reclassifies_to_person():
+    bird = {
+        "category": "animal",
+        "label": "bird",
+        "score": 0.78,
+        "x": 0.02,
+        "y": 0.12,
+        "w": 0.28,
+        "h": 0.38,
+    }
+    out = _refine_person_and_animal_boxes([], [bird], [])
+    assert len(out) == 1
+    assert out[0]["category"] == "person"
+    assert out[0]["label"] == "person"

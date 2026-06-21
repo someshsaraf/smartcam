@@ -171,24 +171,23 @@ def _is_ground_level_pet_shape(box: Dict[str, Any]) -> bool:
     return False
 
 
-def _is_dog_or_cat_label(box: Dict[str, Any]) -> bool:
-    label = str(box.get("label") or "").lower()
-    if label in ("dog", "cat"):
+_VOC_ANIMAL_LABELS = frozenset(
+    {"bird", "cat", "cow", "dog", "horse", "sheep", "animal"}
+)
+
+
+def _is_voc_animal_label(box: Dict[str, Any]) -> bool:
+    if str(box.get("category") or "") == "animal":
         return True
-    return str(box.get("category") or "") == "animal" and label in (
-        "dog",
-        "cat",
-        "animal",
-    )
+    return str(box.get("label") or "").lower() in _VOC_ANIMAL_LABELS
 
 
-def _is_likely_person_not_dog(box: Dict[str, Any]) -> bool:
+def _is_likely_person_not_animal(box: Dict[str, Any]) -> bool:
     """
-    SSD labels human profiles as dog — only keep dog/cat when the box matches a floor pet.
+    SSD mislabels human faces/profiles as bird, dog, etc.
+    Keep animal labels only for floor-level pet shapes (overhead porch cam).
     """
-    if not _is_dog_or_cat_label(box):
-        return False
-    if str(box.get("label") or "").lower() in ("bird", "cow", "horse", "sheep"):
+    if not _is_voc_animal_label(box):
         return False
     return not _is_ground_level_pet_shape(box)
 
@@ -377,8 +376,8 @@ def _refine_person_and_animal_boxes(
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for box in animals:
-        if _is_likely_person_not_dog(box):
-            out.append(_reclassify_as_person(box, reason="human_not_dog"))
+        if _is_likely_person_not_animal(box):
+            out.append(_reclassify_as_person(box, reason="human_not_animal"))
         else:
             out.append(box)
 
