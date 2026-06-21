@@ -68,16 +68,41 @@ def test_confident_standing_person_kept():
 
 
 def test_human_profile_mislabeled_as_dog_reclassifies_to_person():
+    # Large profile box starting near top of frame (eye-level camera).
     profile = {
         "category": "animal",
         "label": "dog",
-        "score": 0.973,
-        "x": 0.02,
-        "y": 0.08,
-        "w": 0.42,
-        "h": 0.55,
+        "score": 0.967,
+        "x": 0.0,
+        "y": 0.05,
+        "w": 0.58,
+        "h": 0.72,
     }
     out = _refine_person_and_animal_boxes([], [profile], [])
     assert len(out) == 1
     assert out[0]["category"] == "person"
     assert out[0]["label"] == "person"
+
+
+def test_overlapping_person_wins_over_dog():
+    dog = {
+        "category": "animal",
+        "label": "dog",
+        "score": 0.967,
+        "x": 0.0,
+        "y": 0.05,
+        "w": 0.58,
+        "h": 0.72,
+    }
+    person = {
+        "category": "person",
+        "label": "person",
+        "score": 0.88,
+        "x": 0.02,
+        "y": 0.08,
+        "w": 0.52,
+        "h": 0.65,
+    }
+    out = _refine_person_and_animal_boxes([person], [dog], [])
+    assert len(out) == 1
+    assert out[0]["category"] == "person"

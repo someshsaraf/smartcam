@@ -143,42 +143,54 @@ def _box_center_y(box: Dict[str, Any]) -> float:
 
 
 def _is_ground_level_pet_shape(box: Dict[str, Any]) -> bool:
-    """Overhead camera: lying pet on floor — compact blob in lower/mid frame."""
+    """
+    Overhead porch camera: lying pet on the floor.
+
+    Eye-level human head/shoulders also look compact but start near the top of the frame
+    and often fill a larger area — exclude those.
+    """
     bw = float(box.get("w") or 0.0)
     bh = float(box.get("h") or 0.0)
     if bw <= 0.0 or bh <= 0.0:
         return False
+    y = float(box.get("y") or 0.0)
     compact = _box_compactness(bw, bh)
     cy = _box_center_y(box)
     area = bw * bh
-    if compact >= 0.38 and cy >= 0.38 and area >= 0.006:
+
+    if area < 0.006 or area > 0.24:
+        return False
+    # Head/shoulders at top of frame (eye-level cam) — not a floor pet.
+    if y < 0.26:
+        return False
+
+    if compact >= 0.38 and cy >= 0.40:
         return True
-    if bw / bh >= 0.85 and area >= 0.006:
+    if bw / bh >= 0.85 and cy >= 0.38:
         return True
     return False
+
+
+def _is_dog_or_cat_label(box: Dict[str, Any]) -> bool:
+    label = str(box.get("label") or "").lower()
+    if label in ("dog", "cat"):
+        return True
+    return str(box.get("category") or "") == "animal" and label in (
+        "dog",
+        "cat",
+        "animal",
+    )
 
 
 def _is_likely_person_not_dog(box: Dict[str, Any]) -> bool:
-    """SSD labels human profiles as dog — restore person for upright/upper-frame shapes."""
-    cat = str(box.get("category") or "")
-    label = str(box.get("label") or "").lower()
-    if cat != "animal" and label not in ("dog", "cat", "animal"):
+    """
+    SSD labels human profiles as dog — only keep dog/cat when the box matches a floor pet.
+    """
+    if not _is_dog_or_cat_label(box):
         return False
-    if label in ("bird", "cow", "horse", "sheep"):
+    if str(box.get("label") or "").lower() in ("bird", "cow", "horse", "sheep"):
         return False
-    bw = float(box.get("w") or 0.0)
-    bh = float(box.get("h") or 0.0)
-    if bw <= 0.0 or bh <= 0.0:
-        return False
-    if _is_ground_level_pet_shape(box):
-        return False
-    tall_aspect = bh / bw
-    cy = _box_center_y(box)
-    if tall_aspect >= 1.05 and bw >= 0.06:
-        return True
-    if cy <= 0.58 and tall_aspect >= 0.9 and bh >= 0.12:
-        return True
-    return False
+    return not _is_ground_level_pet_shape(box)
 
 
 def _is_likely_pet_person_mislabel(box: Dict[str, Any]) -> bool:
@@ -372,6 +384,18 @@ def _refine_person_and_animal_boxes(
 
     for person in persons:
         if _is_likely_person_false_positive(person):
+            continue
+        # Prefer an overlapping person over a dog label on the same region.
+        overlapped = False
+        for i, existing in enumerate(out):
+            if (
+                str(existing.get("category") or "") == "animal"
+                and _box_iou(person, existing) >= _OVERLAP_IOU_FUSION
+            ):
+                out[i] = person
+                overlapped = True
+                break
+        if overlapped:
             continue
         weak = _best_weak_animal_match(person, weak_animals)
         if weak is not None and _should_fuse_person_with_weak_animal(person, weak):
